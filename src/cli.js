@@ -13,7 +13,7 @@ export async function main() {
   const program = new Command();
 
   program
-    .name('readme')
+    .name(styles.binName())
     .description(`${styles.logo()} — the ReadMe CLI`)
     .version(pkg.version, '-v, --version')
     .option('--no-check', 'Skip ReadMe project validation checks');
@@ -49,7 +49,7 @@ export async function main() {
   // Friendly fallback for unknown commands
   program.on('command:*', ([cmd]) => {
     styles.error(`Unknown command: ${styles.bold(cmd)}`);
-    styles.info('Run readme --help to see available commands.');
+    styles.info(`Run ${styles.binName()} --help to see available commands.`);
     process.exit(1);
   });
 

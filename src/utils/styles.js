@@ -1,9 +1,18 @@
 import path from 'node:path';
 import chalk from 'chalk';
 
-/** Returns "readme" or "readme_" depending on how the CLI was invoked. */
+/** Returns the CLI name depending on how it was invoked (e.g. "readme", "readme_", or "npx @readmeio/cli-beta"). */
 export function binName() {
-  return path.basename(process.argv[1] || 'readme');
+  const base = path.basename(process.argv[1] || 'readme');
+
+  // When run via npx, the binary name is a temp path — use the package name instead
+  if (process.env.npm_execpath && !['readme', 'readme_'].includes(base)) {
+    const pkg = process.env.npm_package_name;
+    if (pkg) return `npx ${pkg}`;
+    return 'npx @readmeio/cli-beta';
+  }
+
+  return base;
 }
 
 export const brand = chalk.hex('#018ef5'); // ReadMe blue
