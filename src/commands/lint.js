@@ -31,6 +31,8 @@ export async function run(options, _cmd, ctx) {
 
   const hasErrors = results.some((r) => r.severity !== 'warning');
   if (hasErrors) {
-    process.exitCode = 1;
+    // Wait for stdout to flush (important when piped to a file), then exit
+    await new Promise((resolve) => process.stdout.write('', resolve));
+    process.exit(1);
   }
 }

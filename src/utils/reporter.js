@@ -243,16 +243,15 @@ export function createGithubReporter() {
       if (all.length === 0) {
         body += "> **All checks passed!** No lint issues found.\n";
       } else {
-        body += "| | File | Message |\n";
-        body += "|---|------|--------|\n";
+        body += "| File | Message |\n";
+        body += "|------|--------|\n";
         for (const r of all) {
           const isError = r.severity !== "warning";
-          const emoji = isError ? "\u{1F534}" : "\u{1F7E1}";
-          const label = isError ? "**Error:**" : "**Warning:**";
-          body += `| ${emoji} | ${fileLink(r.file)} | ${label} ${r.message} |\n`;
+          const label = isError ? "\u{1F534} **Error:**" : "\u{1F7E1} **Warning:**";
+          body += `| ${fileLink(r.file)} | ${label} ${r.message} |\n`;
         }
         body += "\n";
-        body += "> \u{1F4A1} Run `npx @readmeio/cli-beta lint --fix` locally to automatically fix some of these issues.\n\n";
+        body += "> \u{1F4A1} *Tip:* Run `npx @readmeio/cli-beta lint --fix` locally to automatically fix some of these issues.\n\n";
       }
 
       // OAS change detection
@@ -279,7 +278,7 @@ export function createGithubReporter() {
       }
 
       body += "---\n";
-      body += "*\u{1F989} Powered by [ReadMe](https://readme.com)*\n";
+      body += "\u{1F989} Powered by [ReadMe](https://readme.com)\n";
 
       console.log(body);
     },
