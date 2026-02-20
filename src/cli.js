@@ -15,7 +15,8 @@ export async function main() {
   program
     .name('readme')
     .description(`${styles.logo()} — the ReadMe CLI`)
-    .version(pkg.version, '-v, --version');
+    .version(pkg.version, '-v, --version')
+    .option('--no-check', 'Skip ReadMe project validation checks');
 
   // Auto-discover and register every command in src/commands/
   const commandsDir = path.join(path.dirname(new URL(import.meta.url).pathname), 'commands');
@@ -30,7 +31,7 @@ export async function main() {
 
     cmd.action(async (...args) => {
       // Run bootstrap checks before every command
-      const ctx = await bootstrap();
+      const ctx = await bootstrap({ skipValidation: !program.opts().check });
       await mod.run(...args, ctx);
     });
   }

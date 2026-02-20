@@ -12,7 +12,7 @@ const pkg = require('../package.json');
  * Run all bootstrap checks and return context about the repo.
  * Exits with a friendly error if anything is wrong.
  */
-export default async function bootstrap() {
+export default async function bootstrap({ skipValidation = false } = {}) {
   // 1. Check for CLI updates (runs at most once every 24 h)
   checkForUpdates();
 
@@ -20,7 +20,9 @@ export default async function bootstrap() {
   const gitRoot = findGitRoot();
 
   // 3. Make sure this is a ReadMe project repo
-  validateReadMeRepo(gitRoot);
+  if (!skipValidation) {
+    validateReadMeRepo(gitRoot);
+  }
 
   return { gitRoot };
 }
@@ -85,6 +87,7 @@ function validateReadMeRepo(gitRoot) {
 
     console.log();
     styles.info('Make sure you\'re running this inside a ReadMe docs project.');
+    styles.info(`You can skip this check with ${styles.bold('--no-check')}.`);
     process.exit(1);
   }
 }
