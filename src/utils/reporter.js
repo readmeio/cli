@@ -168,9 +168,8 @@ export function createHumanReporter() {
       }
 
       if (unfixed.length > 0 && !isRunningInClaude && hasClaude()) {
-        console.log(
-          `  💡 Run ${styles.orange(`claude "run '${styles.binName()} lint' and fix the issues"`)} to let Claude fix these for you.`,
-        );
+        console.log(`  💡 ${styles.bold("Tip:")} Claude can fix these issues for you easily!`);
+        console.log(`     ${styles.dim("⎿")}  ${styles.orange(`claude "run '${styles.binName()} lint' and fix the issues"`)}`);
         console.log();
       }
 
