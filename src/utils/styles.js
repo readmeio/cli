@@ -5,8 +5,9 @@ import chalk from 'chalk';
 export function binName() {
   const base = path.basename(process.argv[1] || 'readme');
 
-  // When run via npx, the binary name is a temp path — use the package name instead
-  if (process.env.npm_execpath && !['readme', 'readme_'].includes(base)) {
+  // When run via npx, npm sets npm_command=exec. Use the package name so
+  // messages like "run npx @readmeio/cli-beta lint --fix" are correct.
+  if (process.env.npm_command === 'exec') {
     const pkg = process.env.npm_package_name;
     if (pkg) return `npx ${pkg}`;
     return 'npx @readmeio/cli-beta';

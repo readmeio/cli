@@ -140,7 +140,7 @@ export function createHumanReporter() {
         : [];
       const unfixed = results.filter((r) => !r.message.endsWith("(fixed)"));
       const showTips =
-        fixable.length > 0 || (unfixed.length > 0 && hasClaude());
+        fixable.length > 0 || (unfixed.length > 0 && !isRunningInClaude);
 
       if (showTips) {
         console.log(`  ${styles.dim("─".repeat(40))}`);
@@ -160,6 +160,12 @@ export function createHumanReporter() {
         console.log();
       }
 
+      if (unfixed.length > 0 && !isRunningInClaude && !hasClaude()) {
+        console.log(`  💡 ${styles.bold("Tip:")} Install Claude to automatically fix these issues!`);
+        console.log(`     ${styles.dim("⎿")}  ${styles.dim("https://claude.ai/download")}`);
+        console.log();
+      }
+
       // When running inside Claude, output instructions and structured issue list.
       if (isRunningInClaude && unfixed.length > 0) {
         const cliRoot = path.join(
@@ -169,9 +175,14 @@ export function createHumanReporter() {
 
         const gitFormatDir = path.join(cliRoot, "vendor/git-format");
         const claudeMdPath = path.join(gitFormatDir, "CLAUDE.md");
+        const toolsMdPath = path.join(gitFormatDir, "TOOLS.md");
         const schemaPath = path.join(gitFormatDir, "frontmatter.schema.json");
 
         console.log("\n<claude-instructions>");
+
+        if (fs.existsSync(toolsMdPath)) {
+          console.log(fs.readFileSync(toolsMdPath, "utf-8"));
+        }
 
         if (fs.existsSync(claudeMdPath)) {
           console.log(fs.readFileSync(claudeMdPath, "utf-8"));

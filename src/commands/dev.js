@@ -67,22 +67,26 @@ export async function run(options, _cmd, ctx) {
 
   const startPort = options.port ? parseInt(options.port, 10) : 4523;
 
-  function tryListen(port) {
-    server.once('error', err => {
-      if (err.code === 'EADDRINUSE') {
-        console.log(`  ${chalk.dim(`Port ${port} in use, trying ${port + 1}...`)}`);
-        tryListen(port + 1);
-      } else {
-        throw err;
-      }
-    });
-    server.listen(port, () => {
-      console.log();
-      console.log(`  ${chalk.hex('#018ef5')(`🦉 ${binName()} dev`)} server running`);
-      console.log(`  ${chalk.dim('→')} ${chalk.cyan(`http://localhost:${port}`)}`);
-      console.log();
+  function listen(port) {
+    return new Promise((resolve, reject) => {
+      const onError = (err) => {
+        if (err.code === 'EADDRINUSE') {
+          resolve(listen(port + 1));
+        } else {
+          reject(err);
+        }
+      };
+      server.once('error', onError);
+      server.listen(port, () => {
+        server.removeListener('error', onError);
+        resolve(port);
+      });
     });
   }
 
-  tryListen(startPort);
+  const port = await listen(startPort);
+  console.log();
+  console.log(`  ${chalk.hex('#018ef5')(`🦉 ${binName()} dev`)} server running`);
+  console.log(`  ${chalk.dim('→')} ${chalk.cyan(`http://localhost:${port}`)}`);
+  console.log();
 }
