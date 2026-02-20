@@ -106,9 +106,15 @@ function collectCustomBlockNames(gitRoot) {
           names.add(n);
         }
       } else {
-        // .md snippet: component name is the capitalized filename.
+        // .md snippet: component name is the PascalCase filename.
         const slug = entry.replace(/\.md$/, "");
         names.add(slug);
+        // Also register the PascalCase form so references resolve.
+        const pascalCase = slug
+          .split(/[-_]/)
+          .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+          .join("");
+        names.add(pascalCase);
       }
     } catch {
       // Skip unparseable files.
@@ -134,15 +140,19 @@ export function validate({ content, relativePath }) {
 
   const results = [];
 
-  // .md snippet files: filename must start with uppercase (it becomes the component tag).
+  // .md snippet files: filename must be PascalCase (it becomes the component tag).
   if (isMd) {
     const slug = filename.replace(/\.md$/, "");
-    if (slug[0] && slug[0] !== slug[0].toUpperCase()) {
+    const pascalCase = slug
+      .split(/[-_]/)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join("");
+    if (slug !== pascalCase) {
       results.push({
         file: relativePath,
         rule: name,
         severity: "warning",
-        message: `Filename should be capitalized: rename to "${slug[0].toUpperCase()}${slug.slice(1)}.md" so it can be used as <${slug[0].toUpperCase()}${slug.slice(1)} />`,
+        message: `Filename should be PascalCase: rename to "${pascalCase}.md" so it can be used as <${pascalCase} />`,
       });
     }
     return results.length > 0 ? results : null;
