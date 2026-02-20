@@ -180,8 +180,8 @@ jobs:
               });
             }
 
-            // Fail if lint had errors
-            if ('$\{{ steps.lint.outcome }}' === 'failure') {
-              core.setFailed('Lint found errors');
-            }
+
+      - name: Fail if lint errors
+        if: steps.lint.outcome == 'failure'
+        run: exit 1
 `;
