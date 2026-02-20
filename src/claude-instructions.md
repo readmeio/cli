@@ -56,6 +56,9 @@ Files or folders ending in `-1`, `-2`, etc. where no base name exists should be 
 ### duplicates
 Slugs (filenames without extension) must be unique across all `docs/` and `reference/` pages.
 
+### oas-reference
+Reference pages with `api.file` frontmatter must point to an OAS file that exists in `reference/`. The `api.operationId` must exist in the referenced spec. Title and excerpt should match the operation's summary and description in the spec. Missing pages for operations in the spec are flagged as warnings. Running `--fix` runs a full `oas:sync` to create missing pages, delete stale ones, and update out-of-sync frontmatter. **Note:** Title/excerpt sync checks are skipped for specs with `info.title: "ReadMeConfig"` — these are internal ReadMe config pages.
+
 ## Fixing issues
 
 - For frontmatter errors: edit the file's YAML frontmatter to fix the issue
