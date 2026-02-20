@@ -6,7 +6,7 @@ A command-line tool for writing, previewing, and managing your [ReadMe](https://
 
 ## Commands
 
-### `npx @readmeio/cli-beta lint`
+### Linting
 
 Checks your docs for errors — things like invalid frontmatter, missing files, duplicate slugs, and more. Handy for catching issues before you push.
 
@@ -16,7 +16,7 @@ npx @readmeio/cli-beta lint [--fix] [--json]
 
 Use `--fix` to automatically fix what it can, or `--json` for machine-readable output (great for CI).
 
-### `npx @readmeio/cli-beta oas:sync`
+### OpenAPI Sync
 
 Syncs your `reference/` directory with your OpenAPI spec. It'll create, update, or remove pages based on your spec's operations.
 
@@ -24,7 +24,7 @@ Syncs your `reference/` directory with your OpenAPI spec. It'll create, update, 
 npx @readmeio/cli-beta oas:sync
 ```
 
-### `npx @readmeio/cli-beta import`
+### Import
 
 Imports content from an external folder and converts it into ReadMe's format using Claude. Great for migrating existing docs.
 
@@ -32,7 +32,7 @@ Imports content from an external folder and converts it into ReadMe's format usi
 npx @readmeio/cli-beta import
 ```
 
-### `npx @readmeio/cli-beta versions`
+### Versions
 
 Lists all your doc versions and their branches.
 
@@ -40,7 +40,7 @@ Lists all your doc versions and their branches.
 npx @readmeio/cli-beta versions
 ```
 
-### `npx @readmeio/cli-beta dev`
+### Dev Server
 
 > **Very early beta!** This command is still a work in progress.
 
