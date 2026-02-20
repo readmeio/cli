@@ -1,14 +1,14 @@
 # ReadMe CLI
 
-A command-line tool for writing, previewing, and managing your [ReadMe](https://readme.com) docs — right from your terminal.
+A command-line tool for writing, previewing, and managing your [ReadMe](https://readme.com) docs from your terminal.
 
-> **This project is currently in beta!** Things may change, break, or otherwise be a little rough around the edges. We'd love your feedback — please [open an issue](https://github.com/readmeio/cli/issues) if you run into anything or have ideas for improvements.
+> **Currently in beta!** Things may change, break, or otherwise be a little rough around the edges. We'd love your feedback. Please [open an issue](https://github.com/readmeio/cli/issues) if you run into anything or have ideas for improvements.
 
 ## Commands
 
 ### Linting
 
-Checks your docs for errors — things like invalid frontmatter, missing files, duplicate slugs, and more. Handy for catching issues before you push.
+Checks your docs for errors: things like invalid frontmatter, missing files, duplicate slugs, and more. Handy for catching issues before you push.
 
 ```bash
 npx @readmeio/cli-beta lint [--fix] [--json]
@@ -42,7 +42,7 @@ npx @readmeio/cli-beta versions
 
 ### Dev Server
 
-> **Very early beta!** This command is still a work in progress.
+> **Very early beta!** This command is still a work in progress, and doesn't use our rendering engine yet.
 
 Starts a local dev server so you can preview your docs as you write them. Watches for changes and refreshes automatically.
 
