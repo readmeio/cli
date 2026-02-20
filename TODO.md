@@ -1,0 +1,4 @@
+- we should update the README.md file in repos to mention how to use this tool
+  - it will also help claude
+- deal with MDX component validation
+- recipe validatoin

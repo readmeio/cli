@@ -1,0 +1,31 @@
+{
+  "name": "@readme/cli",
+  "version": "0.1.0",
+  "description": "The ReadMe CLI",
+  "type": "module",
+  "bin": {
+    "readme": "./bin/readme.js",
+    "readme-test": "./bin/readme.js"
+  },
+  "scripts": {
+    "start": "node bin/readme.js",
+    "test": "echo \"No tests yet\""
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "readme",
+    "cli",
+    "docs"
+  ],
+  "license": "ISC",
+  "dependencies": {
+    "ajv": "^8.18.0",
+    "chalk": "^5.4.1",
+    "commander": "^13.1.0",
+    "gray-matter": "^4.0.3",
+    "ora": "^9.3.0",
+    "update-notifier": "^7.3.1"
+  }
+}
