@@ -176,13 +176,28 @@ export function createHumanReporter() {
 
       // When running inside Claude, output instructions and structured issue list.
       if (isRunningInClaude && unfixed.length > 0) {
-        const instructionsPath = path.join(
+        const cliRoot = path.join(
           path.dirname(new URL(import.meta.url).pathname),
-          "../claude-instructions.md",
+          "../..",
         );
-        const instructions = fs.readFileSync(instructionsPath, "utf-8");
+
+        const gitFormatDir = path.join(cliRoot, "vendor/git-format");
+        const claudeMdPath = path.join(gitFormatDir, "CLAUDE.md");
+        const schemaPath = path.join(gitFormatDir, "frontmatter.schema.json");
+
         console.log("\n<claude-instructions>");
-        console.log(instructions);
+
+        if (fs.existsSync(claudeMdPath)) {
+          console.log(fs.readFileSync(claudeMdPath, "utf-8"));
+        }
+
+        if (fs.existsSync(schemaPath)) {
+          console.log("\n## Frontmatter JSON Schema\n");
+          console.log("```json");
+          console.log(fs.readFileSync(schemaPath, "utf-8"));
+          console.log("```");
+        }
+
         console.log("</claude-instructions>\n");
         console.log("<issues>");
         for (const r of unfixed) {
