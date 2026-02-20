@@ -3,6 +3,7 @@ import path from 'path';
 import { createServer } from 'http';
 import { fileURLToPath } from 'url';
 import chalk from 'chalk';
+import { binName } from '../utils/styles.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -77,7 +78,7 @@ export async function run(options, _cmd, ctx) {
     });
     server.listen(port, () => {
       console.log();
-      console.log(`  ${chalk.hex('#018ef5')('🦉 readme dev')} server running`);
+      console.log(`  ${chalk.hex('#018ef5')(`🦉 ${binName()} dev`)} server running`);
       console.log(`  ${chalk.dim('→')} ${chalk.cyan(`http://localhost:${port}`)}`);
       console.log();
     });

@@ -27,6 +27,16 @@ export async function main() {
     const cmd = program.command(mod.command);
 
     if (mod.description) cmd.description(mod.description);
+    if (mod.aliases) {
+      for (const alias of mod.aliases) {
+        const hidden = program.command(alias, { hidden: true });
+        if (mod.args) mod.args(hidden);
+        hidden.action(async (...args) => {
+          const ctx = await bootstrap({ skipValidation: !program.opts().check });
+          await mod.run(...args, ctx);
+        });
+      }
+    }
     if (mod.args) mod.args(cmd); // let the command define its own arguments/options
 
     cmd.action(async (...args) => {

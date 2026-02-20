@@ -1,4 +1,10 @@
+import path from 'node:path';
 import chalk from 'chalk';
+
+/** Returns "readme" or "readme_" depending on how the CLI was invoked. */
+export function binName() {
+  return path.basename(process.argv[1] || 'readme');
+}
 
 export const brand = chalk.hex('#018ef5'); // ReadMe blue
 export const success = chalk.green;

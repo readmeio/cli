@@ -5,7 +5,7 @@
   "type": "module",
   "bin": {
     "readme": "./bin/readme.js",
-    "readme-test": "./bin/readme.js"
+    "readme_": "./bin/readme.js"
   },
   "scripts": {
     "start": "node bin/readme.js",

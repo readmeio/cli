@@ -87,7 +87,7 @@ function validateReadMeRepo(gitRoot) {
 
     console.log();
     styles.info('Make sure you\'re running this inside a ReadMe docs project.');
-    styles.info(`You can skip this check with ${styles.bold('--no-check')}.`);
+    styles.info(`You can skip this check with ${styles.bold(`${styles.binName()} --no-check`)}.`);
     process.exit(1);
   }
 }

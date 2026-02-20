@@ -162,14 +162,14 @@ export function createHumanReporter() {
 
       if (fixable.length > 0) {
         console.log(
-          `  ${styles.dim("Run")} readme validate --fix ${styles.dim("to automatically fix some of these.")}`,
+          `  ${styles.dim("Run")} ${styles.binName()} lint --fix ${styles.dim("to automatically fix some of these.")}`,
         );
         console.log();
       }
 
       if (unfixed.length > 0 && !isRunningInClaude && hasClaude()) {
         console.log(
-          `  💡 Run ${styles.orange(`claude "run 'readme validate' and fix the issues"`)} to let Claude fix these for you.`,
+          `  💡 Run ${styles.orange(`claude "run '${styles.binName()} lint' and fix the issues"`)} to let Claude fix these for you.`,
         );
         console.log();
       }

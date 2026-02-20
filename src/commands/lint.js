@@ -1,8 +1,9 @@
 import { collectFiles, runValidators } from '../utils/lint.js';
 import { createHumanReporter, createJsonReporter } from '../utils/reporter.js';
 
-export const command = 'validate';
-export const description = 'Validate and lint your ReadMe docs';
+export const command = 'lint';
+export const aliases = ['validate'];
+export const description = 'Lint and validate your ReadMe docs';
 
 export function args(cmd) {
   cmd.option('--json', 'Output results as JSON (for CI and automation)');

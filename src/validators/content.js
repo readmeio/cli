@@ -1,8 +1,10 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import matter from 'gray-matter';
 
 export const name = 'content';
 
-export function validate({ content, relativePath }) {
+export function validate({ filePath, content, relativePath }) {
   const dir = relativePath.split('/')[0];
   if (!['docs', 'reference', 'custom_pages'].includes(dir)) return null;
   if (!relativePath.endsWith('.md')) return null;
@@ -20,6 +22,14 @@ export function validate({ content, relativePath }) {
 
   const trimmed = body.trim();
   if (trimmed.length === 0) {
+    // index.md files that act as parent pages (have child .md siblings) can be empty.
+    if (path.basename(filePath) === 'index.md') {
+      const siblings = fs.readdirSync(path.dirname(filePath));
+      if (siblings.some((f) => f.endsWith('.md') && f !== 'index.md')) {
+        return null;
+      }
+    }
+
     return {
       file: relativePath,
       rule: name,
