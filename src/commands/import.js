@@ -29,6 +29,27 @@ export async function run(_options, _cmd, ctx) {
     process.exit(1);
   }
 
+  // Scan the source folder and show what we found
+  const sourceFiles = listSourceFiles(resolvedFolder);
+  if (sourceFiles.length === 0) {
+    styles.error(`No files found in ${styles.bold(resolvedFolder)}`);
+    process.exit(1);
+  }
+
+  console.log();
+  styles.info(`Found ${styles.bold(String(sourceFiles.length))} files in ${styles.bold(resolvedFolder)}:`);
+  console.log();
+  for (const file of sourceFiles) {
+    console.log(`  ${styles.dim('·')} ${file}`);
+  }
+  console.log();
+
+  const confirmed = await confirm(`Import these files into ${styles.bold(gitRoot)}? This will run Claude to convert and organize them.`);
+  if (!confirmed) {
+    styles.info('Import cancelled.');
+    return;
+  }
+
   const claudeMdPath = path.join(__dirname, '../../vendor/git-format/CLAUDE.md');
 
   const prompt = [
@@ -43,26 +64,24 @@ export async function run(_options, _cmd, ctx) {
     `3. **Split content into multiple focused pages.** Do NOT dump everything into one big page. Each distinct topic, concept, or section should be its own page file. If a source file covers multiple topics, split it into separate pages. Prefer more focused pages over fewer long ones.`,
     `4. Create proper directories (docs/, reference/, recipes/, etc.) with _order.yaml files for each`,
     `5. If the repo already has a default "Getting Started" or "hello-world" page with placeholder content, replace it with real content derived from the source material — write a genuine getting-started guide based on what was imported`,
-    `6. **Recipes:** If the source contains code samples, an OAS/OpenAPI spec, or an SDK, generate 4-5 recipe pages in recipes/. Each recipe should be a practical how-to (e.g., "Authenticate and make your first request", "List and filter resources", "Handle pagination", "Error handling patterns", "Webhook setup"). Follow the recipe format: code blocks at the top, then # Heading sections with step-by-step explanations and <!-- lang@lines --> line highlights.`,
-    `7. **Use MDX components** wherever they improve the docs:`,
-    `   - Use <Tabs>/<Tab> for showing alternatives (e.g., different languages, different approaches)`,
-    `   - Use tabbed code blocks (back-to-back fenced code blocks with NO blank lines) for multi-language code examples`,
-    `   - Use <Accordion> for optional/advanced details the reader can expand`,
-    `   - Use <Cards>/<Card> for navigation sections or feature overviews`,
-    `   - Use <Columns>/<Column> for side-by-side content`,
+    `6. **First / landing page:** The first page in the Getting Started category should feel like a real landing page, not a wall of text. Use <Cards> with icons to link to the main sections (e.g., quickstart, API reference, key concepts). Use <Columns> if there's a natural side-by-side layout (e.g., feature highlights). Keep the prose short — let the cards and layout do the work.`,
+    `7. **Recipes:** If the source contains code samples, an OAS/OpenAPI spec, or an SDK, generate 4-5 recipe pages in recipes/. Each recipe should be a practical how-to (e.g., "Authenticate and make your first request", "List and filter resources", "Handle pagination", "Error handling patterns", "Webhook setup"). Follow the recipe format: code blocks at the top, then # Heading sections with step-by-step explanations and <!-- lang@lines --> line highlights.`,
+    `8. **Use MDX components liberally** — these are a key feature of ReadMe and make docs look professional:`,
+    `   - <Cards columns={2|3}>/<Card title="" icon="" href=""> — use on landing/overview pages to link to sub-sections, on any page that lists related topics, and wherever you'd otherwise have a bulleted list of links`,
+    `   - <Tabs>/<Tab title=""> — use for language/framework alternatives, OS-specific instructions, different approaches to the same task`,
+    `   - Tabbed code blocks (back-to-back fenced code blocks with NO blank lines between them) — use for multi-language code examples`,
+    `   - <Accordion title="" icon=""> — use for FAQs, optional details, advanced configuration, troubleshooting sections`,
+    `   - <Columns>/<Column> — use for side-by-side comparisons, feature highlights, or pairing text with diagrams`,
     `   - Only use these built-in components — do NOT use <Callout>, <Note>, <Info>, <Steps>, or other non-standard components`,
-    `8. Preserve the meaning and technical accuracy of the source content while adapting to git-format conventions`,
-    `9. Use proper frontmatter for every page (title is required, add excerpt where helpful)`,
-    `10. Use relative links between pages based on the published URL structure (not file paths)`,
+    `   - Aim to use at least one component on every page where it makes sense. Plain markdown walls of text should be the exception, not the rule.`,
+    `9. Preserve the meaning and technical accuracy of the source content while adapting to git-format conventions`,
+    `10. Use proper frontmatter for every page (title is required, add excerpt where helpful)`,
+    `11. Use relative links between pages based on the published URL structure (not file paths)`,
   ].join('\n');
 
   console.log();
-  styles.info(`Importing from ${styles.bold(resolvedFolder)}`);
-  styles.info(styles.dim('Claude is reading and converting your content...'));
-  console.log();
 
   const args = [
-    '-p',
     prompt,
     '--allowedTools',
     'Bash,Read,Write,Edit',
@@ -72,18 +91,18 @@ export async function run(_options, _cmd, ctx) {
     args.push('--append-system-prompt-file', claudeMdPath);
   }
 
+  // Launch Claude interactively so the user sees the full TUI with tool calls
+  // and file operations. stdio: 'inherit' hands the terminal over to Claude.
+  // When Claude finishes and the user exits, control returns here.
   await new Promise((resolve, reject) => {
     const child = spawn('claude', args, {
       cwd: gitRoot,
-      stdio: ['pipe', 'inherit', 'inherit'],
+      stdio: 'inherit',
     });
 
     child.on('close', (code) => {
-      if (code === 0) {
-        resolve();
-      } else {
-        reject(new Error(`Claude exited with code ${code}`));
-      }
+      // User may exit Claude with Ctrl+C — that's fine, the work is done
+      resolve(code);
     });
 
     child.on('error', (err) => {
@@ -127,5 +146,34 @@ function promptForFolder() {
         resolve(answer.trim());
       },
     );
+  });
+}
+
+function listSourceFiles(dir, prefix = '') {
+  const results = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name.startsWith('.')) continue;
+    const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) {
+      results.push(...listSourceFiles(path.join(dir, entry.name), rel));
+    } else {
+      results.push(rel);
+    }
+  }
+  return results;
+}
+
+function confirm(message) {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  return new Promise((resolve) => {
+    rl.question(`${styles.brand('?')} ${message} ${styles.dim('(Y/n)')} `, (answer) => {
+      rl.close();
+      const val = answer.trim().toLowerCase();
+      resolve(val === '' || val === 'y' || val === 'yes');
+    });
   });
 }

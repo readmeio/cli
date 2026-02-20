@@ -21,7 +21,7 @@ function parseOrderYaml(content) {
     .split('\n')
     .map((line) => line.trim())
     .filter((line) => line.startsWith('- '))
-    .map((line) => line.slice(2).trim());
+    .map((line) => line.slice(2).trim().replace(/^(['"])(.*)\1$/, '$2'));
 }
 
 /**
