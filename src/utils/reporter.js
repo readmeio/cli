@@ -1,8 +1,11 @@
+import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import ora from "ora";
 import * as styles from "./styles.js";
 import { hasClaude } from "./claude.js";
+import { hasGithubRemote, hasGithubWorkflow, getWorkflowVersion, WORKFLOW_VERSION } from "./git.js";
+import { getRandomTip } from "./tips.js";
 
 const isRunningInClaude = !!process.env.CLAUDECODE;
 
@@ -86,7 +89,7 @@ export function createHumanReporter() {
       spinner.stop();
     },
 
-    finish(total, results, files, { fix } = {}) {
+    finish(total, results, files, { fix, gitRoot } = {}) {
       spinner.suffixText = "";
 
       const { errors, warnings } = splitResults(results);
@@ -154,16 +157,17 @@ export function createHumanReporter() {
         console.log();
       }
 
-      if (unfixed.length > 0 && !isRunningInClaude && hasClaude()) {
-        console.log(`  💡 ${styles.bold("Tip:")} Claude can fix these issues for you easily!`);
-        console.log(`     ${styles.dim("⎿")}  ${styles.orange(`claude "run '${styles.binName()} lint' and fix the issues"`)}`);
-        console.log();
-      }
-
-      if (unfixed.length > 0 && !isRunningInClaude && !hasClaude()) {
-        console.log(`  💡 ${styles.bold("Tip:")} Install Claude to automatically fix these issues!`);
-        console.log(`     ${styles.dim("⎿")}  ${styles.dim("https://claude.ai/download")}`);
-        console.log();
+      if (unfixed.length > 0 && !isRunningInClaude) {
+        const hasWorkflow = gitRoot ? hasGithubWorkflow(gitRoot) : true;
+        const workflowVersion = gitRoot ? getWorkflowVersion(gitRoot) : null;
+        const tip = getRandomTip({
+          isRunningInClaude,
+          hasClaude: hasClaude(),
+          hasGithubRemote: hasGithubRemote(),
+          hasGithubWorkflow: hasWorkflow,
+          workflowOutdated: hasWorkflow && workflowVersion !== null && workflowVersion < WORKFLOW_VERSION,
+        });
+        if (tip) tip.render();
       }
 
       // When running inside Claude, output instructions and structured issue list.
@@ -202,6 +206,82 @@ export function createHumanReporter() {
         }
         console.log("</issues>");
       }
+    },
+  };
+}
+
+/**
+ * GitHub reporter — outputs a PR comment body as markdown.
+ */
+export function createGithubReporter() {
+  return {
+    onFile() {},
+    pause() {},
+
+    finish(total, results, _files, { gitRoot } = {}) {
+      const { errors, warnings } = splitResults(results);
+      const all = [...errors, ...warnings];
+
+      // Build file links using GitHub Actions env vars
+      const serverUrl = process.env.GITHUB_SERVER_URL || "https://github.com";
+      const repo = process.env.GITHUB_REPOSITORY || "";
+      const sha = process.env.GITHUB_SHA || "";
+      const canLink = repo && sha;
+
+      function fileLink(filePath) {
+        const name = filePath.split("/").pop();
+        if (canLink) {
+          const encoded = filePath.split("/").map(encodeURIComponent).join("/");
+          return `[\`${name}\`](${serverUrl}/${repo}/blob/${sha}/${encoded})`;
+        }
+        return `\`${name}\``;
+      }
+
+      let body = "<!-- readme-lint-results -->\n";
+      body += "## ReadMe Docs Lint\n\n";
+
+      if (all.length === 0) {
+        body += "> **All checks passed!** No lint issues found.\n";
+      } else {
+        body += "| | File | Message |\n";
+        body += "|---|------|--------|\n";
+        for (const r of all) {
+          const isError = r.severity !== "warning";
+          const emoji = isError ? "\u{1F534}" : "\u{1F7E1}";
+          const label = isError ? "**Error:**" : "**Warning:**";
+          body += `| ${emoji} | ${fileLink(r.file)} | ${label} ${r.message} |\n`;
+        }
+        body += "\n";
+        body += "> \u{1F4A1} Run `npx @readmeio/cli-beta lint --fix` locally to automatically fix some of these issues.\n\n";
+      }
+
+      // OAS change detection
+      const baseSha = process.env.GITHUB_BASE_SHA;
+      if (baseSha && gitRoot) {
+        try {
+          const changed = execSync(
+            `git diff --name-only ${baseSha}..HEAD -- 'reference/*.json' 'reference/*.yaml' 'reference/*.yml'`,
+            { cwd: gitRoot, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
+          ).trim();
+
+          if (changed) {
+            const files = changed.split("\n");
+            body += "### OAS Changes Detected\n\n";
+            body += "The following OpenAPI spec files were changed in this PR:\n\n";
+            for (const f of files) {
+              body += `- ${fileLink(f)}\n`;
+            }
+            body += "\nRun `npx @readmeio/cli-beta oas:sync` to sync these changes to ReadMe.\n\n";
+          }
+        } catch {
+          // git diff failed — skip OAS section silently
+        }
+      }
+
+      body += "---\n";
+      body += "*\u{1F989} Powered by [ReadMe](https://readme.com)*\n";
+
+      console.log(body);
     },
   };
 }

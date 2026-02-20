@@ -123,7 +123,7 @@ export async function run(_options, _cmd, ctx) {
     onBeforeCrossFile: () => reporter.pause(),
   });
 
-  reporter.finish(files.length, results, files);
+  reporter.finish(files.length, results, files, { gitRoot });
 
   const hasErrors = results.some((r) => r.severity !== 'warning');
   if (hasErrors) {
