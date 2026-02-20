@@ -1,6 +1,10 @@
 import { execSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 import ora from 'ora';
 import * as styles from './styles.js';
+
+const isRunningInClaude = !!process.env.CLAUDECODE;
 
 let _hasClaude;
 function hasClaude() {
@@ -121,9 +125,9 @@ export function createHumanReporter() {
         console.log(`  ${styles.bold(file)}`);
         for (const r of fileResults) {
           if (r.severity === 'warning') {
-            console.log(`    ${styles.warn('⚠')} ${styleMessage(r.message, styles.warn)}`);
+            console.log(`    ${styles.warn('●')} ${styleMessage(r.message, styles.warn)}`);
           } else {
-            console.log(`    ${styles.err('✘')} ${styleMessage(r.message, styles.err)}`);
+            console.log(`    ${styles.err('●')} ${styleMessage(r.message, styles.err)}`);
           }
         }
         console.log();
@@ -144,9 +148,23 @@ export function createHumanReporter() {
         console.log();
       }
 
-      if (unfixed.length > 0 && hasClaude()) {
-        console.log(`  💡 ${styles.orange('Run')} claude "run ${styles.bold('`readme validate`')} and fix the issues" ${styles.orange('to let Claude fix these for you.')}`);
+      if (unfixed.length > 0 && !isRunningInClaude && hasClaude()) {
+        console.log(`  💡 Run ${styles.orange('claude "run readme validate and fix the issues"')} to let Claude fix these for you.`);
         console.log();
+      }
+
+      // When running inside Claude, output instructions and structured issue list.
+      if (isRunningInClaude && unfixed.length > 0) {
+        const instructionsPath = path.join(path.dirname(new URL(import.meta.url).pathname), '../claude-instructions.md');
+        const instructions = fs.readFileSync(instructionsPath, 'utf-8');
+        console.log('\n<claude-instructions>');
+        console.log(instructions);
+        console.log('</claude-instructions>\n');
+        console.log('<issues>');
+        for (const r of unfixed) {
+          console.log(`- [${r.severity}] ${r.file}: ${r.message}`);
+        }
+        console.log('</issues>');
       }
     },
   };
