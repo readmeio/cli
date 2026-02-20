@@ -1,5 +1,19 @@
+import { execSync } from 'node:child_process';
 import ora from 'ora';
 import * as styles from './styles.js';
+
+let _hasClaude;
+function hasClaude() {
+  if (_hasClaude === undefined) {
+    try {
+      execSync('which claude', { stdio: 'pipe' });
+      _hasClaude = true;
+    } catch {
+      _hasClaude = false;
+    }
+  }
+  return _hasClaude;
+}
 
 const CATEGORY_LABELS = {
   custom_blocks: 'custom blocks',
@@ -115,13 +129,24 @@ export function createHumanReporter() {
         console.log();
       }
 
-      // Show --fix tip if there are unfixed fixable results.
-      if (!fix) {
-        const fixable = results.filter((r) => r.fixable && !r.message.endsWith('(fixed)'));
-        if (fixable.length > 0) {
-          console.log(`  ${styles.dim('Run')} readme validate --fix ${styles.dim('to automatically fix some of these.')}`);
-          console.log();
-        }
+      // Tips section.
+      const fixable = !fix ? results.filter((r) => r.fixable && !r.message.endsWith('(fixed)')) : [];
+      const unfixed = results.filter((r) => !r.message.endsWith('(fixed)'));
+      const showTips = fixable.length > 0 || (unfixed.length > 0 && hasClaude());
+
+      if (showTips) {
+        console.log(`  ${styles.dim('─'.repeat(40))}`);
+        console.log();
+      }
+
+      if (fixable.length > 0) {
+        console.log(`  ${styles.dim('Run')} readme validate --fix ${styles.dim('to automatically fix some of these.')}`);
+        console.log();
+      }
+
+      if (unfixed.length > 0 && hasClaude()) {
+        console.log(`  💡 ${styles.orange('Run')} claude "run ${styles.bold('`readme validate`')} and fix the issues" ${styles.orange('to let Claude fix these for you.')}`);
+        console.log();
       }
     },
   };
