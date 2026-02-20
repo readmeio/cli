@@ -31,6 +31,6 @@ export async function run(options, _cmd, ctx) {
 
   const hasErrors = results.some((r) => r.severity !== 'warning');
   if (hasErrors) {
-    process.exit(1);
+    process.exitCode = 1;
   }
 }
