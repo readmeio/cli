@@ -19,8 +19,19 @@ export function validate({ filePath, content, relativePath }) {
 
   if (data.hidden || data.deprecated) return null;
   if (data.api) return null;
-
   const trimmed = body.trim();
+
+  if (data.link?.url) {
+    if (trimmed.length > 0) {
+      return {
+        file: relativePath,
+        rule: name,
+        severity: 'warning',
+        message: 'Redirect page has body content: pages with a link URL won\'t display their content',
+      };
+    }
+    return null;
+  }
   if (trimmed.length === 0) {
     // index.md files that act as parent pages (have child .md siblings) can be empty.
     if (path.basename(filePath) === 'index.md') {
