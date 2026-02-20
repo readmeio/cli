@@ -175,7 +175,7 @@ export function createHumanReporter() {
 
         const gitFormatDir = path.join(cliRoot, "vendor/git-format");
         const claudeMdPath = path.join(gitFormatDir, "CLAUDE.md");
-        const toolsMdPath = path.join(gitFormatDir, "TOOLS.md");
+        const toolsMdPath = path.join(cliRoot, "vendor/TOOLS.md");
         const schemaPath = path.join(gitFormatDir, "frontmatter.schema.json");
 
         console.log("\n<claude-instructions>");
