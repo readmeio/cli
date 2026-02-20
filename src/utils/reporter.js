@@ -1,23 +1,10 @@
-import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import ora from "ora";
 import * as styles from "./styles.js";
+import { hasClaude } from "./claude.js";
 
 const isRunningInClaude = !!process.env.CLAUDECODE;
-
-let _hasClaude;
-function hasClaude() {
-  if (_hasClaude === undefined) {
-    try {
-      execSync("which claude", { stdio: "pipe" });
-      _hasClaude = true;
-    } catch {
-      _hasClaude = false;
-    }
-  }
-  return _hasClaude;
-}
 
 const CATEGORY_LABELS = {
   custom_blocks: "custom blocks",
