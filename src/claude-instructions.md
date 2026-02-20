@@ -59,6 +59,12 @@ Slugs (filenames without extension) must be unique across all `docs/` and `refer
 ### oas-reference
 Reference pages with `api.file` frontmatter must point to an OAS file that exists in `reference/`. The `api.operationId` must exist in the referenced spec. Title and excerpt should match the operation's summary and description in the spec. Missing pages for operations in the spec are flagged as warnings. Running `--fix` runs a full `oas:sync` to create missing pages, delete stale ones, and update out-of-sync frontmatter. **Note:** Title/excerpt sync checks are skipped for specs with `info.title: "ReadMeConfig"` — these are internal ReadMe config pages.
 
+### components
+Content files using MDX components (`<ComponentName>`) are checked to ensure the component exists — either as a built-in (Accordion, Tabs, Tab, Cards, Card, Columns, Column, Image, Callout, Code, CodeTabs, Embed, HTMLBlock, Table, etc.) or as a custom block in `custom_blocks/`. Custom block `.mdx` files must export a component and include a usage example. Custom block `.md` snippet files should have a capitalized filename (e.g., `Greeting.md` for `<Greeting />`).
+
+### recipes
+Recipe files must have code blocks defined at the top, followed by `# Heading` sections. Snippet references (`<!-- lang@lines -->`) must reference a language that matches an existing code block, and line numbers must be within the code block's range. Line specs can be 1-indexed (`<!-- javascript@2-8 -->`) or 0-indexed with L prefix (`<!-- node@L0-L4,L6 -->`).
+
 ## Fixing issues
 
 - For frontmatter errors: edit the file's YAML frontmatter to fix the issue
