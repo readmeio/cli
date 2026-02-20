@@ -48,13 +48,13 @@ Any property prefixed with `x-` is allowed for custom metadata (e.g., `x-author`
 Fix invalid or unknown frontmatter properties. Check the schema rules above.
 
 ### ordering
-Every file should be listed in its directory's `_order.yaml`. If entries are missing, add them.
+Every file should be listed in its directory's `_order.yaml`. If entries are missing, add them. **Important:** Slugs that YAML would interpret as non-strings (numbers like `404`, booleans like `true`/`false`/`yes`/`no`) must be quoted in `_order.yaml` (e.g., `- "404"` not `- 404`). Never remove quotes from existing entries.
 
 ### numbering
-Files or folders ending in `-1`, `-2`, etc. where no base name exists should be renamed (e.g., `setup-1.md` → `setup.md`).
+Files or folders ending in `-1`, `-2`, etc. where no base name exists should be renamed (e.g., `setup-1.md` → `setup.md`). The -1 or -2 is a holdover from an old bug, and almost definitely isn't what people want.
 
 ### duplicates
-Slugs (filenames without extension) must be unique across all `docs/` and `reference/` pages.
+Slugs (filenames without extension) must be unique across all `docs/` and `reference/` pages. **Never rename files inside `ReadMeConfig/`** — these have special internal names. If there's a duplicate involving a ReadMeConfig file, always rename the other file.
 
 ### oas-reference
 Reference pages with `api.file` frontmatter must point to an OAS file that exists in `reference/`. The `api.operationId` must exist in the referenced spec. Title and excerpt should match the operation's summary and description in the spec. Missing pages for operations in the spec are flagged as warnings. Running `--fix` runs a full `oas:sync` to create missing pages, delete stale ones, and update out-of-sync frontmatter. **Note:** Title/excerpt sync checks are skipped for specs with `info.title: "ReadMeConfig"` — these are internal ReadMe config pages.
@@ -71,4 +71,4 @@ Recipe files must have code blocks defined at the top, followed by `# Heading` s
 - For unknown properties: either remove them or prefix with `x-`
 - For typos: rename the property to the correct name
 - For ordering issues: add missing entries to `_order.yaml`
-- For duplicate slugs: rename one of the conflicting files
+- For duplicate slugs: rename one of the conflicting files (never rename ReadMeConfig files)

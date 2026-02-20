@@ -107,16 +107,22 @@ export function collectExistingPages(refDir) {
   return pages;
 }
 
+// Values that YAML interprets as non-strings and need quoting in _order.yaml.
+const YAML_UNSAFE = /^(?:\d+\.?\d*|true|false|yes|no|on|off|null|~)$/i;
+function yamlSafeSlug(slug) {
+  return YAML_UNSAFE.test(slug) ? `"${slug}"` : slug;
+}
+
 function parseOrderYaml(content) {
   return content
     .split('\n')
     .map((line) => line.trim())
     .filter((line) => line.startsWith('- '))
-    .map((line) => line.slice(2).trim());
+    .map((line) => line.slice(2).trim().replace(/^["'](.+)["']$/, '$1'));
 }
 
 function writeOrderYaml(filePath, slugs) {
-  const content = slugs.map((s) => `- ${s}`).join('\n') + '\n';
+  const content = slugs.map((s) => `- ${yamlSafeSlug(s)}`).join('\n') + '\n';
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, content);
 }

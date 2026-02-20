@@ -6,6 +6,12 @@ export const name = 'ordering';
 // Content directories where _order.yaml is expected.
 const ORDERED_DIRS = ['docs', 'recipes', 'custom_pages'];
 
+// Values that YAML interprets as non-strings and need quoting in _order.yaml.
+const YAML_UNSAFE = /^(?:\d+\.?\d*|true|false|yes|no|on|off|null|~)$/i;
+function yamlSafeSlug(slug) {
+  return YAML_UNSAFE.test(slug) ? `"${slug}"` : slug;
+}
+
 function slugFromFile(filename) {
   return filename.replace(/\.(md|mdx)$/, '');
 }
@@ -94,7 +100,7 @@ export function validateAll(files, gitRoot, { fix } = {}) {
     for (const r of results) {
       if (!r._fix) continue;
       const { orderPath, missing } = r._fix;
-      const newEntries = missing.map((slug) => `- ${slug}`).join('\n');
+      const newEntries = missing.map((slug) => `- ${yamlSafeSlug(slug)}`).join('\n');
 
       if (fs.existsSync(orderPath)) {
         const existing = fs.readFileSync(orderPath, 'utf-8');

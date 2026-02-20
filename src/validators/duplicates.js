@@ -25,10 +25,17 @@ export function validateAll(files) {
   for (const [slug, paths] of slugMap) {
     if (paths.length < 2) continue;
 
-    // Report the duplicate on every file except the first occurrence.
-    const others = paths.slice(1);
+    // Never flag ReadMeConfig files for renaming — they have special names.
+    // Sort so ReadMeConfig paths come first (treated as the canonical occurrence).
+    const sorted = [...paths].sort((a, b) => {
+      const aConfig = a.includes('ReadMeConfig/') ? 0 : 1;
+      const bConfig = b.includes('ReadMeConfig/') ? 0 : 1;
+      return aConfig - bConfig;
+    });
+
+    const others = sorted.slice(1);
     for (const relPath of others) {
-      const otherLocations = paths.filter((p) => p !== relPath).map((p) => path.dirname(p)).join(', ');
+      const otherLocations = sorted.filter((p) => p !== relPath).map((p) => path.dirname(p)).join(', ');
       results.push({
         file: relPath,
         rule: name,
