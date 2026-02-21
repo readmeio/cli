@@ -16,7 +16,7 @@ export default async function SlugPage({ params }) {
   }
 
   return (
-    <div className="content">
+    <div className="content markdown-body">
       <h1>{page.title}</h1>
       {page.excerpt && <p className="excerpt">{page.excerpt}</p>}
       <div dangerouslySetInnerHTML={{ __html: page.html }} />

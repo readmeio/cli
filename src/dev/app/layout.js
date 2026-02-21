@@ -1,11 +1,12 @@
 import { headers } from 'next/headers';
 import { collectSidebar } from '../lib/docs';
+import '@readme/markdown/dist/main.css';
 import './globals.css';
 
 export const dynamic = 'force-dynamic';
 
 export const metadata = {
-  title: 'ReadMe Docs',
+  title: 'Dev Preview',
 };
 
 function SidebarItems({ items }) {
@@ -14,8 +15,8 @@ function SidebarItems({ items }) {
       {items.map((item, i) => (
         <li key={i}>
           {item.href ? (
-            <a href={item.href} className="sidebar-link">
-              {item.title}
+            <a href={item.href} className="sidebar-link" {...(item.external ? { target: '_blank', rel: 'noopener noreferrer' } : {})}>
+              {item.title}{item.external ? ' ↗' : ''}
             </a>
           ) : (
             <span className="sidebar-group">{item.title}</span>
@@ -40,7 +41,6 @@ export default async function RootLayout({ children }) {
     <html lang="en">
       <body>
         <div className="topnav">
-          <div className="topnav-brand">ReadMe Docs</div>
           <div className="topnav-tabs">
             {sidebar.map((section, i) => (
               <a

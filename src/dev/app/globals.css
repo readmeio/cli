@@ -1,3 +1,27 @@
+:root {
+  /* @readme/markdown component color variables */
+  --blue-rgb: 1, 142, 245;
+  --yellow-rgb: 245, 174, 0;
+  --green-rgb: 0, 175, 80;
+  --red-rgb: 235, 55, 35;
+  --color-border-default: rgba(0, 0, 0, 0.1);
+  --color-text-default: #1a1a2e;
+  --color-text-muted: #4f5a66;
+  --color-text-minimum: #637288;
+  --markdown-radius: 8px;
+  --md-code-background: #f3f4f6;
+  --md-code-text: #1e293b;
+  --md-code-radius: 8px;
+  --border-radius-lg: 8px;
+  --markdown-text: #374151;
+  --markdown-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --markdown-line-height: 1.7;
+  --markdown-font-size: 16px;
+  --markdown-title: #111827;
+  --markdown-title-font: inherit;
+  --markdown-edge: #e5e7eb;
+}
+
 * {
   margin: 0;
   padding: 0;

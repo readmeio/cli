@@ -1,8 +1,15 @@
+import { createRequire } from 'node:module';
 import fs from 'fs';
 import path from 'path';
 import matter from 'gray-matter';
-import { marked } from 'marked';
+import { compile, run } from '@readme/markdown';
 import yaml from 'js-yaml';
+
+// Use createRequire to load react-dom/server at runtime,
+// bypassing Next.js App Router's static import restriction.
+const _require = createRequire(import.meta.url);
+const React = _require('react');
+const { renderToStaticMarkup } = _require('react-dom/server');
 
 const DOCS_ROOT = process.env.DOCS_ROOT;
 
@@ -51,6 +58,12 @@ function walkDir(dirPath, sectionDir) {
     if (isDir) {
       const children = walkDir(path.join(dirPath, name), sectionDir);
 
+      // ReadMeConfig pages are internal — show them without a group header
+      if (name === 'ReadMeConfig') {
+        entries.push(...children);
+        continue;
+      }
+
       // Check for index.md inside directory (parent page pattern)
       const indexPath = path.join(dirPath, name, 'index.md');
       let title = name;
@@ -65,9 +78,11 @@ function walkDir(dirPath, sectionDir) {
     } else if (isMd) {
       const filePath = path.join(dirPath, `${name}.md`);
       const { data } = matter(fs.readFileSync(filePath, 'utf-8'));
+      const linkUrl = data.link?.url;
       entries.push({
         title: data.title || name,
-        href: `/${sectionDir}/${encodeURIComponent(name)}`,
+        href: linkUrl || `/${sectionDir}/${encodeURIComponent(name)}`,
+        external: !!linkUrl,
         children: [],
       });
     }
@@ -90,16 +105,23 @@ export function collectSidebar() {
   return sections;
 }
 
-function stripJsxComponents(html) {
-  // Strip self-closing: <Component /> or <Component attr="value" />
-  html = html.replace(/<[A-Z][A-Za-z0-9]*\b[^>]*\/>/g, '');
-  // Strip open/close: <Component>...</Component> — keep inner content
-  html = html.replace(/<[A-Z][A-Za-z0-9]*\b[^>]*>([\s\S]*?)<\/[A-Z][A-Za-z0-9]*>/g, '$1');
-  // Strip any remaining orphaned opening tags
-  html = html.replace(/<[A-Z][A-Za-z0-9]*\b[^>]*>/g, '');
-  // Strip any remaining orphaned closing tags
-  html = html.replace(/<\/[A-Z][A-Za-z0-9]*>/g, '');
-  return html;
+function loadCustomBlocks(docsRoot) {
+  const blocksDir = path.join(docsRoot, 'custom_blocks');
+  if (!fs.existsSync(blocksDir)) return { sources: {}, modules: {} };
+
+  const files = fs.readdirSync(blocksDir).filter(f => f.endsWith('.md') || f.endsWith('.mdx'));
+  const sources = {};
+  const modules = {};
+
+  for (const file of files) {
+    const raw = fs.readFileSync(path.join(blocksDir, file), 'utf-8');
+    const { data, content } = matter(raw);
+    const name = data.name || path.basename(file, path.extname(file));
+    sources[name] = content;
+    modules[name] = run(compile(content));
+  }
+
+  return { sources, modules };
 }
 
 // Recursively find a .md file matching the given slug within a directory
@@ -145,8 +167,23 @@ export function getPage(slugArray) {
   const raw = fs.readFileSync(filePath, 'utf-8');
   const { data, content } = matter(raw);
 
-  let html = marked(content);
-  html = stripJsxComponents(html);
+  let html;
+  try {
+    const { sources, modules } = loadCustomBlocks(DOCS_ROOT);
+    const compiled = compile(content, { components: sources });
+    const mod = run(compiled, { components: modules });
+
+    // Suppress React warnings about class vs className from raw HTML in markdown
+    const origError = console.error;
+    console.error = (...args) => {
+      if (typeof args[0] === 'string' && args[0].includes('Invalid DOM property')) return;
+      origError.apply(console, args);
+    };
+    html = renderToStaticMarkup(React.createElement(mod.default));
+    console.error = origError;
+  } catch {
+    html = `<p><em>Error rendering MDX. Raw content below:</em></p><pre>${content.replace(/</g, '&lt;')}</pre>`;
+  }
 
   return {
     title: data.title || slug,
