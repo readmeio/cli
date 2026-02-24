@@ -68,13 +68,17 @@ function walkDir(dirPath, sectionDir) {
       const indexPath = path.join(dirPath, name, 'index.md');
       let title = name;
       let href = null;
+      let hidden = false;
+      let icon = null;
       if (fs.existsSync(indexPath)) {
         const { data } = matter(fs.readFileSync(indexPath, 'utf-8'));
         title = data.title || name;
         href = `/${sectionDir}/${encodeURIComponent(name)}`;
+        hidden = !!data.hidden;
+        icon = data.icon || null;
       }
 
-      entries.push({ title, href, children });
+      entries.push({ title, href, hidden, icon, children });
     } else if (isMd) {
       const filePath = path.join(dirPath, `${name}.md`);
       const { data } = matter(fs.readFileSync(filePath, 'utf-8'));
@@ -83,6 +87,8 @@ function walkDir(dirPath, sectionDir) {
         title: data.title || name,
         href: linkUrl || `/${sectionDir}/${encodeURIComponent(name)}`,
         external: !!linkUrl,
+        hidden: !!data.hidden,
+        icon: data.icon || null,
         children: [],
       });
     }

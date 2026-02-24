@@ -4,258 +4,164 @@
   --yellow-rgb: 245, 174, 0;
   --green-rgb: 0, 175, 80;
   --red-rgb: 235, 55, 35;
-  --color-border-default: rgba(0, 0, 0, 0.1);
+  --color-border-default: rgba(0, 0, 0, 0.06);
   --color-text-default: #1a1a2e;
   --color-text-muted: #4f5a66;
   --color-text-minimum: #637288;
   --markdown-radius: 8px;
-  --md-code-background: #f3f4f6;
+  --md-code-background: #f8fafc;
   --md-code-text: #1e293b;
   --md-code-radius: 8px;
   --border-radius-lg: 8px;
   --markdown-text: #374151;
   --markdown-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  --markdown-line-height: 1.7;
-  --markdown-font-size: 16px;
-  --markdown-title: #111827;
+  --markdown-line-height: 1.75;
+  --markdown-font-size: 15.5px;
+  --markdown-title: #0f172a;
   --markdown-title-font: inherit;
-  --markdown-edge: #e5e7eb;
+  --markdown-edge: #e2e8f0;
 }
 
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-}
-
-body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  min-height: 100vh;
-  color: #1a1a2e;
-  background: #fff;
-}
-
-.topnav {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 48px;
-  background: #fff;
-  border-bottom: 1px solid #e5e7eb;
-  display: flex;
-  align-items: center;
-  padding: 0 24px;
-  z-index: 10;
-}
-
-.topnav-brand {
-  font-weight: 700;
-  font-size: 16px;
-  color: #018ef5;
-  margin-right: 32px;
-  white-space: nowrap;
-}
-
-.topnav-tabs {
-  display: flex;
-  gap: 4px;
-  height: 100%;
-  align-items: stretch;
-}
-
-.topnav-tab {
-  display: flex;
-  align-items: center;
-  padding: 0 14px;
-  font-size: 14px;
-  font-weight: 500;
-  color: #6b7280;
-  text-decoration: none;
-  border-bottom: 2px solid transparent;
-  transition: color 0.15s, border-color 0.15s;
-}
-
-.topnav-tab:hover {
-  color: #111827;
-}
-
-.topnav-tab-active {
-  color: #018ef5;
-  border-bottom-color: #018ef5;
-}
-
-.layout {
-  display: flex;
-  padding-top: 48px;
-  min-height: 100vh;
-}
-
-.sidebar {
-  width: 260px;
-  min-height: calc(100vh - 48px);
-  background: #f8f9fb;
-  border-right: 1px solid #e5e7eb;
-  padding: 16px 0;
-  position: fixed;
-  top: 48px;
-  left: 0;
-  bottom: 0;
-  overflow-y: auto;
-}
-
-.sidebar-group {
-  display: block;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: #6b7280;
-  padding: 8px 20px 4px;
-}
-
-.sidebar-children {
-  list-style: none;
-}
-
-.sidebar-link {
-  display: block;
-  padding: 4px 20px 4px 28px;
-  font-size: 14px;
-  color: #374151;
-  text-decoration: none;
-  border-radius: 4px;
-}
-
-.sidebar-link:hover {
-  color: #018ef5;
-  background: #eef2ff;
-}
-
-.sidebar-children .sidebar-children .sidebar-link {
-  padding-left: 40px;
-  font-size: 13px;
-}
-
-.sidebar-children .sidebar-children .sidebar-children .sidebar-link {
-  padding-left: 52px;
-}
-
-.main {
-  margin-left: 260px;
-  flex: 1;
-  padding: 40px 60px;
-  max-width: 900px;
-}
+/*
+ * Content area prose styling.
+ * This targets rendered markdown injected via dangerouslySetInnerHTML
+ * where we can't apply Tailwind utility classes directly.
+ */
 
 .content h1 {
-  font-size: 32px;
-  font-weight: 700;
-  margin-bottom: 8px;
-  color: #111827;
+  font-size: 2rem;
+  font-weight: 800;
+  letter-spacing: -0.025em;
+  line-height: 1.2;
+  color: #0f172a;
+  margin-bottom: 0.5rem;
 }
 
 .excerpt {
-  font-size: 16px;
-  color: #6b7280;
-  margin-bottom: 24px;
-  line-height: 1.5;
+  font-size: 1.05rem;
+  color: #64748b;
+  line-height: 1.6;
+  margin-bottom: 2rem;
 }
 
 .content h2 {
-  font-size: 24px;
-  font-weight: 600;
-  margin: 32px 0 12px;
-  color: #111827;
+  font-size: 1.45rem;
+  font-weight: 700;
+  color: #0f172a;
+  letter-spacing: -0.01em;
+  margin: 2.5rem 0 0.75rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid #f1f5f9;
 }
 
 .content h3 {
-  font-size: 20px;
+  font-size: 1.15rem;
   font-weight: 600;
-  margin: 24px 0 8px;
-  color: #111827;
+  color: #1e293b;
+  margin: 2rem 0 0.5rem;
 }
 
 .content p {
-  font-size: 16px;
-  line-height: 1.7;
-  margin-bottom: 16px;
+  font-size: 15.5px;
+  line-height: 1.75;
   color: #374151;
+  margin-bottom: 1.25rem;
 }
 
 .content ul,
 .content ol {
-  margin: 0 0 16px 24px;
-  line-height: 1.7;
+  margin: 0 0 1.25rem 1.5rem;
+  line-height: 1.75;
+  color: #374151;
+}
+
+.content li {
+  margin-bottom: 0.25rem;
 }
 
 .content code {
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
-  font-size: 14px;
-  background: #f3f4f6;
-  padding: 2px 6px;
-  border-radius: 4px;
+  font-family: 'SF Mono', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: 13px;
+  background: #f1f5f9;
+  color: #0f172a;
+  padding: 0.15em 0.4em;
+  border-radius: 5px;
+  font-weight: 500;
 }
 
 .content pre {
-  background: #1e293b;
+  background: #0f172a;
   color: #e2e8f0;
-  padding: 16px 20px;
-  border-radius: 8px;
+  padding: 1.25rem 1.5rem;
+  border-radius: 12px;
   overflow-x: auto;
-  margin-bottom: 16px;
+  margin-bottom: 1.5rem;
+  font-size: 13.5px;
+  line-height: 1.65;
+  border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .content pre code {
   background: none;
   padding: 0;
   color: inherit;
-  font-size: 14px;
+  font-size: inherit;
+  font-weight: normal;
+  border-radius: 0;
 }
 
 .content a {
   color: #018ef5;
   text-decoration: none;
+  font-weight: 500;
 }
 
 .content a:hover {
   text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .content blockquote {
   border-left: 3px solid #018ef5;
-  padding: 8px 16px;
-  margin: 0 0 16px;
-  color: #4b5563;
-  background: #f8f9fb;
-  border-radius: 0 4px 4px 0;
+  padding: 0.75rem 1.25rem;
+  margin: 0 0 1.5rem;
+  color: #475569;
+  background: #f8fafc;
+  border-radius: 0 10px 10px 0;
+  font-size: 15px;
 }
 
 .content table {
   width: 100%;
   border-collapse: collapse;
-  margin-bottom: 16px;
+  margin-bottom: 1.5rem;
+  font-size: 14.5px;
 }
 
 .content th,
 .content td {
-  border: 1px solid #e5e7eb;
-  padding: 8px 12px;
+  border: 1px solid #e2e8f0;
+  padding: 0.6rem 1rem;
   text-align: left;
 }
 
 .content th {
-  background: #f8f9fb;
+  background: #f8fafc;
   font-weight: 600;
+  color: #1e293b;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
 
 .content img {
   max-width: 100%;
-  border-radius: 8px;
+  border-radius: 12px;
+  margin: 0.5rem 0;
 }
 
 .content hr {
   border: none;
-  border-top: 1px solid #e5e7eb;
-  margin: 24px 0;
+  border-top: 1px solid #f1f5f9;
+  margin: 2rem 0;
 }

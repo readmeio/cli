@@ -122,7 +122,7 @@ export function validate({ content, relativePath }) {
       results.push({
         file: relativePath,
         rule: name,
-        message: `Unknown snippet language: "${ref.lang}" does not match any code block${available ? ` (available: ${available})` : ''}`,
+        message: `Unknown snippet language: \`${ref.lang}\` does not match any code block${available ? ` (available: ${available})` : ''}`,
       });
       continue;
     }
@@ -134,7 +134,7 @@ export function validate({ content, relativePath }) {
         file: relativePath,
         rule: name,
         severity: 'warning',
-        message: `Snippet out of range: "${ref.raw}" references line ${maxLine} but "${ref.lang}" block has only ${block.lines.length} lines`,
+        message: `Snippet out of range: \`${ref.raw}\` references line ${maxLine} but \`${ref.lang}\` block has only ${block.lines.length} lines`,
       });
     }
   }

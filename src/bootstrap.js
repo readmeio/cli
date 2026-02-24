@@ -16,11 +16,17 @@ export default async function bootstrap({ skipValidation = false } = {}) {
   // 1. Check for CLI updates (runs at most once every 24 h)
   checkForUpdates();
 
-  // 2. Make sure we're inside a git repo and find the root
-  const gitRoot = findGitRoot();
+  // 2. Find the git root (or fall back to cwd if not in a git repo)
+  const gitRoot = findGitRoot() || process.cwd();
 
   // 3. Make sure this is a ReadMe project repo
   if (!skipValidation) {
+    if (!findGitRoot()) {
+      styles.error('This doesn\'t appear to be a git repository.');
+      styles.info('Run this command from inside a git repo to get started.');
+      styles.info(`You can skip this check with ${styles.bold(`${styles.binName()} --no-check`)}.`);
+      process.exit(1);
+    }
     validateReadMeRepo(gitRoot);
   }
 
@@ -44,9 +50,7 @@ function findGitRoot() {
     }).trim();
     return root;
   } catch {
-    styles.error('This doesn\'t appear to be a git repository.');
-    styles.info('Run this command from inside a git repo to get started.');
-    process.exit(1);
+    return null;
   }
 }
 
