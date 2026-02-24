@@ -2,13 +2,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import * as styles from '../utils/styles.js';
 import { hasClaude } from '../utils/claude.js';
 import { collectFiles, runValidators } from '../utils/lint.js';
 import { createHumanReporter } from '../utils/reporter.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const require = createRequire(import.meta.url);
 
 export const command = 'import';
 export const description = 'Import content from an external folder using Claude';
@@ -50,7 +50,7 @@ export async function run(_options, _cmd, ctx) {
     return;
   }
 
-  const claudeMdPath = path.join(__dirname, '../../vendor/git-format/CLAUDE.md');
+  const claudeMdPath = path.join(path.dirname(require.resolve('@readmeio/git-format/package.json')), 'CLAUDE.md');
 
   const prompt = [
     `You are importing documentation into a ReadMe docs repo.`,

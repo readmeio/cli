@@ -1,3 +1,0 @@
-[submodule "vendor/git-format"]
-	path = vendor/git-format
-	url = https://github.com/readmeio/git-format.git

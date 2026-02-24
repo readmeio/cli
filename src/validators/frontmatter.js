@@ -1,7 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import matter from 'gray-matter';
 import Ajv from 'ajv';
+
+const require = createRequire(import.meta.url);
 
 export const name = 'frontmatter';
 
@@ -75,10 +78,7 @@ const DIR_SCHEMA_INDEX = {
 };
 
 // Load the schema and compile a validator for each directory type.
-const schemaPath = path.join(
-  path.dirname(new URL(import.meta.url).pathname),
-  '../../vendor/git-format/frontmatter.schema.json',
-);
+const schemaPath = require.resolve('@readmeio/git-format/frontmatter.schema.json');
 const fullSchema = JSON.parse(fs.readFileSync(schemaPath, 'utf-8'));
 
 const ajv = new Ajv({ allErrors: true, strict: false, logger: false, verbose: true });

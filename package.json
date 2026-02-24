@@ -1,6 +1,6 @@
 {
   "name": "@readmeio/cli-beta",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "description": "The ReadMe CLI",
   "type": "module",
   "bin": {
@@ -31,6 +31,7 @@
     "ora": "^9.3.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "update-notifier": "^7.3.1"
+    "update-notifier": "^7.3.1",
+    "@readmeio/git-format": "readmeio/git-format"
   }
 }
