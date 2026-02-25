@@ -1,11 +1,11 @@
 ---
 name: publish
-description: Bump the package version and publish the CLI privately. Also updates the readme-cli skill and README with the new version.
+description: Bump the package version and publish the CLI publicly. Also updates the readme-cli skill and README with the new version.
 disable-model-invocation: true
 argument-hint: [major|minor|patch]
 ---
 
-Bump the version, update references, and publish the package privately.
+Bump the version, update references, and publish the package publicly.
 
 ## Steps
 
@@ -17,5 +17,5 @@ Bump the version, update references, and publish the package privately.
 3. Update the `"version"` field in `package.json` with the new version.
 4. Update the version number in `.claude/skills/readme-cli/SKILL.md` if it references a specific version.
 5. Update the version number in `README.md` if it references a specific version.
-6. Run `npm publish --access restricted` to publish privately.
+6. Run `npm publish --access public` to publish publicly.
 7. Report the old and new version to the user.
