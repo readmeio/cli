@@ -136,7 +136,7 @@ jobs:
         env:
           NODE_AUTH_TOKEN: $\{{ secrets.GITHUB_TOKEN }}
           GITHUB_BASE_SHA: $\{{ github.event.pull_request.base.sha }}
-        run: npx -y @readmeio/cli-beta --no-check lint --github > comment.md
+        run: npx -y @readme/cli-beta --no-check lint --github > comment.md
 
       - name: Comment on PR
         uses: actions/github-script@v7

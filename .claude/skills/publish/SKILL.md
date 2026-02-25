@@ -17,5 +17,5 @@ Bump the version, update references, and publish the package publicly.
 3. Update the `"version"` field in `package.json` with the new version.
 4. Update the version number in `.claude/skills/readme-cli/SKILL.md` if it references a specific version.
 5. Update the version number in `README.md` if it references a specific version.
-6. Run `npm publish --access public` to publish publicly.
+6. Run `npm publish --access public --registry https://registry.npmjs.org` to publish publicly to npmjs.org.
 7. Report the old and new version to the user.
