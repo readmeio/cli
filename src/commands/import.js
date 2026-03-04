@@ -13,7 +13,12 @@ const require = createRequire(import.meta.url);
 export const command = 'import';
 export const description = 'Import content from an external folder using Claude';
 
-export async function run(_options, _cmd, ctx) {
+export function args(cmd) {
+  cmd.argument('[folder]', 'Folder to import from (prompts interactively if omitted)');
+  cmd.option('--headless', 'Run Claude in non-interactive print mode');
+}
+
+export async function run(folder, options, _cmd, ctx) {
   const { gitRoot } = ctx;
 
   if (!hasClaude()) {
@@ -21,7 +26,9 @@ export async function run(_options, _cmd, ctx) {
     process.exit(1);
   }
 
-  const folder = await promptForFolder();
+  if (!folder) {
+    folder = await promptForFolder();
+  }
   const resolvedFolder = path.resolve(folder);
 
   if (!fs.existsSync(resolvedFolder) || !fs.statSync(resolvedFolder).isDirectory()) {
@@ -89,6 +96,12 @@ export async function run(_options, _cmd, ctx) {
 
   if (fs.existsSync(claudeMdPath)) {
     args.push('--append-system-prompt-file', claudeMdPath);
+  }
+
+  if (options.headless) {
+    args.push('-p');
+    args.push('--output-format=stream-json');
+    args.push('--verbose');
   }
 
   // Launch Claude interactively so the user sees the full TUI with tool calls
