@@ -1,3 +1,5 @@
 node_modules/
 .next/
 .claude/settings.local.json
+
+icon-designer.mjs
