@@ -47,20 +47,35 @@ export function findOasFiles(refDir) {
 }
 
 /**
+ * Generate a synthetic operationId from the HTTP method and path.
+ * Matches the algorithm used by the `oas` package for specs without operationIds.
+ */
+function generateOperationId(method, pathStr) {
+  const sanitized = pathStr
+    .replace(/[^a-zA-Z0-9]/g, '-')
+    .replace(/--+/g, '-')
+    .replace(/^-|-$/g, '')
+    .toLowerCase();
+  return `${method.toLowerCase()}_${sanitized}`;
+}
+
+/**
  * Extract operations from an OAS spec.
  * Returns a Map of operationId -> { summary, description, tag, operationId }.
+ * For operations without an operationId, a synthetic one is generated from the method and path.
  */
 export function extractOperations(spec) {
   const ops = new Map();
   const paths = spec.paths || {};
 
-  for (const [, methods] of Object.entries(paths)) {
+  for (const [pathStr, methods] of Object.entries(paths)) {
     for (const [method, operation] of Object.entries(methods)) {
       if (!HTTP_METHODS.has(method)) continue;
-      if (!operation.operationId) continue;
 
-      ops.set(operation.operationId, {
-        operationId: operation.operationId,
+      const operationId = operation.operationId || generateOperationId(method, pathStr);
+
+      ops.set(operationId, {
+        operationId,
         summary: operation.summary || null,
         description: operation.description || null,
         tag: (operation.tags && operation.tags[0]) || null,
