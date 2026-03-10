@@ -1,3 +1,4 @@
+.DS_Store
 node_modules/
 .next/
 .claude/settings.local.json

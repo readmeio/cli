@@ -50,11 +50,13 @@ export async function run(folder, options, _cmd, ctx) {
     console.log(`  ${styles.dim('·')} ${file}`);
   }
   console.log();
-
-  const confirmed = await confirm(`Import these files into ${styles.bold(gitRoot)}? This will run Claude to convert and organize them.`);
-  if (!confirmed) {
-    styles.info('Import cancelled.');
-    return;
+  
+  if (!options.headless) {
+    const confirmed = await confirm(`Import these files into ${styles.bold(gitRoot)}? This will run Claude to convert and organize them.`);
+    if (!confirmed) {
+      styles.info('Import cancelled.');
+      return;
+    }
   }
 
   const claudeMdPath = path.join(path.dirname(require.resolve('@readmeio/git-format/package.json')), 'CLAUDE.md');
