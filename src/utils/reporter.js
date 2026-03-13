@@ -41,7 +41,7 @@ function splitResults(results) {
  * Title (before first ":") is colored, rest is normal with bold quoted values.
  */
 function styleMessage(message, color) {
-  // Strip "(fixed)" suffix — handled separately.
+  // Strip "(fixed)" suffix — handled separately via the icon.
   const isFixed = message.endsWith("(fixed)");
   const raw = isFixed ? message.slice(0, -"(fixed)".length).trimEnd() : message;
 
@@ -57,10 +57,6 @@ function styleMessage(message, color) {
   } else {
     // No colon — highlight quoted values, keep rest normal.
     styled = raw.replace(/"([^"]+)"/g, (_, val) => styles.bold(`"${val}"`));
-  }
-
-  if (isFixed) {
-    styled += ` ${styles.success("✔ fixed")}`;
   }
 
   return styled;
@@ -127,15 +123,12 @@ export function createHumanReporter() {
       for (const [file, fileResults] of grouped) {
         console.log(`  ${styles.bold(file)}`);
         for (const r of fileResults) {
-          if (r.severity === "warning") {
-            console.log(
-              `    ${styles.warn("●")} ${styleMessage(r.message, styles.warn)}`,
-            );
-          } else {
-            console.log(
-              `    ${styles.err("●")} ${styleMessage(r.message, styles.err)}`,
-            );
-          }
+          const baseColor = r.severity === "warning" ? styles.warn : styles.err;
+          const isFixed = r.message.endsWith("(fixed)");
+          const color = isFixed ? styles.success : baseColor;
+          const styled = styleMessage(r.message, color);
+          const icon = isFixed ? styles.success("✔") : baseColor("●");
+          console.log(`    ${icon} ${styled}`);
         }
         console.log();
       }

@@ -69,7 +69,7 @@ export async function validateAll(files, gitRoot, { fix } = {}) {
         rule: name,
         severity: 'warning',
         fixable: true,
-        message: `"${slug}${ext}" should be renamed to "${baseSlug}${ext}"`,
+        message: `Unnecessary suffix: "${slug}${ext}" should be renamed to "${baseSlug}${ext}"`,
       });
       renames.push({ from, to, label: `${relPath} → ${toRel}` });
     }
@@ -99,7 +99,7 @@ export async function validateAll(files, gitRoot, { fix } = {}) {
           rule: name,
           severity: 'warning',
           fixable: true,
-          message: `"${dirName}" folder should be renamed to "${baseName}"`,
+          message: `Unnecessary suffix: "${dirName}" folder should be renamed to "${baseName}"`,
         });
         renames.push({ from, to, label: `${dirPath}/ → ${baseDirPath}/` });
       }

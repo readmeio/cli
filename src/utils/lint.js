@@ -70,7 +70,7 @@ export async function runValidators(files, gitRoot, { onFile, onBeforeCrossFile,
 
     for (const validator of validators) {
       if (!validator.validate) continue;
-      const result = validator.validate({ filePath, content, relativePath });
+      const result = validator.validate({ filePath, content, relativePath, fix });
       if (result) {
         if (Array.isArray(result)) {
           results.push(...result);

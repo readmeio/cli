@@ -73,7 +73,7 @@ export function validateAll(files, gitRoot, { fix } = {}) {
         rule: name,
         severity: 'warning',
         fixable: true,
-        message: `Missing _order.yaml (${expectedSlugs.length} ${expectedSlugs.length === 1 ? 'entry needs' : 'entries need'} ordering)`,
+        message: `Missing order: _order.yaml not found (${expectedSlugs.length} ${expectedSlugs.length === 1 ? 'entry needs' : 'entries need'} ordering)`,
         _fix: { orderPath, missing: expectedSlugs },
       });
       continue;

@@ -91,7 +91,7 @@ for (const [dir, index] of Object.entries(DIR_SCHEMA_INDEX)) {
   knownProperties[dir] = collectPropertyNames(subSchema, fullSchema.defs);
 }
 
-export function validate({ content, relativePath }) {
+export function validate({ content, filePath, relativePath, fix }) {
   // Step 1: Parse the frontmatter YAML.
   let data;
   try {
@@ -139,14 +139,18 @@ export function validate({ content, relativePath }) {
 
   // Step 3: Warn about unknown properties (allow x- prefix for custom metadata).
   const allowed = knownProperties[dir];
+  const unknownKeys = [];
   if (allowed && data && typeof data === 'object') {
     for (const key of Object.keys(data)) {
       if (!allowed.has(key) && !key.startsWith('x-')) {
+        unknownKeys.push(key);
         results.push({
           file: relativePath,
           rule: name,
           severity: 'warning',
-          message: `Unknown frontmatter property "${key}" (use x-${key} for custom metadata)`,
+          fixable: true,
+          _key: key,
+          message: `Unknown property: "${key}" is not a known frontmatter field (use x-${key} for custom metadata)`,
         });
       }
     }
@@ -156,7 +160,7 @@ export function validate({ content, relativePath }) {
   const missingRequired = results.filter(
     (r) => r.severity === 'error' && r.message.includes('must have required property'),
   );
-  const unknowns = results.filter((r) => r.severity === 'warning' && r.message.startsWith('Unknown frontmatter'));
+  const unknowns = results.filter((r) => r._key);
 
   const consumed = new Set();
 
@@ -170,10 +174,7 @@ export function validate({ content, relativePath }) {
     let bestScore = 0;
     for (const warn of unknowns) {
       if (consumed.has(warn)) continue;
-      const warnMatch = warn.message.match(/Unknown frontmatter property "([^"]+)"/);
-      if (!warnMatch) continue;
-
-      const score = similarity(required, warnMatch[1]);
+      const score = similarity(required, warn._key);
       if (score >= TYPO_THRESHOLD && score > bestScore) {
         bestMatch = warn;
         bestScore = score;
@@ -181,24 +182,21 @@ export function validate({ content, relativePath }) {
     }
 
     if (bestMatch) {
-      const typo = bestMatch.message.match(/Unknown frontmatter property "([^"]+)"/)[1];
       consumed.add(bestMatch);
-      err.message = `Invalid frontmatter: "${typo}" is not a valid property — did you mean "${required}"?`;
+      err.message = `Invalid frontmatter: "${bestMatch._key}" is not a valid property — did you mean "${required}"?`;
     }
   }
 
   // Second pass: match remaining unknowns to any known property (these stay as warnings).
+  const suggestedTypos = new Set();
   if (allowed) {
     for (const warn of unknowns) {
       if (consumed.has(warn)) continue;
-      const warnMatch = warn.message.match(/Unknown frontmatter property "([^"]+)"/);
-      if (!warnMatch) continue;
-      const unknown = warnMatch[1];
 
       let bestProp = null;
       let bestScore = 0;
       for (const known of allowed) {
-        const score = similarity(unknown, known);
+        const score = similarity(warn._key, known);
         if (score >= TYPO_THRESHOLD && score > bestScore) {
           bestProp = known;
           bestScore = score;
@@ -206,7 +204,39 @@ export function validate({ content, relativePath }) {
       }
 
       if (bestProp) {
-        warn.message = `Unknown frontmatter property "${unknown}" — did you mean "${bestProp}"?`;
+        suggestedTypos.add(warn._key);
+        warn.message = `Unknown property: "${warn._key}" — did you mean "${bestProp}"?`;
+      }
+    }
+  }
+
+  // Step 5: Apply fixes — rename unknown (non-typo) properties to x- prefixed.
+  if (fix && filePath) {
+    const typoKeys = new Set([...consumed].map((r) => r._key));
+    const keysToFix = unknownKeys.filter((key) => !typoKeys.has(key) && !suggestedTypos.has(key));
+
+    if (keysToFix.length > 0) {
+      let fileContent = fs.readFileSync(filePath, 'utf-8');
+
+      // Only replace within the frontmatter block (between the --- delimiters).
+      const fmMatch = fileContent.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+      if (fmMatch) {
+        let frontmatter = fmMatch[1];
+        const keysToFixSet = new Set(keysToFix);
+        for (const key of keysToFix) {
+          const regex = new RegExp(`^(${key}:)`, 'gm');
+          frontmatter = frontmatter.replace(regex, `x-${key}:`);
+        }
+        fileContent = fileContent.replace(fmMatch[1], frontmatter);
+      }
+      fs.writeFileSync(filePath, fileContent, 'utf-8');
+
+      // Mark the corresponding warnings as fixed.
+      const keysToFixSet = new Set(keysToFix);
+      for (const r of results) {
+        if (r._key && keysToFixSet.has(r._key)) {
+          r.message += ' (fixed)';
+        }
       }
     }
   }

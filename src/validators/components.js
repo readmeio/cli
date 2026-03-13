@@ -152,7 +152,7 @@ export function validate({ content, relativePath }) {
         file: relativePath,
         rule: name,
         severity: "warning",
-        message: `Filename should be PascalCase: rename to "${pascalCase}.md" so it can be used as <${pascalCase} />`,
+        message: `Bad filename: should be PascalCase — rename to "${pascalCase}.md" so it can be used as <${pascalCase} />`,
       });
     }
     return results.length > 0 ? results : null;
