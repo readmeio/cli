@@ -20,7 +20,7 @@ export const brand = chalk.hex('#018ef5'); // ReadMe blue
 export const success = chalk.green;
 export const warn = chalk.yellow;
 export const err = chalk.red;
-export const orange = chalk.hex('#ff9540');
+export const orange = chalk.hex('#63D2FF');
 export const dim = chalk.dim;
 export const bold = chalk.bold;
 

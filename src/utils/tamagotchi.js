@@ -102,6 +102,7 @@ function nap(pet) {
 }
 
 function petAction(petState) {
+  if (petState.energy <= 1) return `${petState.name} is too tired for pets...`;
   petState.sleeping = false;
   petState.happiness = Math.min(MAX_STAT, petState.happiness + 2);
   return `${petState.name} loves the attention!`;
@@ -325,6 +326,10 @@ function renderStatus(pet) {
 
   const lines = [
     statusRow(
+      ` ${chalk.bold(pet.name)}`,
+      ` ${chalk.dim('vitals')}`,
+    ),
+    statusRow(
       ` ${chalk.dim('age:')} ${formatAge(pet.age)}`,
       ` ${chalk.hex('#ff6b6b')('hunger')}  ${statBar(pet.hunger, MAX_STAT, chalk.hex('#ff6b6b'))}   ${String(pet.hunger).padStart(2)}/${MAX_STAT}`,
     ),
@@ -541,10 +546,8 @@ export async function startGame() {
     // Render with box border
     const footer = chalk.dim('[r] reset  [q] quit');
     const footerVis = '[r] reset  [q] quit'.length;
-    const nameStr = chalk.bold(petState.name);
-    const nameVis = boxVisLen(nameStr);
     console.log('');
-    console.log('  ' + nameStr + ' '.repeat(BOX_WIDTH - 2 - nameVis - footerVis + 1) + footer);
+    console.log('  ' + ' '.repeat(BOX_WIDTH - 2 - footerVis + 1) + footer);
     console.log('  ' + boxTop());
     const sceneBg = petState.sleeping ? '#05051a' : null;
     const handLines = getPetHand();
@@ -561,6 +564,13 @@ export async function startGame() {
         console.log('  ' + boxLine(row, sceneBg));
       }
     }
+    // Message centered between scene and vitals
+    const inner = BOX_WIDTH - 2;
+    const msgVis = boxVisLen(message || '');
+    const msgPadL = Math.floor((inner - msgVis) / 2);
+    const msgPadR = inner - msgVis - msgPadL;
+    console.log('  ' + boxDivider());
+    console.log('  ' + chalk.dim('│') + ' '.repeat(msgPadL) + (message || '') + ' '.repeat(msgPadR) + chalk.dim('│'));
     console.log('  ' + chalk.dim('├' + '─'.repeat(STATUS_LEFT) + '┬' + '─'.repeat(STATUS_RIGHT) + '┤'));
     for (const line of statusLines) {
       console.log('  ' + boxLine(line));
@@ -570,10 +580,6 @@ export async function startGame() {
       console.log('  ' + boxLine(line));
     }
     console.log('  ' + boxBottom());
-
-    // Message line
-    console.log('');
-    console.log('  ' + (message || ''));
   }
 
   function clearMessage(delay = 3000) {
@@ -761,11 +767,14 @@ export async function startGame() {
 
   async function animatePlay() {
     playAnimating = true;
+    const bounceFrames = ['right:up', 'right:up', 'right', 'right', 'right:up', 'right:up', 'right', 'right', 'right:up', 'right:up', 'right', 'right', 'right'];
     for (playFrame = 0; playFrame <= 12; playFrame++) {
+      frameOverride = bounceFrames[playFrame % bounceFrames.length];
       draw();
-      await new Promise(r => setTimeout(r, 100));
+      await new Promise(r => setTimeout(r, 180));
     }
     playFrame = -1;
+    frameOverride = null;
     draw();
     playAnimating = false;
   }
@@ -824,7 +833,9 @@ export async function startGame() {
   function doAction(actionFn) {
     if (actionBusy) return;
     const tricksBefore = (petState.tricks || []).length;
+    const statsBefore = { hunger: petState.hunger, happiness: petState.happiness, energy: petState.energy, sleeping: petState.sleeping };
     message = actionFn(petState);
+    const statsChanged = petState.hunger !== statsBefore.hunger || petState.happiness !== statsBefore.happiness || petState.energy !== statsBefore.energy || petState.sleeping !== statsBefore.sleeping;
     petState.lastVisit = Date.now();
     savePet(petState);
     animFrame = 0;
@@ -837,7 +848,12 @@ export async function startGame() {
       clearMessage();
     }
 
-    if (actionFn === nap) {
+    if (!statsChanged) {
+      message = chalk.hex('#ff9540')(message);
+      draw();
+      clearMessage();
+      done();
+    } else if (actionFn === nap) {
       // Only nap/wake gets the eye open/close animation
       animateSleep(petState.sleeping).then(() => { draw(); done(); });
     } else if (actionFn === feed) {
@@ -938,17 +954,18 @@ export async function startGame() {
       const now = Date.now();
       const elapsed = now - petState.lastVisit;
       if (elapsed >= DECAY_INTERVAL_MS) {
+        const moodBefore = getMood(petState);
         petState = applyDecay(petState);
         savePet(petState);
+        const moodAfter = getMood(petState);
+        if (moodBefore !== moodAfter) {
+          if (moodAfter === 'tired') message = chalk.hex('#63D2FF')(`${petState.name} is getting sleepy...`);
+          else if (moodAfter === 'sad' && petState.hunger <= 1) message = chalk.hex('#ff6b6b')(`${petState.name} is hungry!`);
+        }
       }
     }
   }
 
-  if (isNew) {
-    clearMessage(5000);
-  } else {
-    clearMessage();
-  }
 
   await gameLoop();
 }
