@@ -22,9 +22,15 @@ export async function main() {
   const commandsDir = path.join(path.dirname(new URL(import.meta.url).pathname), 'commands');
   const files = fs.readdirSync(commandsDir).filter((f) => f.endsWith('.js'));
 
+  const betaCommands = [];
+
   for (const file of files) {
     const mod = await import(pathToFileURL(path.join(commandsDir, file)).href);
-    const cmd = program.command(mod.command);
+    const cmd = program.command(mod.command, { hidden: !!mod.beta });
+
+    if (mod.beta) {
+      betaCommands.push({ name: mod.command, description: mod.description || '' });
+    }
 
     if (mod.description) cmd.description(mod.description);
     if (mod.aliases) {
@@ -43,6 +49,17 @@ export async function main() {
       // Run bootstrap checks before every command
       const ctx = await bootstrap({ skipValidation: !program.opts().check });
       await mod.run(...args, ctx);
+    });
+  }
+
+  // Add beta commands section to help output
+  if (betaCommands.length > 0) {
+    program.addHelpText('after', () => {
+      const padWidth = Math.max(...betaCommands.map((c) => c.name.length)) + 2;
+      const lines = betaCommands.map(
+        (c) => `  ${styles.dim(`${c.name.padEnd(padWidth)}${c.description} (beta)`)}`,
+      );
+      return `\n${styles.dim('Beta Commands:')}\n${lines.join('\n')}\n`;
     });
   }
 

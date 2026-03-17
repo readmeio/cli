@@ -12,6 +12,7 @@ const require = createRequire(import.meta.url);
 
 export const command = 'import';
 export const description = 'Import content from an external folder using Claude';
+export const beta = true;
 
 export function args(cmd) {
   cmd.argument('[folder]', 'Folder to import from (prompts interactively if omitted)');

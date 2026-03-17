@@ -9,6 +9,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export const command = 'dev';
 export const description = 'Start a local dev server to preview your docs';
+export const beta = true;
 
 export function args(cmd) {
   cmd.option('--port <number>', 'Port to run the dev server on');
