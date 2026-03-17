@@ -5,6 +5,9 @@ import { Command } from 'commander';
 import { createRequire } from 'node:module';
 import bootstrap from './bootstrap.js';
 import * as styles from './utils/styles.js';
+import { header, setPalette } from './utils/eyes.js';
+import { loadPet, applyDecay, getPetHeader } from './utils/tamagotchi.js';
+import { getRandomTip } from './utils/tips.js';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json');
@@ -12,21 +15,53 @@ const pkg = require('../package.json');
 export async function main() {
   const program = new Command();
 
+  // Load tamagotchi state if it exists for personalized header
+  let petGreeting, petExpression;
+  let hasPet = false;
+  try {
+    const pet = loadPet();
+    if (pet) {
+      hasPet = true;
+      if (pet.color) setPalette(pet.color);
+      const updated = applyDecay(pet);
+      ({ greeting: petGreeting, expression: petExpression } = getPetHeader(updated));
+    }
+  } catch {
+    // No pet yet, use defaults
+  }
+
   program
     .name(styles.binName())
-    .description(`${styles.logo()} — the ReadMe CLI`)
     .version(pkg.version, '-v, --version')
     .option('--no-check', 'Skip ReadMe project validation checks');
+
+  program.addHelpText('beforeAll', () => {
+    return '\n' + header({
+      version: pkg.version,
+      binName: styles.binName(),
+      greeting: petGreeting,
+      expression: petExpression,
+    }).map(l => '  ' + l).join('\n') + '\n';
+  });
 
   // Auto-discover and register every command in src/commands/
   const commandsDir = path.join(path.dirname(new URL(import.meta.url).pathname), 'commands');
   const files = fs.readdirSync(commandsDir).filter((f) => f.endsWith('.js'));
 
-  const betaCommands = [];
-
+  // Load all modules, then sort by order (default 0)
+  const mods = [];
   for (const file of files) {
     const mod = await import(pathToFileURL(path.join(commandsDir, file)).href);
-    const cmd = program.command(mod.command, { hidden: !!mod.beta });
+    mods.push(mod);
+  }
+  mods.sort((a, b) => (a.order || 0) - (b.order || 0));
+
+  const betaCommands = [];
+
+  for (const mod of mods) {
+    const isPlay = mod.command === 'play';
+    const hidePlay = isPlay && !hasPet;
+    const cmd = program.command(mod.command, { hidden: !!(mod.beta || (mod.hidden && !isPlay) || hidePlay) });
 
     if (mod.beta) {
       betaCommands.push({ name: mod.command, description: mod.description || '' });
@@ -46,9 +81,12 @@ export async function main() {
     if (mod.args) mod.args(cmd); // let the command define its own arguments/options
 
     cmd.action(async (...args) => {
-      // Run bootstrap checks before every command
-      const ctx = await bootstrap({ skipValidation: !program.opts().check });
-      await mod.run(...args, ctx);
+      if (mod.skipBootstrap) {
+        await mod.run(...args);
+      } else {
+        const ctx = await bootstrap({ skipValidation: !program.opts().check });
+        await mod.run(...args, ctx);
+      }
     });
   }
 
@@ -63,6 +101,20 @@ export async function main() {
     });
   }
 
+  // Show a random tip after help
+  program.addHelpText('afterAll', () => {
+    const tip = getRandomTip({ command: 'help' });
+    if (tip) {
+      let output = '';
+      const origLog = console.log;
+      console.log = (...args) => { output += args.join(' ') + '\n'; };
+      tip.render();
+      console.log = origLog;
+      return '\n' + output;
+    }
+    return '';
+  });
+
   // Friendly fallback for unknown commands
   program.on('command:*', ([cmd]) => {
     styles.error(`Unknown command: ${styles.bold(cmd)}`);
@@ -76,5 +128,13 @@ export async function main() {
     return;
   }
 
-  await program.parseAsync(process.argv);
+  // Support colon syntax (e.g. "eyes:right" → "eyes right")
+  const argv = [...process.argv];
+  const cmdArg = argv[2];
+  if (cmdArg && cmdArg.includes(':') && !program.commands.some((c) => c.name() === cmdArg)) {
+    const [base, ...rest] = cmdArg.split(':');
+    argv.splice(2, 1, base, rest.join(':'));
+  }
+
+  await program.parseAsync(argv);
 }
