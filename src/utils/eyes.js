@@ -41,11 +41,20 @@ function render(px) {
 
 // ── Pixel grids ─────────────────────────────────────────
 
-function makeFrame(eyeL, eyeR, lid = 0) {
+function applyLid(eye, lid, L) {
+  // lid: 0 = open, 1 = half, 2 = squint, 3 = closed
+  const count = lid === 3 ? 2 : lid;
+  for (let i = 0; i < count && i < 2; i++) {
+    eye[i][0] = L;
+    eye[i][1] = L;
+  }
+}
+
+function makeFrame(eyeL, eyeR, lidL = 0, lidR = lidL) {
   const { body: B, page: W, pupil: D, lid: L } = currentPalette;
   // eyeL/eyeR: [row, col] of pupil within the 2x2 page area
   //   row 0 = top, 1 = bottom; col 0 = left, 1 = right
-  // lid: 0 = open, 1 = half, 2 = squint (most), 3 = closed
+  // lidL/lidR: 0 = open, 1 = half, 2 = squint (most), 3 = closed
   const page = [
     [W, W],
     [W, W],
@@ -57,24 +66,9 @@ function makeFrame(eyeL, eyeR, lid = 0) {
   left[eyeL[0]][eyeL[1]] = D;
   right[eyeR[0]][eyeR[1]] = D;
 
-  // Apply eyelids from top down
-  for (let i = 0; i < lid; i++) {
-    if (i < 2) {
-      left[i][0] = L;
-      left[i][1] = L;
-      right[i][0] = L;
-      right[i][1] = L;
-    }
-  }
-  if (lid === 3) {
-    // Fully closed
-    for (let i = 0; i < 2; i++) {
-      left[i][0] = L;
-      left[i][1] = L;
-      right[i][0] = L;
-      right[i][1] = L;
-    }
-  }
+  // Apply eyelids per eye
+  applyLid(left, lidL, L);
+  applyLid(right, lidR, L);
 
   return [
     [B, B, B, _, B, B, B],
@@ -102,6 +96,8 @@ function buildExpressions() {
     'up-right': makeFrame([0, 1], [0, 1]),
     'up-left': makeFrame([0, 0], [0, 0]),
     'half-blink': makeFrame([1, 1], [1, 1], 1),
+    'half-blink-left': makeFrame([1, 0], [1, 0], 1),
+    'half-blink-right': makeFrame([1, 1], [1, 1], 1),
     squint: makeFrame([1, 1], [1, 1], 2),
     closed: makeFrame([1, 1], [1, 1], 3),
   };
