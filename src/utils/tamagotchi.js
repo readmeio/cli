@@ -21,7 +21,7 @@ function getSavePath() {
 const MAX_STAT = 10;
 const DECAY_INTERVAL_MS = 1000 * 60 * 5; // stats decay every 5 minutes of real time
 
-const ALL_TRICKS = ['wave', 'spin', 'roll over', 'bow', 'high five', 'peek-a-boo', 'dance', 'wink'];
+const ALL_TRICKS = ['hide and seek', 'spin', 'fetch', 'bow', 'chameleon', 'dance', 'owl impression', 'writes an OAS file'];
 
 function newPet(name = 'Eyes', color = 'blue') {
   return {
@@ -72,69 +72,80 @@ export function applyDecay(pet) {
 
 // ── Actions ─────────────────────────────────────────────
 
+// Returns "does a spin" vs "writes an OAS file" depending on the trick name
+function trickPhrase(trick) {
+  // Tricks with custom phrasing
+  const custom = { 'writes an OAS file': 'writes an OAS file', 'hide and seek': 'plays hide and seek' };
+  if (custom[trick]) return custom[trick];
+  const vowels = 'aeiou';
+  const article = vowels.includes(trick[0].toLowerCase()) ? 'an' : 'a';
+  return `does ${article} ${trick}`;
+}
+
+const ok = (message, extra = {}) => ({ message, ok: true, ...extra });
+const fail = (message) => ({ message, ok: false });
+
 function feed(pet) {
+  if (pet.hunger >= MAX_STAT) return fail('Already full!');
   pet.sleeping = false;
-  if (pet.hunger >= MAX_STAT) return 'Already full!';
   pet.hunger = Math.min(MAX_STAT, pet.hunger + 3);
   pet.energy = Math.min(MAX_STAT, pet.energy + 1);
-  return `${pet.name} munches happily!`;
+  return ok(`${pet.name} munches happily!`);
 }
 
 function play(pet) {
+  if (pet.energy <= 0) return fail('Too tired to play...');
   pet.sleeping = false;
-  if (pet.energy <= 0) return 'Too tired to play...';
   pet.happiness = Math.min(MAX_STAT, pet.happiness + 3);
   pet.hunger = Math.max(0, pet.hunger - 1);
   pet.energy = Math.max(0, pet.energy - 2);
-  return `${pet.name} bounces around!`;
+  return ok(`${pet.name} bounces around!`);
 }
 
 function nap(pet) {
   if (pet.sleeping) {
     pet.sleeping = false;
-    return `${pet.name} wakes up! Good morning!`;
+    return ok(`${pet.name} wakes up! Good morning!`);
   }
-  if (pet.energy >= MAX_STAT) return 'Not sleepy!';
+  if (pet.energy >= MAX_STAT) return fail('Not sleepy!');
   pet.sleeping = true;
   pet.energy = Math.min(MAX_STAT, pet.energy + 4);
   pet.happiness = Math.min(MAX_STAT, pet.happiness + 1);
-  return `${pet.name} curls up for a nap... zzz`;
+  return ok(`${pet.name} curls up for a nap... zzz`);
 }
 
-function petAction(petState) {
-  if (petState.energy <= 1) return `${petState.name} is too tired for pets...`;
-  petState.sleeping = false;
-  petState.happiness = Math.min(MAX_STAT, petState.happiness + 2);
-  return `${petState.name} loves the attention!`;
+function petAction(pet) {
+  if (pet.energy <= 1) return fail(`${pet.name} is too tired for pets...`);
+  pet.sleeping = false;
+  pet.happiness = Math.min(MAX_STAT, pet.happiness + 2);
+  return ok(`${pet.name} loves the attention!`);
 }
 
 function teach(pet) {
+  if (pet.energy <= 1) return fail('Too tired to learn right now...');
   pet.sleeping = false;
-  if (pet.energy <= 1) return 'Too tired to learn right now...';
 
-  const known = pet.tricks || [];
+  const known = (pet.tricks || []).filter(t => ALL_TRICKS.includes(t));
+  pet.tricks = known; // prune stale tricks from old saves
   const unknown = ALL_TRICKS.filter(t => !known.includes(t));
 
   pet.energy = Math.max(0, pet.energy - 1);
   pet.hunger = Math.max(0, pet.hunger - 1);
 
   if (unknown.length === 0) {
-    // Already knows everything — perform a random trick
     const trick = known[Math.floor(Math.random() * known.length)];
     pet.happiness = Math.min(MAX_STAT, pet.happiness + 1);
-    return `${pet.name} does a ${trick}! Knows all ${known.length} tricks!`;
+    return ok(`${pet.name} ${trickPhrase(trick)}!`, { trick });
   }
 
-  // Chance to learn based on happiness (happier = easier to teach)
-  const learnChance = 0.3 + (pet.happiness / MAX_STAT) * 0.4; // 30%-70%
+  const learnChance = 0.3 + (pet.happiness / MAX_STAT) * 0.4;
   if (Math.random() < learnChance) {
     const trick = unknown[Math.floor(Math.random() * unknown.length)];
     pet.tricks = [...known, trick];
     pet.happiness = Math.min(MAX_STAT, pet.happiness + 2);
-    return `${pet.name} learned ${trick}! (${pet.tricks.length}/${ALL_TRICKS.length} tricks)`;
+    return ok(`${pet.name} learned ${trick}! (${pet.tricks.length}/${ALL_TRICKS.length} tricks)`, { trick });
   }
 
-  // Didn't learn this time
   const reactions = [
     `${pet.name} tilts their head... not quite`,
     `${pet.name} got distracted. Try again!`,
@@ -142,7 +153,7 @@ function teach(pet) {
     `${pet.name} tries their best but needs more practice`,
   ];
   pet.happiness = Math.min(MAX_STAT, pet.happiness + 1);
-  return reactions[Math.floor(Math.random() * reactions.length)];
+  return ok(reactions[Math.floor(Math.random() * reactions.length)]);
 }
 
 // ── Expression based on mood ────────────────────────────
@@ -338,7 +349,7 @@ function renderStatus(pet) {
       ` ${chalk.hex('#ffd93d')('happy')}   ${statBar(pet.happiness, MAX_STAT, chalk.hex('#ffd93d'))}   ${String(pet.happiness).padStart(2)}/${MAX_STAT}`,
     ),
     statusRow(
-      ` ${chalk.dim('tricks:')} ${(pet.tricks || []).length}/${ALL_TRICKS.length}`,
+      ` ${chalk.dim('tricks:')} ${(pet.tricks || []).filter(t => ALL_TRICKS.includes(t)).length}/${ALL_TRICKS.length}`,
       ` ${chalk.hex('#6bcb77')('energy')}  ${statBar(pet.energy, MAX_STAT, chalk.hex('#6bcb77'))}   ${String(pet.energy).padStart(2)}/${MAX_STAT}`,
     ),
   ];
@@ -346,12 +357,14 @@ function renderStatus(pet) {
 }
 
 function renderActions(pet, activeKey = null) {
+  const knownTricks = (pet.tricks || []).filter(t => ALL_TRICKS.includes(t));
+  const allLearned = knownTricks.length >= ALL_TRICKS.length;
   const items = [
     { key: 'f', label: 'feed' },
     { key: 'p', label: 'play' },
     { key: pet.sleeping ? 'w' : 's', label: pet.sleeping ? 'wake' : 'sleep' },
     { key: 'h', label: 'pet' },
-    { key: 't', label: 'teach' },
+    { key: 't', label: allLearned ? 'trick' : 'teach' },
   ];
   const parts = items.map(({ key, label }) => {
     const text = `[${key}] ${label}`;
@@ -392,14 +405,14 @@ async function askSetup() {
 
   // Show color options
   console.log('');
-  const colorKeys = Object.keys(palettes);
+  const colorKeys = Object.keys(palettes).filter(k => !palettes[k].hidden);
   for (let i = 0; i < colorKeys.length; i++) {
     const p = palettes[colorKeys[i]];
     console.log(`  ${chalk.hex(p.body)('██')} ${chalk.bold(`${i + 1}.`)} ${p.name}`);
   }
   console.log('');
 
-  const colorChoice = await ask(chalk.hex('#63D2FF')('  Pick a color (1-4): '));
+  const colorChoice = await ask(chalk.hex('#63D2FF')(`  Pick a color (1-${colorKeys.length}): `));
   const colorIndex = parseInt(colorChoice, 10) - 1;
   const color = colorKeys[colorIndex] || 'blue';
 
@@ -492,7 +505,11 @@ export async function startGame() {
     const mood = getMood(petState);
     currentAnim = getAnimFrames(mood);
     const frameName = frameOverride || currentAnim.frames[animFrame % currentAnim.frames.length];
-    const iconLines = resolveFrame(frameName);
+    let iconLines = iconFlipped ? resolveFrame(frameName).slice().reverse() : resolveFrame(frameName);
+    if (iconShift > 0) {
+      const emptyLine = ' '.repeat(ICON_WIDTH);
+      for (let i = 0; i < iconShift; i++) iconLines = [emptyLine, ...iconLines.slice(0, -1)];
+    }
 
     process.stdout.write('\x1b[H\x1b[J');
 
@@ -504,9 +521,11 @@ export async function startGame() {
     const sparkles = getPlayOverlay();
 
     // Build scene rows: [left area] [icon centered] [right area]
+    const effLeft = PAD_LEFT + iconHShift;
+    const effRight = PAD_RIGHT - iconHShift;
     const sceneRows = iconLines.map((iconLine, r) => {
-      let leftStr = ' '.repeat(PAD_LEFT);
-      let rightStr = ' '.repeat(PAD_RIGHT);
+      let leftStr = ' '.repeat(effLeft);
+      let rightStr = ' '.repeat(effRight);
 
       // Pick the active overlay (only one can be active at a time)
       if (heartFrame >= 0 && hearts.left) {
@@ -516,10 +535,14 @@ export async function startGame() {
         leftStr = padRight(sparkles.left[r] || '', PAD_LEFT);
         rightStr = padRight(sparkles.right[r] || '', PAD_RIGHT);
       } else if (feedFrame >= 0 && foodLines && r < foodLines.length) {
-        rightStr = padRight(foodLines[r] || '', PAD_RIGHT);
+        rightStr = padRight(foodLines[r] || '', effRight);
       } else if (sleepStars && sleepStars.left && r < sleepStars.left.length) {
         leftStr = padRight(sleepStars.left[r] || '', PAD_LEFT);
         rightStr = padRight(sleepStars.right[r] || '', PAD_RIGHT);
+      } else if (trickSceneOverlay && (trickSceneOverlay.right || trickSceneOverlay[r])) {
+        if (trickSceneOverlay.left) leftStr = padRight(trickSceneOverlay.left[r] || '', effLeft);
+        if (trickSceneOverlay.right) rightStr = padRight(trickSceneOverlay.right[r] || '', effRight);
+        if (!trickSceneOverlay.left && !trickSceneOverlay.right) rightStr = padRight(' ' + (trickSceneOverlay[r] || ''), effRight);
       }
 
       return leftStr + iconLine + rightStr;
@@ -566,11 +589,17 @@ export async function startGame() {
     }
     // Message centered between scene and vitals
     const inner = BOX_WIDTH - 2;
-    const msgVis = boxVisLen(message || '');
-    const msgPadL = Math.floor((inner - msgVis) / 2);
-    const msgPadR = inner - msgVis - msgPadL;
+    let displayMsg = message || '';
+    if (boxVisLen(displayMsg) > inner) {
+      // Strip ANSI, truncate, re-apply no color (plain truncation)
+      const plain = displayMsg.replace(/\x1b\[[0-9;]*m/g, '');
+      displayMsg = plain.slice(0, inner - 1) + '…';
+    }
+    const msgVis = boxVisLen(displayMsg);
+    const msgPadL = Math.max(0, Math.floor((inner - msgVis) / 2));
+    const msgPadR = Math.max(0, inner - msgVis - msgPadL);
     console.log('  ' + boxDivider());
-    console.log('  ' + chalk.dim('│') + ' '.repeat(msgPadL) + (message || '') + ' '.repeat(msgPadR) + chalk.dim('│'));
+    console.log('  ' + chalk.dim('│') + ' '.repeat(msgPadL) + displayMsg + ' '.repeat(msgPadR) + chalk.dim('│'));
     console.log('  ' + chalk.dim('├' + '─'.repeat(STATUS_LEFT) + '┬' + '─'.repeat(STATUS_RIGHT) + '┤'));
     for (const line of statusLines) {
       console.log('  ' + boxLine(line));
@@ -580,6 +609,12 @@ export async function startGame() {
       console.log('  ' + boxLine(line));
     }
     console.log('  ' + boxBottom());
+    if (confirmingReset) {
+      console.log('');
+      console.log('  ' + chalk.hex('#ff6b6b')(`Reset ${petState.name}? They'll be gone forever!`) + chalk.dim('  [y] yes  [n] no'));
+    } else {
+      console.log('');
+    }
   }
 
   function clearMessage(delay = 3000) {
@@ -688,10 +723,11 @@ export async function startGame() {
     if (heartFrame < 0) return { left: null, right: null };
     const hearts = [
       { startFrame: 0, side: 'right', startRow: 2, offset: 2 },
-      { startFrame: 2, side: 'left', startRow: 2, offset: 3 },
-      { startFrame: 4, side: 'right', startRow: 2, offset: 6 },
-      { startFrame: 5, side: 'left', startRow: 1, offset: 5 },
-      { startFrame: 7, side: 'right', startRow: 2, offset: 10 },
+      { startFrame: 1, side: 'left',  startRow: 2, offset: 2 },
+      { startFrame: 3, side: 'right', startRow: 2, offset: 6 },
+      { startFrame: 4, side: 'left',  startRow: 1, offset: 5 },
+      { startFrame: 6, side: 'right', startRow: 2, offset: 10 },
+      { startFrame: 7, side: 'left',  startRow: 2, offset: 9 },
     ];
     const leftLines = ['', '', '', ''];
     const rightLines = ['', '', '', ''];
@@ -781,28 +817,171 @@ export async function startGame() {
 
   let teachAnimating = false;
 
-  async function animateTeach(learned) {
+  async function animateTrick(name) {
+    const wait = (ms) => new Promise(r => setTimeout(r, ms));
+    const setFrame = async (f, ms) => { frameOverride = f; draw(); await wait(ms); };
+
+    switch (name) {
+      case 'hide and seek': {
+        // sink down progressively
+        for (const shift of [0, 1, 2, 3]) {
+          iconShift = shift;
+          await setFrame('right', 180);
+        }
+        // peek — bob up slightly then back down
+        iconShift = 2; await setFrame('right', 200);
+        iconShift = 3; await setFrame('right', 300);
+        iconShift = 2; await setFrame('right', 150);
+        iconShift = 3; await setFrame('right', 400);
+        // come back up
+        for (const shift of [2, 1, 0]) {
+          iconShift = shift;
+          await setFrame('right', 180);
+        }
+        break;
+      }
+      case 'spin': {
+        for (const f of ['left', 'up-left', 'up-right', 'right', 'up-right', 'up-left', 'left', 'up-left', 'right'])
+          await setFrame(f, 110);
+        break;
+      }
+      case 'fetch': {
+        iconHShift = -8;
+        const method = chalk.hex('#63D2FF')('POST');
+        const pending = chalk.dim('○') + ' ' + method + ' /api/pets';
+        const d = chalk.dim;
+        const json = [
+          d('  "id": 1,'),
+          d('  "name": "Max",'),
+          d('  "type": "dog",'),
+          d('  "breed": "husky",'),
+          d('  "age": 3,'),
+          d('  "tag": "friendly"'),
+        ];
+
+        // show request
+        trickSceneOverlay = [pending, '', '', ''];
+        await setFrame('up-right', 300);
+
+        // loading dots
+        for (const dots of ['  ·', '  · ·', '  · · ·', '  · · · ·', '  · · ·', '  · ·', '  · · ·', '  · · · ·']) {
+          trickSceneOverlay = [pending, chalk.dim(dots), '', ''];
+          await setFrame('up-right', 180);
+        }
+
+        // json scrolls in line by line (pending pinned at top, 3 visible body rows)
+        const body = [d('{'), ...json, d('}')];
+        for (let i = 0; i < body.length; i++) {
+          const win = body.slice(Math.max(0, i - 2), i + 1);
+          while (win.length < 3) win.push('');
+          trickSceneOverlay = [pending, win[0], win[1], win[2]];
+          const expr = i % 2 === 0 ? 'up-left' : 'up-right';
+          await setFrame(expr, 200);
+        }
+
+        // 200 OK — hold on last 3 body lines
+        const tail = body.slice(-3);
+        trickSceneOverlay = [chalk.hex('#6bcb77')('● 200 OK'), tail[0], tail[1], tail[2]];
+        await setFrame('right', 700);
+
+        trickSceneOverlay = null;
+        break;
+      }
+      case 'bow': {
+        for (const [f, ms] of [['right', 200], ['right:up', 300], ['right:up', 300], ['squint', 500], ['right:up', 300], ['right', 200]])
+          await setFrame(f, ms);
+        break;
+      }
+      case 'chameleon': {
+        const colorKeys = Object.keys(palettes).filter(k => !palettes[k].hidden);
+        for (const color of [...colorKeys, ...colorKeys, petState.color]) {
+          setPalette(color);
+          await setFrame('right', 200);
+        }
+        break;
+      }
+      case 'dance': {
+        const notes = ['♩', '♪', '♫', '♬'];
+        const nc = chalk.hex('#ffd93d');
+        const place = (width, col, note) => ' '.repeat(Math.min(col, width - 1)) + nc(note) + ' '.repeat(Math.max(0, width - col - 1));
+        // Each frame: scattered note positions on left and right, shifting each beat
+        const frames = ['left:up', 'left', 'right:up', 'right', 'left:up', 'left', 'right:up', 'right', 'right:up', 'right'];
+        const spots = [
+          { lr: [14, 3], ll: [2, 11], rr: [4, 15], rl: [8, 1] },
+          { lr: [6, 16], ll: [9, 4],  rr: [12, 2], rl: [14, 7] },
+        ];
+        for (let i = 0; i < frames.length; i++) {
+          const s = spots[i % 2];
+          const ni = (k) => notes[(i + k) % notes.length];
+          trickSceneOverlay = {
+            left:  [place(PAD_LEFT, s.ll[0], ni(0)), place(PAD_LEFT, s.ll[1], ni(2)), place(PAD_LEFT, s.lr[0], ni(1)), place(PAD_LEFT, s.lr[1], ni(3))],
+            right: [place(PAD_RIGHT, s.rr[0], ni(2)), place(PAD_RIGHT, s.rl[0], ni(0)), place(PAD_RIGHT, s.rr[1], ni(3)), place(PAD_RIGHT, s.rl[1], ni(1))],
+          };
+          await setFrame(frames[i], 130);
+        }
+        trickSceneOverlay = null;
+        break;
+      }
+      case 'owl impression': {
+        setPalette('owl');
+        const hoot = chalk.hex('#ffd93d');
+        for (const [f, ms] of [['left', 200], ['right', 200], ['left', 200], ['right', 200]])
+          await setFrame(f, ms);
+        const rpad = () => ' '.repeat(2 + Math.floor(Math.random() * 8));
+        trickSceneOverlay = { right: [rpad() + hoot('hoot!'), '', '', ''] };
+        await setFrame('up-right', 500);
+        trickSceneOverlay = { right: [rpad() + hoot('hoot!'), rpad() + hoot('hoot!'), '', ''] };
+        await setFrame('up-left', 600);
+        trickSceneOverlay = null;
+        await setFrame('right', 300);
+        setPalette(petState.color);
+        break;
+      }
+      case 'writes an OAS file': {
+        iconHShift = -8;
+        const c = chalk.dim;
+        const groups = [
+          [c('openapi: 3.0.0'), c('info:'), c('  title: Petstore'), c('  version: 1.0.0')],
+          [c('  contact:'), c('    name: Petstore'), c('    url: petstore'), c('  license: MIT')],
+          [c('paths:'), c('  /pets:'), c('    get: listPets'), c('    post: createPet')],
+          [c('  /pets/{petId}:'), c('    get: getPetById'), c('    put: updatePet'), c('    delete: delPet')],
+          [c('components:'), c('  schemas:'), c('    Pet:'), c('      type: object')],
+          [c('    properties:'), c('      id: integer'), c('      name: string'), c('      tag: string')],
+        ];
+        const exprs = ['up-right', 'up-left', 'up-right', 'up-left', 'up-right', 'up-left'];
+        for (let i = 0; i < groups.length; i++) {
+          trickSceneOverlay = groups[i];
+          await setFrame(exprs[i], 450);
+        }
+        trickSceneOverlay = null;
+        break;
+      }
+      default: {
+        for (const f of ['right:up', 'right', 'right:up', 'right'])
+          await setFrame(f, 150);
+      }
+    }
+    frameOverride = null;
+    iconFlipped = false;
+    iconShift = 0;
+    iconHShift = 0;
+    trickSceneOverlay = null;
+  }
+
+  async function animateTeach(trickName) {
     teachAnimating = true;
-    // Thinking phase: look around
-    const thinkFrames = ['right', 'up-left', 'up-right', 'up-left', 'right'];
-    for (const expr of thinkFrames) {
+    // Thinking phase
+    for (const expr of ['right', 'up-left', 'up-right', 'up-left', 'right']) {
       frameOverride = expr;
       draw();
       await new Promise(r => setTimeout(r, 300));
     }
     frameOverride = null;
 
-    if (learned) {
-      // Success: excited bounce
-      const bounceFrames = ['right:up', 'right', 'right:up', 'right'];
-      for (const f of bounceFrames) {
-        frameOverride = f;
-        draw();
-        await new Promise(r => setTimeout(r, 150));
-      }
-      frameOverride = null;
+    if (trickName) {
+      await animateTrick(trickName);
     } else {
-      // Didn't learn: squint then back to normal
+      // Didn't learn: squint then back
       frameOverride = 'squint';
       draw();
       await new Promise(r => setTimeout(r, 400));
@@ -813,6 +992,10 @@ export async function startGame() {
   }
 
   let frameOverride = null;
+  let iconFlipped = false;
+  let iconShift = 0; // rows to shift icon downward (for hiding)
+  let iconHShift = 0; // columns to shift icon left (negative = left, increases right area)
+  let trickSceneOverlay = null; // array of strings per scene row (right side)
 
   async function animateSleep(falling) {
     // falling = true: eyes close. false: eyes open.
@@ -827,15 +1010,25 @@ export async function startGame() {
     frameOverride = null;
   }
 
+  function doPerformTrick(name) {
+    if (actionBusy) return;
+    message = `${petState.name} ${trickPhrase(name)}!`;
+    actionBusy = true;
+    animateTrick(name).then(() => {
+      draw();
+      actionBusy = false;
+      clearMessage();
+    });
+  }
+
   const actionKeyMap = new Map([[feed, 'f'], [play, 'p'], [petAction, 'h'], [teach, 't']]);
   function getnapKey() { return petState.sleeping ? 'w' : 's'; }
 
   function doAction(actionFn) {
     if (actionBusy) return;
     const tricksBefore = (petState.tricks || []).length;
-    const statsBefore = { hunger: petState.hunger, happiness: petState.happiness, energy: petState.energy, sleeping: petState.sleeping };
-    message = actionFn(petState);
-    const statsChanged = petState.hunger !== statsBefore.hunger || petState.happiness !== statsBefore.happiness || petState.energy !== statsBefore.energy || petState.sleeping !== statsBefore.sleeping;
+    const result = actionFn(petState);
+    message = result.ok ? result.message : chalk.hex('#ff9540')(result.message);
     petState.lastVisit = Date.now();
     savePet(petState);
     animFrame = 0;
@@ -848,8 +1041,7 @@ export async function startGame() {
       clearMessage();
     }
 
-    if (!statsChanged) {
-      message = chalk.hex('#ff9540')(message);
+    if (!result.ok) {
       draw();
       clearMessage();
       done();
@@ -863,8 +1055,16 @@ export async function startGame() {
     } else if (actionFn === play) {
       animatePlay().then(done);
     } else if (actionFn === teach) {
-      const learned = (petState.tricks || []).length > tricksBefore;
-      animateTeach(learned).then(done);
+      const tricksAfter = (petState.tricks || []).length;
+      const learnedTrick = tricksAfter > tricksBefore
+        ? petState.tricks[petState.tricks.length - 1]
+        : (result.trick || null);
+      const learned = tricksAfter > tricksBefore;
+      animateTeach(learnedTrick).then(() => {
+        activeAction = null;
+        actionBusy = false;
+        clearMessage(learned ? 6000 : 3000);
+      });
     } else {
       draw();
       done();
@@ -918,9 +1118,23 @@ export async function startGame() {
       case 't':
         doAction(teach);
         break;
+      case '1': case '2': case '3': case '4':
+      case '5': case '6': case '7': case '8': {
+        const idx = parseInt(key) - 1;
+        const trickName = ALL_TRICKS[idx];
+        const known = (petState.tricks || []).filter(t => ALL_TRICKS.includes(t));
+        if (trickName && known.includes(trickName)) {
+          doPerformTrick(trickName);
+        } else if (trickName) {
+          message = chalk.dim(`${petState.name} hasn't learned ${trickName} yet`);
+          draw();
+          clearMessage();
+        }
+        break;
+      }
       case 'r':
         confirmingReset = true;
-        message = chalk.hex('#ff6b6b')(`Are you sure you want to reset? ${petState.name} will be gone forever! [y/n]`);
+        message = '';
         draw();
         break;
       case 'q':

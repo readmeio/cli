@@ -9,6 +9,11 @@ export const palettes = {
   green: { name: 'Green', body: '#2D9F3F', page: '#F0FFE6', pupil: '#0A4D1A', lid: '#7FE08A' },
   purple: { name: 'Purple', body: '#8B5CF6', page: '#F3EEFF', pupil: '#3B1A8B', lid: '#C4A8FF' },
   orange: { name: 'Orange', body: '#F97316', page: '#FFF5EB', pupil: '#7C2D12', lid: '#FDBA74' },
+  pink: { name: 'Pink', body: '#EC4899', page: '#FFF0F6', pupil: '#831843', lid: '#F9A8D4' },
+  red: { name: 'Red', body: '#EF4444', page: '#FFF5F5', pupil: '#7F1D1D', lid: '#FCA5A5' },
+  teal: { name: 'Teal', body: '#14B8A6', page: '#F0FFFE', pupil: '#134E4A', lid: '#5EEAD4' },
+  yellow: { name: 'Yellow', body: '#EAB308', page: '#FEFCE8', pupil: '#713F12', lid: '#FDE047' },
+  owl: { name: 'Owl', body: '#8B5A2B', page: '#FFF8EE', pupil: '#2A1000', lid: '#C4923A', nose: '#FFD700', hidden: true },
 };
 
 let currentPalette = palettes.blue;
@@ -51,7 +56,7 @@ function applyLid(eye, lid, L) {
 }
 
 function makeFrame(eyeL, eyeR, lidL = 0, lidR = lidL) {
-  const { body: B, page: W, pupil: D, lid: L } = currentPalette;
+  const { body: B, page: W, pupil: D, lid: L, nose: N = B } = currentPalette;
   // eyeL/eyeR: [row, col] of pupil within the 2x2 page area
   //   row 0 = top, 1 = bottom; col 0 = left, 1 = right
   // lidL/lidR: 0 = open, 1 = half, 2 = squint (most), 3 = closed
@@ -75,8 +80,8 @@ function makeFrame(eyeL, eyeR, lidL = 0, lidR = lidL) {
     [B, left[0][0], left[0][1], B, right[0][0], right[0][1], B],
     [B, left[1][0], left[1][1], B, right[1][0], right[1][1], B],
     [B, left[1][0], left[1][1], B, right[1][0], right[1][1], B],
-    [B, B, B, B, B, B, B],
-    [_, _, _, B, _, _, _],
+    [B, B, B, N, B, B, B],
+    [_, _, _, N, _, _, _],
     [_, _, _, _, _, _, _],
   ];
 }
