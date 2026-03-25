@@ -2,6 +2,12 @@ import { getPage } from '../../lib/docs';
 
 export const dynamic = 'force-dynamic';
 
+export async function generateMetadata({ params }) {
+  const { slug } = await params;
+  const page = getPage(slug);
+  return { title: page?.title || 'Page not found' };
+}
+
 export default async function SlugPage({ params }) {
   const { slug } = await params;
   const page = getPage(slug);

@@ -4,7 +4,10 @@ import '@readme/markdown/dist/main.css';
 import './globals.css';
 
 export const metadata = {
-  title: 'Dev Preview',
+  title: {
+    default: 'Dev Preview',
+    template: '%s | Dev Preview',
+  },
 };
 
 export default async function RootLayout({ children }) {
@@ -19,7 +22,7 @@ export default async function RootLayout({ children }) {
       <body className="bg-[#000343] text-gray-900 antialiased">
         {/* Top Navigation */}
         <header className="fixed top-0 inset-x-0 h-[48px] bg-[#000343] flex items-center px-5 z-50" style={{
-          backgroundImage: `linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px)`,
+          backgroundImage: `linear-gradient(rgba(255,255,255,0.08) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.08) 1px, transparent 1px)`,
           backgroundSize: '20px 20px',
         }}>
           <div className="flex items-center gap-3 mr-8 shrink-0">
@@ -27,8 +30,13 @@ export default async function RootLayout({ children }) {
               <i className="fa-brands fa-readme text-[#018ef5] text-[18px] relative top-[1px]" />
               <span className="text-white/90 font-mono text-[13px] tracking-tight mr-1">dev server</span>
             </div>
-            <span className="text-[8px] font-semibold bg-white/10 text-white/35 px-1.5 py-[1px] rounded uppercase tracking-wider">
-              beta
+            <span className="relative group flex items-center">
+              <span className="text-[8px] font-semibold bg-white/20 text-white/50 group-hover:bg-white/30 group-hover:text-white/70 px-1.5 py-[3px] rounded uppercase tracking-wider cursor-default transition-colors duration-150">
+                beta
+              </span>
+              <span className="pointer-events-none absolute left-1/2 -translate-x-1/2 top-full mt-5 z-[100] w-48 rounded-lg bg-gray-900 px-3 py-2 text-[11px] leading-snug text-white/80 opacity-0 group-hover:opacity-100 transition-opacity duration-150 shadow-lg">
+                This is a local preview — it won't look exactly like your published docs.
+              </span>
             </span>
           </div>
           <SidebarNav sidebar={sidebar} />
