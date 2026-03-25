@@ -56,18 +56,15 @@ export async function main() {
   }
   mods.sort((a, b) => (a.order || 0) - (b.order || 0));
 
-  const betaCommands = [];
-
   for (const mod of mods) {
     const isPlay = mod.command === 'play';
     const hidePlay = isPlay && !hasPet;
-    const cmd = program.command(mod.command, { hidden: !!(mod.beta || (mod.hidden && !isPlay) || hidePlay) });
+    const cmd = program.command(mod.command, { hidden: !!((mod.hidden && !isPlay) || hidePlay) });
 
-    if (mod.beta) {
-      betaCommands.push({ name: mod.command, description: mod.description || '' });
+    if (mod.description) {
+      const desc = mod.beta ? `${mod.description} ${styles.brand('[beta]')}` : mod.description;
+      cmd.description(desc);
     }
-
-    if (mod.description) cmd.description(mod.description);
     if (mod.aliases) {
       for (const alias of mod.aliases) {
         const hidden = program.command(alias, { hidden: true });
@@ -87,17 +84,6 @@ export async function main() {
         const ctx = await bootstrap({ skipValidation: !program.opts().check });
         await mod.run(...args, ctx);
       }
-    });
-  }
-
-  // Add beta commands section to help output
-  if (betaCommands.length > 0) {
-    program.addHelpText('after', () => {
-      const padWidth = Math.max(...betaCommands.map((c) => c.name.length)) + 2;
-      const lines = betaCommands.map(
-        (c) => `  ${styles.dim(`${c.name.padEnd(padWidth)}${c.description} (beta)`)}`,
-      );
-      return `\n${styles.dim('Beta Commands:')}\n${lines.join('\n')}\n`;
     });
   }
 

@@ -5,6 +5,7 @@ import * as styles from '../utils/styles.js';
 import { hasGithubRemote, WORKFLOW_VERSION } from '../utils/git.js';
 
 export const command = 'setup:github';
+export const order = 5;
 export const description = 'Set up a GitHub Action to lint your docs on every PR';
 
 export async function run(_options, _cmd, ctx) {

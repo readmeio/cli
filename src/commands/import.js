@@ -11,6 +11,7 @@ import { createHumanReporter } from '../utils/reporter.js';
 const require = createRequire(import.meta.url);
 
 export const command = 'import';
+export const order = 7;
 export const description = 'Import content from an external folder using Claude';
 export const beta = true;
 

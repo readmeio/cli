@@ -5,6 +5,7 @@ import { findOasFiles, extractOperations } from './oas-sync.js';
 import * as styles from '../utils/styles.js';
 
 export const command = 'oas:validate';
+export const order = 3;
 export const description = 'Validate OpenAPI spec files';
 
 export function args(cmd) {

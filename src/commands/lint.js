@@ -8,6 +8,7 @@ const require = createRequire(import.meta.url);
 const pkg = require('../../package.json');
 
 export const command = 'lint';
+export const order = 1;
 export const aliases = ['validate'];
 export const description = 'Lint and validate your ReadMe docs';
 

@@ -11,6 +11,7 @@ import { loadPet } from '../utils/tamagotchi.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export const command = 'dev';
+export const order = 6;
 export const description = 'Start a local dev server to preview your docs';
 export const beta = true;
 
