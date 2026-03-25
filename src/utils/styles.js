@@ -1,16 +1,17 @@
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import chalk from 'chalk';
 
 /** Returns the CLI name depending on how it was invoked (e.g. "readme", "readme_", or "npx @readme/cli-beta"). */
 export function binName() {
   const base = path.basename(process.argv[1] || 'readme');
 
-  // When run via npx, npm sets npm_command=exec. Use the package name so
-  // messages like "run npx @readme/cli-beta lint --fix" are correct.
+  // When run via npx, npm sets npm_command=exec. Use our own package.json name
+  // (not npm_package_name, which refers to the CWD project, not the CLI).
   if (process.env.npm_command === 'exec') {
-    const pkg = process.env.npm_package_name;
-    if (pkg) return `npx ${pkg}`;
-    return 'npx @readme/cli-beta';
+    const require = createRequire(import.meta.url);
+    const pkg = require('../../package.json');
+    return `npx ${pkg.name}`;
   }
 
   return base;

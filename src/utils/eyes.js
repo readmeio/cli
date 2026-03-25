@@ -282,7 +282,7 @@ export function printHeader(opts = {}) {
  * @returns {{ stop: () => void }}
  */
 export function animate(name, opts = {}) {
-  const { indent = '', loop = true, version, binName: bin } = opts;
+  const { indent = '', loop = true, version, binName: bin, subtitle } = opts;
   const anim = animations[name];
   if (!anim) throw new Error(`Unknown animation: ${name}. Valid: ${Object.keys(animations).join(', ')}`);
 
@@ -292,6 +292,7 @@ export function animate(name, opts = {}) {
     const gap = '  ';
     headerLines[0] = gap + chalk.bold.hex(currentPalette.body)('The ReadMe CLI') + (version ? ' ' + chalk.dim(`v${version}`) : '');
     headerLines[1] = gap + (bin ? chalk.white(bin) : '');
+    if (subtitle) headerLines[2] = gap + subtitle;
   }
 
   let stopped = false;

@@ -182,60 +182,14 @@ function getExpression(mood) {
  * Returns { greeting, expression } based on current pet state.
  */
 export function getPetHeader(pet) {
-  const mood = getMood(pet);
-  const expression = getExpression(mood);
   const name = pet.name;
 
-  const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
-
-  let greeting;
   if (pet.sleeping) {
-    greeting = pick([
-      `${name} is sleeping... zzz`,
-      `Shh... ${name} is napping`,
-      `${name} is dreaming peacefully`,
-    ]);
-  } else if (pet.hunger <= 2) {
-    greeting = pick([
-      `${name} is really hungry!`,
-      `${name} could use a snack...`,
-      `${name}'s tummy is growling!`,
-      `Feed me! says ${name}`,
-    ]);
-  } else if (pet.happiness <= 2) {
-    greeting = pick([
-      `${name} is feeling lonely`,
-      `${name} could use some attention`,
-      `${name} looks a bit sad`,
-      `${name} misses you!`,
-    ]);
-  } else if (pet.energy <= 2) {
-    greeting = pick([
-      `${name} is exhausted...`,
-      `${name} needs a nap`,
-      `${name} can barely keep their eyes open`,
-    ]);
-  } else if (pet.happiness >= 8 && pet.hunger >= 6) {
-    greeting = pick([
-      `${name} says hi!`,
-      `${name} is feeling great!`,
-      `${name} is happy to see you!`,
-      `${name} waves hello!`,
-      `${name} is in a great mood!`,
-      `${name} bounces excitedly!`,
-    ]);
-  } else {
-    greeting = pick([
-      `${name} says hi!`,
-      `${name} is hanging out`,
-      `${name} waves hello`,
-      `${name} is doing alright`,
-      `${name} is keeping busy`,
-      `${name} looks your way`,
-    ]);
+    return { greeting: `${name} is sleeping... zzz`, expression: 'closed' };
   }
 
-  return { greeting, expression };
+  const expression = Math.random() < 0.5 ? 'left' : 'right';
+  return { greeting: null, expression };
 }
 
 // Animated expression sequence based on mood

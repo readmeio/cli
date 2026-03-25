@@ -1,5 +1,11 @@
+import { createRequire } from 'node:module';
 import { collectFiles, runValidators } from '../utils/lint.js';
 import { createHumanReporter, createJsonReporter, createGithubReporter } from '../utils/reporter.js';
+import { printHeader } from '../utils/eyes.js';
+import * as styles from '../utils/styles.js';
+
+const require = createRequire(import.meta.url);
+const pkg = require('../../package.json');
 
 export const command = 'lint';
 export const aliases = ['validate'];
@@ -13,6 +19,11 @@ export function args(cmd) {
 
 export async function run(options, _cmd, ctx) {
   const { gitRoot } = ctx;
+
+  if (!options.json && !options.github) {
+    printHeader({ version: pkg.version, binName: styles.binName(), indent: '  ' });
+    console.log();
+  }
   const files = collectFiles(gitRoot);
 
   const reporter = options.github
