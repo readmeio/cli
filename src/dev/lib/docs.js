@@ -33,7 +33,7 @@ function walkDir(dirPath, sectionDir) {
   // Get all items (exclude dotfiles and _-prefixed files)
   const items = fs.readdirSync(dirPath).filter(f => !f.startsWith('.') && !f.startsWith('_'));
 
-  const mdFiles = new Set(items.filter(f => f.endsWith('.md')).map(f => f.replace(/\.md$/, '')));
+  const mdFiles = new Set(items.filter(f => f.endsWith('.md') && f !== 'index.md').map(f => f.replace(/\.md$/, '')));
   const dirs = new Set(
     items.filter(f => {
       try {
