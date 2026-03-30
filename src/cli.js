@@ -12,22 +12,26 @@ import { getRandomTip } from './utils/tips.js';
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json');
 
+const isRunningInClaude = !!process.env.CLAUDECODE;
+
 export async function main() {
   const program = new Command();
 
   // Load tamagotchi state if it exists for personalized header
   let petGreeting, petExpression;
   let hasPet = false;
-  try {
-    const pet = loadPet();
-    if (pet) {
-      hasPet = true;
-      if (pet.color) setPalette(pet.color);
-      const updated = applyDecay(pet);
-      ({ greeting: petGreeting, expression: petExpression } = getPetHeader(updated));
+  if (!isRunningInClaude) {
+    try {
+      const pet = loadPet();
+      if (pet) {
+        hasPet = true;
+        if (pet.color) setPalette(pet.color);
+        const updated = applyDecay(pet);
+        ({ greeting: petGreeting, expression: petExpression } = getPetHeader(updated));
+      }
+    } catch {
+      // No pet yet, use defaults
     }
-  } catch {
-    // No pet yet, use defaults
   }
 
   program
@@ -35,14 +39,16 @@ export async function main() {
     .version(pkg.version, '-v, --version')
     .option('--no-check', 'Skip ReadMe project validation checks');
 
-  program.addHelpText('beforeAll', () => {
-    return '\n' + header({
-      version: pkg.version,
-      binName: styles.binName(),
-      greeting: petGreeting,
-      expression: petExpression,
-    }).map(l => '  ' + l).join('\n') + '\n';
-  });
+  if (!isRunningInClaude) {
+    program.addHelpText('beforeAll', () => {
+      return '\n' + header({
+        version: pkg.version,
+        binName: styles.binName(),
+        greeting: petGreeting,
+        expression: petExpression,
+      }).map(l => '  ' + l).join('\n') + '\n';
+    });
+  }
 
   // Auto-discover and register every command in src/commands/
   const commandsDir = path.join(path.dirname(new URL(import.meta.url).pathname), 'commands');
@@ -58,7 +64,7 @@ export async function main() {
 
   for (const mod of mods) {
     const isPlay = mod.command === 'play';
-    const hidePlay = isPlay && !hasPet;
+    const hidePlay = isPlay && (!hasPet || isRunningInClaude);
     const cmd = program.command(mod.command, { hidden: !!((mod.hidden && !isPlay) || hidePlay) });
 
     if (mod.description) {
