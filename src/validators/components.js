@@ -1,6 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import matter from "gray-matter";
+import markdown from "@readme/markdown";
+
+const { mdxishTags } = markdown;
 
 export const name = "components";
 
@@ -39,32 +42,24 @@ const CONTENT_DIRS = new Set(["docs", "reference", "custom_pages", "recipes"]);
 
 /**
  * Extract component tag names from MDXish content.
- * MDXish = parsed as markdown, only uppercase-first tags are components.
- * Ignores code blocks, inline code, and HTML comments.
+ * Parses via @readme/markdown's mdxishTags so code blocks, inline code, and
+ * HTML comments are respected as markdown (tags inside them aren't components).
  */
 function extractComponentTags(content) {
-  // Remove frontmatter.
-  let text = content.replace(/^---[\s\S]*?---/, "");
-
-  // Remove fenced code blocks (``` or ~~~).
-  text = text.replace(/```[\s\S]*?```/g, "");
-  text = text.replace(/~~~[\s\S]*?~~~/g, "");
-
-  // Remove inline code.
-  text = text.replace(/`[^`\n]+`/g, "");
-
-  // Remove HTML comments.
-  text = text.replace(/<!--[\s\S]*?-->/g, "");
-
-  // Find all uppercase-first tags: <Component or <Component> or <Component />
-  const pattern = /<([A-Z][a-zA-Z0-9]*)/g;
-  const components = new Set();
-  let match;
-  while ((match = pattern.exec(text)) !== null) {
-    components.add(match[1]);
+  // Strip frontmatter — mdxishTags parses raw mdxish, so frontmatter values
+  // like `foo: <NotAComponent />` would otherwise be picked up.
+  let body;
+  try {
+    ({ content: body } = matter(content));
+  } catch {
+    body = content.replace(/^---[\s\S]*?---/, "");
   }
 
-  return components;
+  try {
+    return new Set(mdxishTags(body));
+  } catch {
+    return new Set();
+  }
 }
 
 /**
