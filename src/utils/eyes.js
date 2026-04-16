@@ -2,6 +2,12 @@ import chalk from 'chalk';
 
 const _ = null;
 
+// True when invoked by an agentic coding CLI (Claude Code, OpenAI Codex).
+// Used to skip the "fun" ASCII-eye header and other decorative output.
+export function isAgenticCli() {
+  return !!(process.env.CLAUDECODE || process.env.CODEX_HOME || process.env.CODEX_SANDBOX);
+}
+
 // ── Palettes ────────────────────────────────────────────
 
 export const palettes = {

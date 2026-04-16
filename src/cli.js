@@ -5,14 +5,14 @@ import { Command } from 'commander';
 import { createRequire } from 'node:module';
 import bootstrap from './bootstrap.js';
 import * as styles from './utils/styles.js';
-import { header, setPalette } from './utils/eyes.js';
+import { header, setPalette, isAgenticCli } from './utils/eyes.js';
 import { loadPet, applyDecay, getPetHeader } from './utils/tamagotchi.js';
 import { getRandomTip } from './utils/tips.js';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json');
 
-const isRunningInClaude = !!process.env.CLAUDECODE;
+const isRunningInClaude = isAgenticCli();
 
 export async function main() {
   const program = new Command();

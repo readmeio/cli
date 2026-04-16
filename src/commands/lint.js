@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module';
 import { collectFiles, runValidators } from '../utils/lint.js';
 import { createHumanReporter, createJsonReporter, createGithubReporter } from '../utils/reporter.js';
-import { printHeader } from '../utils/eyes.js';
+import { printHeader, isAgenticCli } from '../utils/eyes.js';
 import * as styles from '../utils/styles.js';
 
 const require = createRequire(import.meta.url);
@@ -21,7 +21,7 @@ export function args(cmd) {
 export async function run(options, _cmd, ctx) {
   const { gitRoot } = ctx;
 
-  if (!options.json && !options.github) {
+  if (!options.json && !options.github && !isAgenticCli()) {
     printHeader({ version: pkg.version, binName: styles.binName(), indent: '  ' });
     console.log();
   }

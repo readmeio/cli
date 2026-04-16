@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 import { createRequire } from 'node:module';
 import chalk from 'chalk';
 import { binName } from '../utils/styles.js';
-import { header, setPalette } from '../utils/eyes.js';
+import { header, setPalette, isAgenticCli } from '../utils/eyes.js';
 import { loadPet } from '../utils/tamagotchi.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -101,14 +101,16 @@ export async function run(options, _cmd, ctx) {
   const port = await listen(startPort);
 
   console.log();
-  const headerLines = header({
-    version: pkg.version,
-    binName: `${binName()} dev`,
-  });
-  for (const line of headerLines) {
-    console.log('  ' + line);
+  if (!isAgenticCli()) {
+    const headerLines = header({
+      version: pkg.version,
+      binName: `${binName()} dev`,
+    });
+    for (const line of headerLines) {
+      console.log('  ' + line);
+    }
+    console.log();
   }
-  console.log();
   console.log(`  Dev server is running!`);
   console.log(`  ${chalk.dim('Changes to your files will auto-reload.')}`);
   console.log(`  ${chalk.dim('→')} ${chalk.cyan(`http://localhost:${port}`)}`);
