@@ -1,7 +1,6 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { Option } from 'commander';
@@ -202,7 +201,7 @@ export async function run(options) {
   try {
     styles.info(`Staging frontmatter stubs in ${styles.bold(stagingDir)}...`);
     const stageStart = Date.now();
-    const staged = await timePhase('stage stubs', async () => stageOrganized(organized, stagingDir, sourceUrl.toString()));
+    const staged = await timePhase('stage stubs', async () => stageOrganized(organized, stagingDir));
     ensureDocsLandingPage(stagingDir, organized.title || sourceUrl.hostname);
     styles.ok(`Staged ${styles.bold(String(staged.fileCount))} stub${staged.fileCount === 1 ? '' : 's'} across ${styles.bold(String(staged.dirCount))} director${staged.dirCount === 1 ? 'y' : 'ies'} in ${styles.bold(formatDuration(Date.now() - stageStart))}.`);
     console.log();
@@ -368,27 +367,13 @@ async function runOasImport(sourcePath, options, startedAt, phases, timePhase) {
     // docs/ empty, which makes `--test` dev server show "no pages" at /.
     ensureDocsLandingPage(stagingDir, title, opCount);
 
-    // Walk generated reference/ pages and enrich their frontmatter with an
-    // x-import key, then mirror them into import.json so the manifest lists
-    // every page the way the URL flow does.
-    const { pages: opPages } = addImportKeysToReferencePages(stagingDir, stagedName);
-
-    const manifest = {
-      source: absPath,
-      sourceType: 'oas',
-      generatedAt: new Date().toISOString(),
-      spec: {
-        title,
-        version,
-        operations: opCount,
-        file: `reference/${stagedName}`,
-      },
-      pages: opPages,
-    };
-    fs.writeFileSync(path.join(stagingDir, 'import.json'), JSON.stringify(manifest, null, 2));
+    // OAS operation pages don't need an x-import URL — their content is
+    // intrinsic to the spec (summary/description live in the OpenAPI doc,
+    // and the page's `api:` frontmatter already points back to it).
+    const pageCount = countReferencePages(stagingDir, stagedName);
 
     styles.ok(
-      `Staged ${styles.bold(stagedName)} and generated ${styles.bold(String(Object.keys(opPages).length))} operation page${Object.keys(opPages).length === 1 ? '' : 's'} under ${styles.bold('reference/')}.`,
+      `Staged ${styles.bold(stagedName)} and generated ${styles.bold(String(pageCount))} operation page${pageCount === 1 ? '' : 's'} under ${styles.bold('reference/')}.`,
     );
     console.log();
 
@@ -449,44 +434,27 @@ function countOperations(spec) {
 }
 
 /**
- * Walk reference/ for .md pages that syncOas just generated, tag each with
- * an `x-import: <key>` frontmatter entry, and build the import.json page map.
- * Operation pages don't have external content to fetch (the OAS already has
- * summary/description), so the manifest entry records the operation pointer
- * instead of a content URL — the content-import step can read straight from
- * the spec using these coordinates.
+ * Count operation pages syncOas just generated under reference/ for the
+ * given spec file. Used only for the "generated N pages" success message.
  */
-function addImportKeysToReferencePages(stagingDir, specFilename) {
+function countReferencePages(stagingDir, specFilename) {
   const refDir = path.join(stagingDir, 'reference');
-  if (!fs.existsSync(refDir)) return { pages: {} };
+  if (!fs.existsSync(refDir)) return 0;
 
-  const pages = {};
+  let count = 0;
   const walk = (dir) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) { walk(full); continue; }
       if (!entry.name.endsWith('.md')) continue;
 
-      const raw = fs.readFileSync(full, 'utf-8');
-      const parsed = matter(raw);
+      const parsed = matter(fs.readFileSync(full, 'utf-8'));
       const fm = parsed.data || {};
-      if (!fm.api || fm.api.file !== specFilename) continue;
-
-      const slug = path.basename(entry.name, '.md');
-      const key = `${slug}-${crypto.randomBytes(3).toString('hex')}`;
-      fm['x-import'] = key;
-      fs.writeFileSync(full, matter.stringify(parsed.content || '', fm));
-
-      pages[key] = {
-        title: fm.title || slug,
-        operationId: fm.api.operationId,
-        spec: specFilename,
-        file: path.relative(stagingDir, full),
-      };
+      if (fm.api && fm.api.file === specFilename) count++;
     }
   };
   walk(refDir);
-  return { pages };
+  return count;
 }
 
 /**
@@ -505,13 +473,12 @@ function ensureDocsLandingPage(stagingDir, siteTitle, opCount = 0) {
 
   const name = siteTitle || 'your API';
   const title = siteTitle ? `Welcome to ${siteTitle}` : 'Getting Started';
-  const key = `getting-started-${crypto.randomBytes(3).toString('hex')}`;
   const body = opCount > 0
     ? `This import brought in **${opCount} API operation${opCount === 1 ? '' : 's'}** from ${name}.\n\n👉 [Browse the API Reference →](/reference)\n\nThis page is a placeholder landing. Replace or expand it with onboarding content specific to your API.\n`
     : `This is a placeholder landing page. Replace it with your docs.\n`;
   fs.writeFileSync(
     path.join(categoryDir, 'getting-started.md'),
-    matter.stringify(body, { title, icon: 'rocket', 'x-import': key }),
+    matter.stringify(body, { title, icon: 'rocket' }),
   );
   fs.writeFileSync(path.join(categoryDir, '_order.yaml'), '- getting-started\n');
   fs.writeFileSync(path.join(docsDir, '_order.yaml'), '- Getting Started\n');
@@ -1074,24 +1041,6 @@ function toBrowsableUrl(url) {
   try {
     const u = new URL(url);
     u.pathname = u.pathname.replace(/\.(md|mdx)$/i, '');
-    return u.toString();
-  } catch {
-    return url;
-  }
-}
-
-/**
- * Best-effort content URL — the `.md` variant, used later to fetch raw
- * markdown for a stub. If the input already has `.md`, keep it; otherwise
- * append. Sites that don't serve raw markdown will still have the browsable
- * URL under `url` as a fallback.
- */
-function toMdUrl(url) {
-  try {
-    const u = new URL(url);
-    if (!/\.(md|mdx)$/i.test(u.pathname)) {
-      u.pathname = u.pathname.replace(/\/$/, '') + '.md';
-    }
     return u.toString();
   } catch {
     return url;
@@ -1786,15 +1735,12 @@ function printPagesTree(pages, indentLevel) {
   }
 }
 
-function stageOrganized(organized, stagingDir, source) {
+function stageOrganized(organized, stagingDir) {
   const pickIcon = makeIconPicker();
   const usedSlugs = new Set(); // cross-dir: duplicates validator is global
   const byDir = new Map();
   const subDirsByTopDir = new Map();
   const counts = { fileCount: 0 };
-  // Manifest of pages → source URL info, written as import.json at the staging
-  // root. Consumers can iterate this to fetch and fill in content later.
-  const importManifest = {};
 
   /**
    * Write a page (and its descendants) into `dir`. A page with children gets
@@ -1807,30 +1753,18 @@ function stageOrganized(organized, stagingDir, source) {
     usedSlugs.add(slug);
 
     const relFilePath = `${dir}/${slug}.md`;
-    // Key pages by slug + short random ID. Random suffix keeps keys unique
-    // across the import and stable against file-system churn — if the user
-    // renames or moves files, the content-import step can still match stubs
-    // to manifest entries by their frontmatter `x-import` value.
-    const importKey = `${slug}-${crypto.randomBytes(3).toString('hex')}`;
 
     // Sub-pages don't get icons per design decision.
     const frontmatter = buildFrontmatter(topDir, page, slug, pickIcon, { skipIcon: isSubPage });
-    // x-prefixed custom field is the git-format convention for metadata the
-    // schema doesn't know about — avoids "unknown property" lint warnings.
-    frontmatter['x-import'] = importKey;
+    // x-import points at the source URL for this stub. The content-import
+    // step reads it to fetch the page body. x-prefixed custom field is the
+    // git-format convention for metadata the schema doesn't know about.
+    frontmatter['x-import'] = toBrowsableUrl(page.url);
 
     const absPath = path.join(stagingDir, relFilePath);
     fs.mkdirSync(path.dirname(absPath), { recursive: true });
     fs.writeFileSync(absPath, matter.stringify('', frontmatter));
     counts.fileCount++;
-
-    importManifest[importKey] = {
-      title: (page.title || titleCase(slug)).trim(),
-      url: toBrowsableUrl(page.url),
-      contentUrl: toMdUrl(page.url),
-      ...(page.description ? { description: page.description } : {}),
-      file: relFilePath,
-    };
 
     if (!byDir.has(dir)) byDir.set(dir, []);
     byDir.get(dir).push(slug);
@@ -1866,16 +1800,6 @@ function stageOrganized(organized, stagingDir, source) {
     const body = subs.map((s) => `- ${yamlSafeSlug(s)}`).join('\n') + '\n';
     fs.writeFileSync(orderPath, body);
   }
-
-  // Write the manifest that a later content-import step will read to fetch
-  // bodies for every stub. Each stub's frontmatter `x-import` field points
-  // into this file by key.
-  const manifest = {
-    source: source || null,
-    generatedAt: new Date().toISOString(),
-    pages: importManifest,
-  };
-  fs.writeFileSync(path.join(stagingDir, 'import.json'), JSON.stringify(manifest, null, 2));
 
   return { fileCount: counts.fileCount, dirCount: byDir.size };
 }
