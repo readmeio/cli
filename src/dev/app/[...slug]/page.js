@@ -1,4 +1,5 @@
-import { getPage } from '../../lib/docs';
+import { redirect } from 'next/navigation';
+import { getPage, collectSidebar } from '../../lib/docs';
 
 export const dynamic = 'force-dynamic';
 
@@ -10,6 +11,16 @@ export async function generateMetadata({ params }) {
 
 export default async function SlugPage({ params }) {
   const { slug } = await params;
+
+  // Bare section URLs (e.g. `/reference`, `/docs`) land here with a single-
+  // element slug and no specific page. Redirect to that section's first
+  // page so the Reference tab etc. always resolve to something real.
+  if (slug.length === 1) {
+    const sections = collectSidebar();
+    const section = sections.find(s => s.dir === slug[0]);
+    if (section?.firstHref) redirect(section.firstHref);
+  }
+
   const page = getPage(slug);
 
   if (!page) {
