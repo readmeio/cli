@@ -20,7 +20,16 @@ const SECTIONS = [
   { dir: 'recipes', label: 'Recipes' },
 ];
 
-function walkDir(dirPath, sectionDir) {
+// Max folder nesting per section — anything deeper doesn't render in ReadMe's
+// sidebar, so we mirror the cap here. Keep in sync with src/validators/nesting.js.
+const MAX_DEPTH = {
+  docs: 3,
+  reference: 3,
+  recipes: 0,
+  custom_pages: 0,
+};
+
+function walkDir(dirPath, sectionDir, depth = 0) {
   if (!fs.existsSync(dirPath)) return [];
 
   // Read _order.yaml for ordering
@@ -56,7 +65,12 @@ function walkDir(dirPath, sectionDir) {
     const isMd = mdFiles.has(name);
 
     if (isDir) {
-      const children = walkDir(path.join(dirPath, name), sectionDir);
+      // Skip folders whose contents would exceed ReadMe's sidebar nesting
+      // cap — they won't render in production, so don't show them here either.
+      const maxDepth = MAX_DEPTH[sectionDir];
+      if (maxDepth !== undefined && depth + 1 > maxDepth) continue;
+
+      const children = walkDir(path.join(dirPath, name), sectionDir, depth + 1);
 
       // ReadMeConfig pages are internal — show them without a group header
       if (name === 'ReadMeConfig') {
