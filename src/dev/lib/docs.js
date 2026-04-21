@@ -64,14 +64,28 @@ function walkDir(dirPath, sectionDir) {
         continue;
       }
 
-      // Check for index.md inside directory (parent page pattern)
+      // A directory can represent either:
+      //   1. A pure category (no content of its own) → render as group label
+      //   2. A parent page with children → render as a clickable page with
+      //      a nested list underneath
+      //
+      // Two file layouts signal #2:
+      //   a. `<name>/index.md` — the "index" convention
+      //   b. `<parent>/<name>.md` right alongside the `<name>/` folder
+      //      (sibling convention) — the importer writes parent pages this way
+      // If either exists, treat this as a clickable parent page.
       const indexPath = path.join(dirPath, name, 'index.md');
+      const siblingMdPath = path.join(dirPath, `${name}.md`);
+      const parentPagePath = fs.existsSync(indexPath)
+        ? indexPath
+        : fs.existsSync(siblingMdPath) ? siblingMdPath : null;
+
       let title = name;
       let href = null;
       let hidden = false;
       let icon = null;
-      if (fs.existsSync(indexPath)) {
-        const { data } = matter(fs.readFileSync(indexPath, 'utf-8'));
+      if (parentPagePath) {
+        const { data } = matter(fs.readFileSync(parentPagePath, 'utf-8'));
         title = data.title || name;
         href = `/${sectionDir}/${encodeURIComponent(name)}`;
         hidden = !!data.hidden;
@@ -79,6 +93,9 @@ function walkDir(dirPath, sectionDir) {
       }
 
       entries.push({ title, href, hidden, icon, children });
+      // If a sibling .md is providing the parent content, remove it from
+      // mdFiles so we don't also render it as a standalone page below.
+      mdFiles.delete(name);
     } else if (isMd) {
       const filePath = path.join(dirPath, `${name}.md`);
       const { data } = matter(fs.readFileSync(filePath, 'utf-8'));
@@ -174,21 +191,31 @@ export function getPage(slugArray) {
   const { data, content } = matter(raw);
 
   let html;
-  try {
-    const { sources, modules } = loadCustomBlocks(DOCS_ROOT);
-    const compiled = compile(content, { components: sources });
-    const mod = run(compiled, { components: modules });
 
-    // Suppress React warnings about class vs className from raw HTML in markdown
-    const origError = console.error;
-    console.error = (...args) => {
-      if (typeof args[0] === 'string' && args[0].includes('Invalid DOM property')) return;
-      origError.apply(console, args);
-    };
-    html = renderToStaticMarkup(React.createElement(mod.default));
-    console.error = origError;
-  } catch {
-    html = `<p><em>Error rendering MDX. Raw content below:</em></p><pre>${content.replace(/</g, '&lt;')}</pre>`;
+  // Reference pages stubbed by the import command (or by oas:sync) have an
+  // empty body — the real endpoint UI comes from the OAS spec at render
+  // time. The production ReadMe renderer handles this; our local dev server
+  // used to show a blank page. If we see `api.file` + `api.operationId`,
+  // render a minimal preview from the spec so the page isn't empty.
+  if (data.api?.file && data.api?.operationId && !content.trim()) {
+    html = renderOasOperationPreview(data.api.file, data.api.operationId);
+  } else {
+    try {
+      const { sources, modules } = loadCustomBlocks(DOCS_ROOT);
+      const compiled = compile(content, { components: sources });
+      const mod = run(compiled, { components: modules });
+
+      // Suppress React warnings about class vs className from raw HTML in markdown
+      const origError = console.error;
+      console.error = (...args) => {
+        if (typeof args[0] === 'string' && args[0].includes('Invalid DOM property')) return;
+        origError.apply(console, args);
+      };
+      html = renderToStaticMarkup(React.createElement(mod.default));
+      console.error = origError;
+    } catch {
+      html = `<p><em>Error rendering MDX. Raw content below:</em></p><pre>${content.replace(/</g, '&lt;')}</pre>`;
+    }
   }
 
   return {
@@ -196,6 +223,87 @@ export function getPage(slugArray) {
     excerpt: data.excerpt || '',
     html,
   };
+}
+
+/**
+ * Render a small HTML preview of one OAS operation — method badge, path,
+ * description, and parameter list. Not a full interactive API reference
+ * (production ReadMe handles that); just enough so dev server pages show
+ * something meaningful instead of a blank body.
+ */
+function renderOasOperationPreview(specFile, operationId) {
+  const specPath = path.join(DOCS_ROOT, 'reference', specFile);
+  if (!fs.existsSync(specPath)) {
+    return `<p><em>OAS spec not found: <code>reference/${specFile}</code></em></p>`;
+  }
+
+  let spec;
+  try {
+    const rawSpec = fs.readFileSync(specPath, 'utf-8');
+    spec = specFile.toLowerCase().endsWith('.json') ? JSON.parse(rawSpec) : yaml.load(rawSpec);
+  } catch (e) {
+    return `<p><em>Couldn't parse <code>reference/${specFile}</code>: ${escapeHtml(e.message)}</em></p>`;
+  }
+
+  let found = null;
+  for (const [pathKey, pathItem] of Object.entries(spec.paths || {})) {
+    for (const [method, op] of Object.entries(pathItem || {})) {
+      if (op && typeof op === 'object' && op.operationId === operationId) {
+        found = { method: method.toUpperCase(), path: pathKey, op };
+      }
+    }
+  }
+  if (!found) {
+    return `<p><em>Operation <code>${escapeHtml(operationId)}</code> not found in <code>${escapeHtml(specFile)}</code>.</em></p>`;
+  }
+
+  const { method, path: opPath, op } = found;
+  const methodColor = {
+    GET: '#22c55e', POST: '#3b82f6', PUT: '#f59e0b', PATCH: '#a855f7', DELETE: '#ef4444',
+  }[method] || '#6b7280';
+
+  const parts = [];
+  parts.push(
+    `<div style="display: flex; gap: 0.5rem; align-items: center; margin-bottom: 1rem;">` +
+    `<span style="background: ${methodColor}; color: white; padding: 0.15rem 0.5rem; border-radius: 0.25rem; font-family: monospace; font-weight: 600; font-size: 0.85rem;">${method}</span>` +
+    `<code style="font-size: 1rem;">${escapeHtml(opPath)}</code>` +
+    `</div>`,
+  );
+  if (op.description) parts.push(`<p>${escapeHtml(op.description)}</p>`);
+
+  if (Array.isArray(op.parameters) && op.parameters.length > 0) {
+    parts.push(`<h2>Parameters</h2>`);
+    parts.push(`<ul>`);
+    for (const p of op.parameters) {
+      const name = p.name || '(unnamed)';
+      const where = p.in ? ` <code style="color: #6b7280;">(${p.in})</code>` : '';
+      const required = p.required ? ' <strong>required</strong>' : '';
+      const desc = p.description ? ` — ${escapeHtml(p.description)}` : '';
+      parts.push(`<li><code>${escapeHtml(name)}</code>${where}${required}${desc}</li>`);
+    }
+    parts.push(`</ul>`);
+  }
+
+  if (op.responses && typeof op.responses === 'object') {
+    parts.push(`<h2>Responses</h2>`);
+    parts.push(`<ul>`);
+    for (const [status, resp] of Object.entries(op.responses)) {
+      const desc = resp?.description ? ` — ${escapeHtml(resp.description)}` : '';
+      parts.push(`<li><code>${escapeHtml(status)}</code>${desc}</li>`);
+    }
+    parts.push(`</ul>`);
+  }
+
+  parts.push(
+    `<hr style="margin: 2rem 0; border: 0; border-top: 1px solid #e5e7eb;">`,
+    `<p style="color: #6b7280; font-size: 0.875rem;"><em>Local preview rendered from the OAS spec. Full interactive API reference (try-it-out, request/response schemas, auth) renders when imported into ReadMe.</em></p>`,
+  );
+
+  return parts.join('\n');
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
 function findFirstHref(items) {

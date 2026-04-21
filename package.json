@@ -25,6 +25,7 @@
     "registry": "https://registry.npmjs.org"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.114",
     "@readme/markdown": "^13.3.0",
     "@readmeio/git-format": "readmeio/git-format",
     "ajv": "^8.18.0",
