@@ -2,5 +2,5 @@
 node_modules/
 .next/
 .claude/settings.local.json
-
+*.zip
 icon-designer.mjs

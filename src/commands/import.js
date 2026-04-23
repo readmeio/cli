@@ -135,6 +135,15 @@ export async function run(options) {
           .join(', ');
         styles.info(`${styles.bold(String(slotted.length))} orphan page${slotted.length === 1 ? '' : 's'} bucketed by URL type: ${summary}.`);
       }
+      // Sweep pass: any page whose URL has a strong reference segment
+      // (e.g. `/api-reference/...`) belongs in the API Reference category,
+      // even if the site's sidebar spotlighted it under Developers or similar.
+      // Sidebars often surface a few endpoints as "featured" outside the
+      // reference section — we respect the URL over the nav here.
+      const moved = reclassifyReferencePages(scraped);
+      if (moved > 0) {
+        styles.info(`Moved ${styles.bold(String(moved))} page${moved === 1 ? '' : 's'} into ${styles.bold('API Reference')} based on URL path.`);
+      }
     } else {
       // Discovery mode — scraped pages ARE our known pages. No orphans.
       // If everything landed in a single flat category (the sidebar had no
@@ -906,50 +915,171 @@ function bucketOrphansByPathType(orphans, scraped) {
   const TYPE_TITLES = {
     reference: 'API Reference',
     api: 'API Reference',
+    'api-reference': 'API Reference',
+    'api_reference': 'API Reference',
+    endpoints: 'API Reference',
+    endpoint: 'API Reference',
     changelog: 'Changelog',
     release: 'Release Notes',
     releases: 'Release Notes',
+    'release-notes': 'Release Notes',
     recipes: 'Recipes',
     recipe: 'Recipes',
     guides: 'Guides',
     docs: 'Other Docs',
     doc: 'Other Docs',
   };
+  // Strong top-level type segments. If ANY path segment matches, treat that
+  // as the bucket type — `/api-reference/prompts/archive-prompt` belongs in
+  // "API Reference", not in a sub-bucket called "Prompts".
+  const STRONG_TYPE = /^(api[-_]?reference|endpoints?|changelog|release[-_]?notes?|releases)$/i;
   // Segments that look like version/locale prefixes, not category types.
   // Walked from the end until we find a real category-type segment.
   const VERSION_LOCALE = /^(v?\d+(\.\d+)*|main|master|latest|stable|next|current|ent|enterprise|en|en-us|en_us|fr|de|es|ja|zh|ko|pt)$/i;
-  const existingTitles = new Set(scraped.categories.map((c) => c.title));
-  const byType = new Map();
+  // Normalize title for merge-matching: strip invisible chars, lowercase, trim.
+  const normTitle = (t) => String(t || '').replace(INVISIBLE_CHARS, '').trim().toLowerCase();
+
+  // Map existing scraped categories by normalized title so we can merge
+  // orphans into them instead of creating a parallel "(orphans)" bucket that
+  // routes to the wrong top-level directory.
+  const byNormTitle = new Map();
+  for (const cat of scraped.categories) byNormTitle.set(normTitle(cat.title), cat);
+  // Buckets we've created so later orphans can pile onto the same one.
+  const newBuckets = new Map();
 
   for (const p of orphans) {
+    let url;
+    try { url = new URL(p.url); } catch { continue; }
+    const pathname = url.pathname;
+    // Skip OAS spec endpoints — `/api-reference/openapi.json` etc. aren't
+    // documentation pages and shouldn't become stubs.
+    if (/\.(json|ya?ml)$/i.test(pathname)) continue;
+
+    const segs = pathname.split('/').filter(Boolean);
     let type = null;
-    try {
-      const segs = new URL(p.url).pathname.split('/').filter(Boolean);
-      // Walk from the segment-before-slug backwards; skip version/locale segments.
+    // First: any strong top-level type anywhere in the path wins.
+    for (const seg of segs) {
+      if (STRONG_TYPE.test(seg)) { type = seg.toLowerCase(); break; }
+    }
+    // Fallback: walk the segment-before-slug backwards, skip version/locale.
+    if (!type) {
       for (let i = segs.length - 2; i >= 0; i--) {
         if (!VERSION_LOCALE.test(segs[i])) { type = segs[i].toLowerCase(); break; }
       }
-    } catch {}
+    }
 
     const rawTitle = type ? (TYPE_TITLES[type] || titleCase(type)) : 'Other';
-    // Avoid a clash with an already-scraped category title.
-    const title = existingTitles.has(rawTitle) ? `${rawTitle} (orphans)` : rawTitle;
+    const key = normTitle(rawTitle);
 
-    if (!byType.has(title)) byType.set(title, { title, pages: [] });
-    byType.get(title).pages.push({
+    let bucket = byNormTitle.get(key);
+    if (!bucket) {
+      bucket = newBuckets.get(key);
+      if (!bucket) {
+        bucket = { title: rawTitle, pages: [] };
+        newBuckets.set(key, bucket);
+        byNormTitle.set(key, bucket);
+      }
+    }
+
+    bucket.pages.push({
       title: p.title,
       url: p.url,
       ...(p.description ? { description: p.description } : {}),
     });
   }
 
-  return Array.from(byType.values()).sort((a, b) => b.pages.length - a.pages.length);
+  // Existing scraped categories were mutated in place. Return only genuinely
+  // new buckets for the caller to append.
+  return Array.from(newBuckets.values()).sort((a, b) => b.pages.length - a.pages.length);
 }
 
 function titleCase(s) {
   return String(s)
     .replace(/[-_]+/g, ' ')
     .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/**
+ * Walk all scraped pages (including nested sub-pages) and move any whose URL
+ * contains a strong reference segment (`/api-reference/`, `/endpoints/`, etc.)
+ * into a single "API Reference" category. Some docs sites (e.g. greenflash.ai)
+ * spotlight a handful of endpoints under "Developers" in the sidebar while the
+ * bulk of endpoints live under a separate API Reference section — we favor
+ * the URL-path signal over the sidebar placement so all reference pages land
+ * together in `reference/` after staging.
+ *
+ * Returns the number of pages relocated.
+ */
+function reclassifyReferencePages(scraped) {
+  const REFERENCE_SEGMENT = /^(api[-_]?reference|endpoints?)$/i;
+  const normTitle = (t) => String(t || '').replace(INVISIBLE_CHARS, '').trim().toLowerCase();
+
+  const looksLikeRefUrl = (url) => {
+    try {
+      const segs = new URL(url).pathname.split('/').filter(Boolean);
+      return segs.some((s) => REFERENCE_SEGMENT.test(s));
+    } catch {
+      return false;
+    }
+  };
+
+  // Find (or create) the canonical API Reference category. Prefer an existing
+  // one with a reference-shaped title so we don't end up with duplicates.
+  let refCat = scraped.categories.find((c) => /^(api[ -]?reference|reference|api|endpoints?)$/i.test(normTitle(c.title).replace(/\s+/g, ' ')));
+  const existedBefore = Boolean(refCat);
+
+  const collected = [];
+  const filterPages = (pages) => {
+    const kept = [];
+    for (const p of pages || []) {
+      if (looksLikeRefUrl(p.url)) {
+        // Flatten sub-pages when relocating — API Reference is a flat list.
+        collectFlat(p, collected);
+        continue;
+      }
+      if (p.pages && p.pages.length > 0) p.pages = filterPages(p.pages);
+      kept.push(p);
+    }
+    return kept;
+  };
+
+  // Never pull pages out of the reference category itself.
+  for (const cat of scraped.categories) {
+    if (cat === refCat) continue;
+    cat.pages = filterPages(cat.pages);
+  }
+
+  if (collected.length === 0) return 0;
+
+  if (!refCat) {
+    refCat = { title: 'API Reference', pages: [] };
+    scraped.categories.push(refCat);
+  }
+  // Dedupe against anything already in the reference category.
+  const seen = new Set(refCat.pages.map((p) => normalizePath(p.url)));
+  for (const p of collected) {
+    const key = normalizePath(p.url);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    refCat.pages.push(p);
+  }
+
+  // Drop now-empty categories (other than the reference one we may have just created).
+  scraped.categories = scraped.categories.filter((c) => c === refCat || (c.pages && c.pages.length > 0));
+
+  // If the category existed before but the relocation was a no-op, surface 0.
+  return existedBefore ? collected.length : collected.length;
+}
+
+function collectFlat(page, out) {
+  out.push({
+    title: page.title,
+    url: page.url,
+    ...(page.description ? { description: page.description } : {}),
+  });
+  if (page.pages && page.pages.length > 0) {
+    for (const child of page.pages) collectFlat(child, out);
+  }
 }
 
 /**
@@ -1244,8 +1374,16 @@ function isDiscoverableLink(abs, base) {
   return true;
 }
 
+// Zero-width spaces, direction marks, word joiner, BOM — some docs sites
+// inject these into sidebar headings (docs.greenflash.ai prefixes
+// "API Reference" with U+200B), which otherwise defeats downstream
+// title-matching regexes like routeCategory's.
+const INVISIBLE_CHARS = new RegExp(
+  '[\\u200B-\\u200F\\u202A-\\u202E\\u2060\\uFEFF]',
+  'g',
+);
 function stripTags(s) {
-  return decodeEntities(String(s).replace(/<[^>]+>/g, ''));
+  return decodeEntities(String(s).replace(/<[^>]+>/g, '')).replace(INVISIBLE_CHARS, '');
 }
 
 /**
