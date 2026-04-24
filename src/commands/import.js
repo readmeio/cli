@@ -487,7 +487,7 @@ function ensureDocsLandingPage(stagingDir, siteTitle, opCount = 0) {
     : `This is a placeholder landing page. Replace it with your docs.\n`;
   fs.writeFileSync(
     path.join(categoryDir, 'getting-started.md'),
-    matter.stringify(body, { title, icon: 'rocket' }),
+    matter.stringify(body, { title, icon: formatIconClass('rocket') }),
   );
   fs.writeFileSync(path.join(categoryDir, '_order.yaml'), '- getting-started\n');
   fs.writeFileSync(path.join(docsDir, '_order.yaml'), '- Getting Started\n');
@@ -1978,7 +1978,7 @@ function buildFrontmatter(topDir, page, slug, pickIcon, opts = {}) {
   if (topDir === 'recipes') {
     fm.recipe = { color: '#018ef5', icon: icon || 'book-open' };
   } else if (topDir === 'docs' || topDir === 'reference') {
-    fm.icon = icon;
+    fm.icon = formatIconClass(icon);
   }
 
   return fm;
@@ -2065,6 +2065,16 @@ const ICON_RULES = [
 ];
 
 const DEFAULT_ICON_POOL = ['file-lines', 'file', 'bookmark', 'note-sticky', 'circle', 'square', 'diamond'];
+
+// ReadMe's hub sidebar renders `<i class="{icon}">` with no normalization, so
+// a bare "rocket" matches no CSS. Prefix short names with `fa-solid fa-` so
+// readme.com's FontAwesome 6 Pro stylesheet picks them up. Leaves values that
+// already include a space or a `fa-` prefix untouched.
+function formatIconClass(icon) {
+  if (!icon) return icon;
+  if (icon.includes(' ') || icon.startsWith('fa-')) return icon;
+  return `fa-solid fa-${icon}`;
+}
 
 function makeIconPicker() {
   const used = new Set();
