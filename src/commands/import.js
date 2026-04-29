@@ -19,11 +19,16 @@ export const skipBootstrap = true;
 export function args(cmd) {
   cmd.requiredOption('--source <url-or-file>', 'URL to import from, or path to a local OpenAPI spec (.json/.yaml/.yml)');
   cmd.option('-o, --output <path>', 'Output zip path (defaults to <basename>-readme.zip in cwd)');
-  cmd.option('--model <name>', 'Claude model alias: haiku, sonnet, opus', 'haiku');
+  cmd.option('--model <name>', 'Claude model alias: haiku, sonnet, opus', 'sonnet');
   cmd.option('--firecrawl-key <key>', 'Firecrawl API key (or set FIRECRAWL_API_KEY env var) — enables JS-rendered sidebar scraping');
+  cmd.option('--skip-api-reference', 'Drop pages routed to the API Reference / reference dir. Use when uploading the OAS spec separately.');
   // Internal dev-only flag: skip the zip, keep staging, and boot the dev server
   // against it for quick visual previews. Hidden from --help.
   cmd.addOption(new Option('--test').hideHelp());
+  // Dump intermediate pipeline artifacts (llms parse, scraped nav, orphan
+  // handling, final organized tree) so we can diff stages when the produced
+  // sidebar disagrees with the source.
+  cmd.addOption(new Option('--debug').hideHelp());
 }
 
 export async function run(options) {
@@ -35,6 +40,8 @@ export async function run(options) {
     phases.push({ label, ms: Date.now() - t });
     return result;
   };
+
+  const debugSnapshots = options.debug ? {} : null;
 
   // Dispatch: http(s) URL → docs-site scrape flow; anything else → local OAS.
   if (!/^https?:\/\//i.test(options.source)) {
@@ -81,6 +88,10 @@ export async function run(options) {
     styles.info(styles.dim(`Using ${llmsUrl}.`));
   }
 
+  if (debugSnapshots) {
+    debugSnapshots['01-llms-parsed.json'] = { llmsUrl, parsed: llms ? llms.parsed : null };
+  }
+
   let knownUrls = [];
   if (llms) {
     const totalItems = llms.parsed.sections.reduce((n, s) => n + s.items.length, 0);
@@ -114,28 +125,74 @@ export async function run(options) {
 
   console.log();
   const firecrawlKey = options.firecrawlKey || process.env.FIRECRAWL_API_KEY || null;
-  styles.info(
-    `Scraping sidebar nav from ${styles.bold(sourceUrl.toString())}${firecrawlKey ? ' ' + styles.dim('(via Firecrawl)') : ''}...`,
+
+  // Mintlify fast path — the canonical sidebar lives in docs.json/mint.json
+  // at origin root. When present it gives us perfect structure with zero
+  // HTML parsing, so try it before falling back to generic nav scraping.
+  styles.info(`Probing for Mintlify config (docs.json, mint.json)...`);
+  const mintlifyStart = Date.now();
+  const mintlifyNav = await timePhase('mintlify probe', () =>
+    tryMintlifyNav(sourceUrl.toString(), knownUrls, firecrawlKey),
   );
-  const scrapeStart = Date.now();
-  const scraped = await timePhase('scrape nav', () => scrapeNavFromSite(sourceUrl.toString(), knownUrls, firecrawlKey));
+  if (debugSnapshots) {
+    debugSnapshots['02a-mintlify-nav.json'] = mintlifyNav ? JSON.parse(JSON.stringify(mintlifyNav)) : null;
+  }
+  if (mintlifyNav) {
+    const pageCount = mintlifyNav.categories.reduce((n, c) => n + c.pages.length, 0);
+    styles.ok(
+      `Found Mintlify config at ${styles.bold(mintlifyNav.source)} in ${styles.bold(formatDuration(Date.now() - mintlifyStart))} — ${styles.bold(String(mintlifyNav.categories.length))} categor${mintlifyNav.categories.length === 1 ? 'y' : 'ies'}, ${styles.bold(String(pageCount))} pages.`,
+    );
+  }
+  console.log();
+
+  let scraped;
+  let scrapeStart = Date.now();
+  if (mintlifyNav) {
+    scraped = { title: mintlifyNav.title, categories: mintlifyNav.categories };
+  } else {
+    styles.info(
+      `Scraping sidebar nav from ${styles.bold(sourceUrl.toString())}${firecrawlKey ? ' ' + styles.dim('(via Firecrawl)') : ''}...`,
+    );
+    scrapeStart = Date.now();
+    scraped = await timePhase('scrape nav', () =>
+      scrapeNavFromSite(sourceUrl.toString(), knownUrls, firecrawlKey),
+    );
+  }
+  if (debugSnapshots) {
+    debugSnapshots['02-scraped-raw.json'] = scraped ? JSON.parse(JSON.stringify(scraped)) : null;
+  }
+  // Prefer llms.txt when it has strong multi-section structure and the
+  // scrape was a thin snapshot (common on big multi-tab docs — Stripe, AWS,
+  // Twilio — where each page only renders its own tab's sidebar). Without
+  // this override the 4-category scrape wins over a 25-section llms.txt and
+  // hundreds of real pages end up smeared into orphan buckets.
+  if (scraped && llms && knownUrls.length > 0) {
+    const scrapedPages = scraped.categories.reduce((n, c) => n + c.pages.length, 0);
+    const coverage = scrapedPages / knownUrls.length;
+    const llmsUsable = usableSections(llms.parsed.sections);
+    if (llmsUsable.length >= 5 && coverage < 0.5) {
+      styles.info(
+        `Scrape covered ${styles.bold(Math.round(coverage * 100) + '%')} of llms.txt pages; preferring llms.txt's ${styles.bold(String(llmsUsable.length))} sections for structure.`,
+      );
+      scraped = null;
+    }
+  }
+
   if (scraped) {
     const directMatches = scraped.categories.reduce((n, c) => n + c.pages.length, 0);
     if (knownUrls.length > 0) {
       const slotted = slotOrphansByPath(scraped, knownUrls);
+      if (debugSnapshots) {
+        debugSnapshots['03-after-slot-by-path.json'] = {
+          scraped: JSON.parse(JSON.stringify(scraped)),
+          unslottedOrphans: slotted,
+        };
+      }
       const totalMatched = scraped.categories.reduce((n, c) => n + c.pages.length, 0);
       styles.ok(
         `Scraped nav in ${styles.bold(formatDuration(Date.now() - scrapeStart))} — ${styles.bold(String(scraped.categories.length))} categor${scraped.categories.length === 1 ? 'y' : 'ies'}, ${styles.bold(String(directMatches))} direct matches + ${styles.bold(String(totalMatched - directMatches))} slotted by path = ${styles.bold(String(totalMatched))}/${knownUrls.length}.`,
       );
-      if (slotted.length > 0) {
-        const buckets = bucketOrphansByPathType(slotted, scraped);
-        for (const b of buckets) scraped.categories.push(b);
-        const summary = buckets
-          .map((b) => `${styles.bold(String(b.pages.length))} in ${styles.bold(b.title)}`)
-          .join(', ');
-        styles.info(`${styles.bold(String(slotted.length))} orphan page${slotted.length === 1 ? '' : 's'} bucketed by URL type: ${summary}.`);
-      }
-      // Sweep pass: any page whose URL has a strong reference segment
+      // Sweep pass first: any page whose URL has a strong reference segment
       // (e.g. `/api-reference/...`) belongs in the API Reference category,
       // even if the site's sidebar spotlighted it under Developers or similar.
       // Sidebars often surface a few endpoints as "featured" outside the
@@ -143,6 +200,43 @@ export async function run(options) {
       const moved = reclassifyReferencePages(scraped);
       if (moved > 0) {
         styles.info(`Moved ${styles.bold(String(moved))} page${moved === 1 ? '' : 's'} into ${styles.bold('API Reference')} based on URL path.`);
+      }
+
+      if (slotted.length > 0) {
+        // Mintlify-style docs put API endpoints in a separate tab rooted at
+        // /api-reference/* (or /api/*, /reference/*). Collapse remaining such
+        // pages into a single "API Reference" category (absorbing the flat
+        // category the sweep pass just built, if any) and nest it by resource
+        // segment so routeCategory() maps the whole thing to ReadMe's
+        // `reference/` top-level dir.
+        const apiResult = collectApiReferencePages(slotted, scraped);
+        const otherOrphans = apiResult.nonApiOrphans;
+        if (apiResult.category) scraped.categories.push(apiResult.category);
+
+        const buckets = bucketOrphansByPathType(otherOrphans, scraped);
+        for (const b of buckets) scraped.categories.push(b);
+        if (debugSnapshots) {
+          debugSnapshots['04-after-orphan-buckets.json'] = {
+            apiReferenceCollected: apiResult.category
+              ? {
+                  pageCount: apiResult.category.pages.length,
+                  mergedFromScraped: apiResult.mergedScrapedTitles,
+                }
+              : null,
+            buckets,
+            scraped: JSON.parse(JSON.stringify(scraped)),
+          };
+        }
+        const parts = [];
+        if (apiResult.category) {
+          parts.push(`${styles.bold(String(apiResult.category.pages.length))} in ${styles.bold('API Reference')}`);
+        }
+        for (const b of buckets) {
+          parts.push(`${styles.bold(String(b.pages.length))} in ${styles.bold(b.title)}`);
+        }
+        if (parts.length > 0) {
+          styles.info(`${styles.bold(String(slotted.length))} orphan page${slotted.length === 1 ? '' : 's'} bucketed by URL type: ${parts.join(', ')}.`);
+        }
       }
     } else {
       // Discovery mode — scraped pages ARE our known pages. No orphans.
@@ -195,6 +289,15 @@ export async function run(options) {
     organized = await timePhase('claude organize', () => organizeWithClaude(llms.parsed, options.model));
   }
   styles.ok(`Organized in ${styles.bold(formatDuration(Date.now() - organizeStart))}.`);
+  if (debugSnapshots) {
+    debugSnapshots['05-organized.json'] = organized;
+    const debugDir = path.join(os.tmpdir(), `readme-import-debug-${sourceUrl.hostname}-${Date.now()}`);
+    fs.mkdirSync(debugDir, { recursive: true });
+    for (const [name, data] of Object.entries(debugSnapshots)) {
+      fs.writeFileSync(path.join(debugDir, name), JSON.stringify(data, null, 2));
+    }
+    styles.info(`${styles.dim(`Debug snapshots → ${debugDir}`)}`);
+  }
   console.log();
 
   console.log(`  ${styles.bold(organized.title || '(untitled)')}`);
@@ -210,9 +313,12 @@ export async function run(options) {
   try {
     styles.info(`Staging frontmatter stubs in ${styles.bold(stagingDir)}...`);
     const stageStart = Date.now();
-    const staged = await timePhase('stage stubs', async () => stageOrganized(organized, stagingDir));
+    const staged = await timePhase('stage stubs', async () => stageOrganized(organized, stagingDir, { skipApiReference: !!options.skipApiReference }));
     ensureDocsLandingPage(stagingDir, organized.title || sourceUrl.hostname);
     styles.ok(`Staged ${styles.bold(String(staged.fileCount))} stub${staged.fileCount === 1 ? '' : 's'} across ${styles.bold(String(staged.dirCount))} director${staged.dirCount === 1 ? 'y' : 'ies'} in ${styles.bold(formatDuration(Date.now() - stageStart))}.`);
+    if (staged.skippedApiRef > 0) {
+      styles.info(`Skipped ${styles.bold(String(staged.skippedApiRef))} API reference page${staged.skippedApiRef === 1 ? '' : 's'} (--skip-api-reference)`);
+    }
     console.log();
 
     if (options.test) {
@@ -556,14 +662,19 @@ function makeStagingGuard(stagingDir) {
 }
 
 /**
- * Hand off to the dev command so the user can preview the staged docs. Runs
- * `npx @readme/cli-beta dev --no-check` in the staging directory. Stdout is
- * piped so we can forward it to the terminal AND detect the server's URL —
- * once seen, we open it in the user's default browser.
+ * Hand off to the dev command so the user can preview the staged docs. Reuses
+ * the currently-running CLI binary so fixes to the dev server ship immediately
+ * to users already on this version (and so local development doesn't need a
+ * publish to test). Falls back to `npx @readme/cli-beta` if we can't locate
+ * ourselves. Stdout is piped so we can detect the server's URL and open it.
  */
 function runDevPreview(stagingDir) {
   return new Promise((resolve, reject) => {
-    const child = spawn('npx', ['--yes', '@readme/cli-beta', 'dev', '--no-check'], {
+    const selfBin = process.argv[1] && fs.existsSync(process.argv[1]) ? process.argv[1] : null;
+    const [cmd, args] = selfBin
+      ? [process.execPath, [selfBin, 'dev', '--no-check']]
+      : ['npx', ['--yes', '@readme/cli-beta', 'dev', '--no-check']];
+    const child = spawn(cmd, args, {
       cwd: stagingDir,
       stdio: ['inherit', 'pipe', 'inherit'],
     });
@@ -637,6 +748,177 @@ function createZip(sourceDir, outputZip) {
  * "English"), it invents better ones. Every category gets a FontAwesome icon.
  */
 /**
+ * Mintlify sites ship the canonical sidebar in `docs.json` (v2) or `mint.json`
+ * (v1) at the origin root. When present, it's a perfect structural source —
+ * no HTML parsing needed. Pages are listed by slug; we enrich titles from
+ * llms.txt where available, otherwise fall back to a title derived from the
+ * slug.
+ *
+ * Returns { source, title, categories } or null if no Mintlify config is
+ * found or parseable.
+ */
+async function tryMintlifyNav(sourceUrl, knownPages, firecrawlKey) {
+  const origin = new URL(sourceUrl).origin;
+  const fetchHtml = firecrawlKey ? makeFirecrawlFetcher(firecrawlKey) : fetchHtmlDirect;
+
+  const byPath = new Map();
+  for (const p of knownPages) byPath.set(normalizePath(p.url), p);
+
+  for (const filename of ['docs.json', 'mint.json']) {
+    const configUrl = `${origin}/${filename}`;
+    const body = await fetchHtml(configUrl);
+    if (!body) continue;
+    const config = extractMintlifyConfig(body);
+    if (!config || !config.navigation) continue;
+    const parsed = parseMintlifyConfig(config, origin, byPath);
+    if (parsed.categories.length > 0) {
+      return { source: configUrl, title: parsed.title, categories: parsed.categories };
+    }
+  }
+  return null;
+}
+
+/**
+ * Extract a Mintlify config object from a fetched body. Handles:
+ *   - raw JSON (`{ "navigation": ... }`)
+ *   - JSON wrapped in HTML (Firecrawl sometimes returns `<pre>...</pre>` or
+ *     a formatted view of the JSON body)
+ *   - HTML-escaped JSON
+ */
+function extractMintlifyConfig(body) {
+  try { return JSON.parse(body); } catch {}
+  // Pull out the first balanced `{ ... }` that contains a "navigation" key.
+  const navIdx = body.indexOf('"navigation"');
+  if (navIdx === -1) return null;
+  let start = body.lastIndexOf('{', navIdx);
+  while (start !== -1) {
+    for (let end = body.lastIndexOf('}'); end > start; end = body.lastIndexOf('}', end - 1)) {
+      const candidate = body.slice(start, end + 1);
+      try {
+        const parsed = JSON.parse(candidate);
+        if (parsed && parsed.navigation) return parsed;
+      } catch {}
+    }
+    start = body.lastIndexOf('{', start - 1);
+  }
+  return null;
+}
+
+function parseMintlifyConfig(config, origin, byPath) {
+  const title = config.name || null;
+  const categories = [];
+
+  const slugToTitle = (slug) => {
+    const base = String(slug).split('/').pop() || slug;
+    return base
+      .split(/[-_]/)
+      .filter(Boolean)
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(' ');
+  };
+
+  const pageToEntry = (p) => {
+    // Simple slug string → leaf page
+    if (typeof p === 'string') {
+      const slug = p.replace(/^\//, '');
+      const url = `${origin}/${slug}.md`;
+      const known = byPath.get(normalizePath(url));
+      return {
+        title: known?.title || slugToTitle(slug),
+        url,
+        ...(known?.description ? { description: known.description } : {}),
+      };
+    }
+    if (p && typeof p === 'object') {
+      // Nested group: recurse
+      if (p.group && Array.isArray(p.pages)) {
+        return {
+          title: p.group,
+          url: null,
+          pages: p.pages.map(pageToEntry).filter(Boolean),
+        };
+      }
+      // Some v2 shapes: { page: "slug", title?: "..." }
+      if (typeof p.page === 'string') {
+        const slug = p.page.replace(/^\//, '');
+        const url = `${origin}/${slug}.md`;
+        const known = byPath.get(normalizePath(url));
+        return {
+          title: p.title || known?.title || slugToTitle(slug),
+          url,
+          ...(known?.description ? { description: known.description } : {}),
+        };
+      }
+    }
+    return null;
+  };
+
+  const pushGroup = (group) => {
+    if (!group || !Array.isArray(group.pages)) return;
+    const pages = group.pages.map(pageToEntry).filter(Boolean);
+    if (pages.length === 0) return;
+    categories.push({ title: group.group || 'Untitled', pages });
+  };
+
+  const nav = config.navigation;
+  // v1: navigation is an array of groups
+  if (Array.isArray(nav)) {
+    for (const g of nav) pushGroup(g);
+  }
+  // v2: navigation.tabs[].groups[]
+  else if (Array.isArray(nav?.tabs)) {
+    for (const tab of nav.tabs) {
+      for (const g of tab.groups || []) pushGroup(g);
+    }
+  }
+  // v2: navigation.groups[] (no tabs)
+  else if (Array.isArray(nav?.groups)) {
+    for (const g of nav.groups) pushGroup(g);
+  }
+  // v2: navigation.pages[] (flat)
+  else if (Array.isArray(nav?.pages)) {
+    const pages = nav.pages.map(pageToEntry).filter(Boolean);
+    if (pages.length > 0) categories.push({ title: 'Documentation', pages });
+  }
+
+  return { title, categories };
+}
+
+/**
+ * Score a parsed nav tree for "sidebar-likeness". A real docs sidebar has
+ * multiple section headers (hierarchy) and tens of links; secondary navs
+ * (sitemaps, footers, search-index result lists) tend to be flat single-
+ * category blobs that are either alphabetized or dumped in insertion order.
+ *
+ * Flat single-category blocks are penalized so a slightly smaller hierarchical
+ * block wins over a bigger flat one. Without this, greenflash.ai's sidebar
+ * order was non-deterministic across runs — sometimes Quickstart first (real
+ * sidebar won), sometimes last (a flat alphabetized index block won).
+ */
+function scoreNavTree(tree) {
+  const count = tree.categories.reduce((n, c) => n + c.pages.length, 0);
+  const cats = tree.categories.length;
+  const hierarchyBonus = cats >= 2 ? cats * 5 : -20;
+  // Alphabetical penalty: real sidebars are curated (Overview first, related
+  // topics grouped). Auto-generated indexes, search clouds, and footer link
+  // lists tend to be strictly alphabetized. When a category's pages come in
+  // alpha order it's almost always noise masquerading as structure.
+  let alphaPenalty = 0;
+  for (const c of tree.categories) {
+    const titles = (c.pages || []).map((p) => (p.title || '').toLowerCase());
+    if (titles.length >= 3 && isMonotonicAlpha(titles)) alphaPenalty -= 15;
+  }
+  return count + hierarchyBonus + alphaPenalty;
+}
+
+function isMonotonicAlpha(titles) {
+  for (let i = 1; i < titles.length; i++) {
+    if (titles[i] < titles[i - 1]) return false;
+  }
+  return true;
+}
+
+/**
  * Fetch the source URL, find the `<nav>` or `<aside>` that contains the most
  * links matching our known llms.txt URLs, and extract its heading/link
  * structure into { title, categories: [{ title, pages: [...] }] }.
@@ -671,20 +953,36 @@ async function scrapeNavFromSite(sourceUrl, knownPages, firecrawlKey) {
     if (!html) return 0;
 
     const base = new URL(url);
+    let best = { score: -Infinity, count: 0, tree: null };
+
+    // Tier 1: <nav>/<aside> elements — semantic markup, almost always the real sidebar.
     const blockRegex = /<(nav|aside)\b[^>]*>([\s\S]*?)<\/\1>/gi;
-    let best = { count: 0, tree: null };
     let m;
     while ((m = blockRegex.exec(html)) !== null) {
       const tree = parseNavBlock(m[2], base, byPath);
-      const count = tree.categories.reduce((n, c) => n + c.pages.length, 0);
-      if (count > best.count) best = { count, tree };
+      const score = scoreNavTree(tree);
+      if (score > best.score) {
+        const count = tree.categories.reduce((n, c) => n + c.pages.length, 0);
+        best = { score, count, tree };
+      }
     }
 
-    // Fallback: some sites (Mintlify, custom stacks) don't wrap the sidebar
-    // in <nav>/<aside> — it's just <h5 id="sidebar-title"> + <ul>/<li> in a
-    // plain <div>. Parse the whole document, then filter out noise: drop
-    // thin categories (<2 pages) and dedupe any URL that ends up in multiple
-    // categories (first occurrence wins — the sidebar is usually near the top).
+    // Tier 2: <div>/<ul>/<section> containers whose attributes look sidebar-shaped
+    // (id="sidebar-group", class*="sidebar", role="navigation", etc.). Catches
+    // Mintlify-style stacks (greenflash.ai, mintlify.com clones) where the sidebar
+    // lives in a plain <div>. We need balanced-tag extraction since divs nest.
+    for (const block of extractSidebarContainers(html)) {
+      const tree = parseNavBlock(block, base, byPath);
+      const score = scoreNavTree(tree);
+      if (score > best.score) {
+        const count = tree.categories.reduce((n, c) => n + c.pages.length, 0);
+        best = { score, count, tree };
+      }
+    }
+
+    // Tier 3 (last resort): parse the whole document, filter out noise. Risky —
+    // alphabetical link clusters elsewhere on the page (TOCs, footers, indexes)
+    // can pollute the result. Only used when earlier tiers didn't find enough.
     if (best.count < 10) {
       const wholeTree = parseNavBlock(html, base, byPath);
       const seen = new Set();
@@ -694,8 +992,12 @@ async function scrapeNavFromSite(sourceUrl, knownPages, firecrawlKey) {
         if (keptPages.length >= 2) filtered.push({ ...cat, pages: keptPages });
       }
       const filteredCount = filtered.reduce((n, c) => n + c.pages.length, 0);
-      if (filteredCount > best.count) {
-        best = { count: filteredCount, tree: { title: null, categories: filtered } };
+      const filteredTree = { title: null, categories: filtered };
+      const filteredScore = scoreNavTree(filteredTree);
+      // Compare on score, not count — a noisy 20-link alphabetical cluster
+      // shouldn't replace a clean 8-link real sidebar.
+      if (filteredScore > best.score) {
+        best = { score: filteredScore, count: filteredCount, tree: filteredTree };
       }
     }
 
@@ -800,6 +1102,59 @@ async function scrapeNavFromSite(sourceUrl, knownPages, firecrawlKey) {
  * <h*> heading. Links whose hrefs resolve to a known page land in the current
  * category (or a leading "Overview" bucket if they appear before any heading).
  */
+/**
+ * Find sidebar-shaped container elements (<div>/<ul>/<section>) in `html` and
+ * return their inner HTML. Looks for tag attributes like id="sidebar*",
+ * class*="sidebar", role="navigation", aria-label*="navigation". Uses
+ * balanced-tag walking so nested elements with the same tag don't break the
+ * boundaries.
+ */
+function extractSidebarContainers(html) {
+  const SIDEBAR_TAGS = ['div', 'ul', 'section'];
+  // Match attribute patterns commonly used for the sidebar. Case-insensitive
+  // partial-string matches on id/class so "sidebar-group", "sidebarNav",
+  // "DocsSidebar__container" etc. all hit.
+  const SIDEBAR_ATTR_RE =
+    /\b(?:id|class|aria-label|data-testid)=(?:"[^"]*sidebar[^"]*"|'[^']*sidebar[^']*'|"[^"]*navigation[^"]*"|'[^']*navigation[^']*')|\brole=(?:"navigation"|'navigation')/i;
+
+  const out = [];
+  for (const tag of SIDEBAR_TAGS) {
+    const openRe = new RegExp(`<${tag}\\b([^>]*)>`, 'gi');
+    let m;
+    while ((m = openRe.exec(html)) !== null) {
+      if (!SIDEBAR_ATTR_RE.test(m[1])) continue;
+      const inner = extractBalancedTag(html, tag, m.index + m[0].length);
+      if (inner != null && inner.length > 100) out.push(inner);
+    }
+  }
+  return out;
+}
+
+/**
+ * Starting at `startIdx` (just past an opening `<tag …>`), walk forward
+ * through `html` tracking nested opens/closes of the same tag. Returns the
+ * inner HTML up to the matching close tag, or null if unbalanced.
+ *
+ * Generous about case and whitespace; void-element rules are NOT applied
+ * (we only call this for non-void containers: div/ul/section).
+ */
+function extractBalancedTag(html, tag, startIdx) {
+  const re = new RegExp(`<(/?)${tag}\\b[^>]*>`, 'gi');
+  re.lastIndex = startIdx;
+  let depth = 1;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    if (m[1] === '/') {
+      depth--;
+      if (depth === 0) return html.slice(startIdx, m.index);
+    } else {
+      depth++;
+    }
+    if (re.lastIndex - startIdx > 1_500_000) return null; // safety cap
+  }
+  return null;
+}
+
 function parseNavBlock(blockHtml, base, byPath) {
   // Five alternatives, carefully ordered for regex semantics:
   //  1. <h*>…</h*>       — classic heading
@@ -900,6 +1255,112 @@ function parseNavBlock(blockHtml, base, byPath) {
   }
 
   return { title: null, categories: categories.filter((c) => c.pages.length > 0) };
+}
+
+/**
+ * Partition orphans into pages under an API-Reference-style URL prefix
+ * (`/api-reference/*`, `/api/*`, `/reference/*`) and everything else.
+ *
+ * API pages are collapsed into a single `{ title: "API Reference", pages: [] }`
+ * category so `routeCategory()` sends them to ReadMe's `reference/` top-level
+ * dir as a tab of their own, matching how Mintlify/Stripe/etc. structure
+ * these docs. Any pre-existing "API Reference"-titled category on `scraped`
+ * (including variants with zero-width prefixes from stray DOM subtrees) is
+ * merged in and removed from `scraped.categories`.
+ *
+ * Returns { category, nonApiOrphans, mergedScrapedTitles }.
+ */
+function collectApiReferencePages(orphans, scraped) {
+  const API_PREFIX_RE = /^\/(api[-_]?reference|api|reference)(\/|$)/i;
+  const isApiUrl = (url) => {
+    try { return API_PREFIX_RE.test(new URL(url).pathname); } catch { return false; }
+  };
+  const cleanTitle = (t) => (t || '').replace(/[\u200B-\u200F\uFEFF]/g, '').trim();
+  const isApiCategoryTitle = (t) => /^(api[ -]?reference|reference)$/i.test(cleanTitle(t));
+
+  const apiPages = [];
+  const seenUrls = new Set();
+  const push = (p) => {
+    if (!p || !p.url) return;
+    // Skip non-page assets like /api-reference/openapi.json that some
+    // llms.txt files list alongside real pages.
+    if (/\.(json|yaml|yml)$/i.test(p.url)) return;
+    if (seenUrls.has(p.url)) return;
+    seenUrls.add(p.url);
+    apiPages.push(p);
+  };
+
+  // Pull pages out of any scraped category that already looks like API
+  // Reference — even (especially) if it's a partial, DOM-polluted one.
+  const mergedScrapedTitles = [];
+  const keptCategories = [];
+  for (const cat of scraped.categories) {
+    if (isApiCategoryTitle(cat.title)) {
+      mergedScrapedTitles.push(cat.title);
+      for (const p of cat.pages || []) push(p);
+    } else {
+      keptCategories.push(cat);
+    }
+  }
+  scraped.categories = keptCategories;
+
+  const nonApiOrphans = [];
+  for (const p of orphans) {
+    if (isApiUrl(p.url)) push(p);
+    else nonApiOrphans.push(p);
+  }
+
+  if (apiPages.length === 0) {
+    return { category: null, nonApiOrphans, mergedScrapedTitles };
+  }
+
+  // Nest by the resource segment after the API prefix, e.g.
+  //   /api-reference/analytics/get-interaction → group "analytics"
+  //   /api-reference/users/list-users          → group "users"
+  //   /api-reference/openapi.json              → top-level (no resource)
+  // Preserves first-encountered order for both groups and their pages so the
+  // final sidebar mirrors input order.
+  const groupOrder = [];
+  const groupPages = new Map();
+  const topLevel = [];
+  for (const p of apiPages) {
+    let segs = [];
+    try { segs = new URL(p.url).pathname.split('/').filter(Boolean); } catch {}
+    // segs[0] is the api-prefix itself; segs[1] (if any) is the resource.
+    const resource = segs.length >= 3 ? segs[1] : null;
+    if (!resource) {
+      topLevel.push(p);
+      continue;
+    }
+    if (!groupPages.has(resource)) {
+      groupPages.set(resource, []);
+      groupOrder.push(resource);
+    }
+    groupPages.get(resource).push(p);
+  }
+
+  const titleize = (slug) =>
+    String(slug)
+      .split(/[-_]/)
+      .filter(Boolean)
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(' ');
+
+  const pages = [];
+  for (const p of topLevel) pages.push(p);
+  for (const key of groupOrder) {
+    pages.push({
+      title: titleize(key),
+      url: null,
+      pages: groupPages.get(key),
+    });
+  }
+
+  return {
+    category: { title: 'API Reference', pages },
+    nonApiOrphans,
+    mergedScrapedTitles,
+  };
 }
 
 /**
@@ -1533,14 +1994,30 @@ async function iconizeScrapedNav(scraped, _unused, model, siteTitle) {
  * take a fast path that only asks Claude for icons + title polish instead of
  * re-bucketing every page, which is the slow part of a full reorg.
  */
+// Sections named like these are catch-all buckets — even in richly-structured
+// llms.txt files (e.g. Stripe's "Docs" section is where pages go that don't
+// fit into a named product tab), so always drop them rather than promote the
+// grab-bag contents to a top-level sidebar category.
+const GENERIC_SECTION_RE = /^(resources?|english|root url|pages?|docs?|documentation|content|available languages.*|site|sitemap|index|home|optional|instructions?(\s|:).*|miscellaneous|misc|other)$/i;
+
+/**
+ * Return the subset of llms.txt sections that carry real structural signal —
+ * drop catch-all buckets ("Docs", "Resources", "Optional"), empty sections,
+ * and oversized ones (site-dumps masquerading as sections).
+ */
+function usableSections(sections) {
+  if (!sections) return [];
+  return sections.filter(
+    (s) =>
+      s.title &&
+      !GENERIC_SECTION_RE.test(s.title.trim()) &&
+      s.items && s.items.length > 0 && s.items.length <= 200,
+  );
+}
+
 function sectionsLookUsable(sections) {
-  if (!sections || sections.length < 3 || sections.length > 40) return false;
-  const GENERIC = /^(resources?|english|root url|pages?|docs?|documentation|content|available languages.*|site|sitemap|index|home)$/i;
-  for (const s of sections) {
-    if (!s.title || GENERIC.test(s.title.trim())) return false;
-    if (!s.items || s.items.length === 0 || s.items.length > 200) return false;
-  }
-  return true;
+  if (!sections || sections.length > 40) return false;
+  return usableSections(sections).length >= 3;
 }
 
 async function organizeWithClaude(parsed, model) {
@@ -1556,6 +2033,11 @@ async function organizeWithClaude(parsed, model) {
  * is O(sections), not O(pages), so this is usually ~5-15s vs. a full reorg.
  */
 async function organizeFromSections(parsed, model) {
+  // Drop generic/empty/oversized sections so they don't pollute the sidebar
+  // (e.g. Stripe's llms.txt has a "Docs" catch-all and a 0-item "Instructions
+  // for Large Language Model Agents" section — neither is structural signal).
+  const sections = usableSections(parsed.sections);
+
   const systemPrompt = [
     'You assign a FontAwesome Free Solid icon to each documentation section, and lightly polish the section title.',
     'Output ONLY a valid JSON array — no prose, no markdown, no code fences.',
@@ -1574,9 +2056,9 @@ async function organizeFromSections(parsed, model) {
 
   const userPrompt = [
     `Site title: ${parsed.title || '(unknown)'}`,
-    `${parsed.sections.length} sections:`,
+    `${sections.length} sections:`,
     '',
-    ...parsed.sections.map((s, i) => `${i}. ${s.title} (${s.items.length} pages)`),
+    ...sections.map((s, i) => `${i}. ${s.title} (${s.items.length} pages)`),
     '',
     'Output the JSON array now.',
   ].join('\n');
@@ -1586,7 +2068,7 @@ async function organizeFromSections(parsed, model) {
     throw new Error('Fast-path expected a JSON array of {title, icon} entries.');
   }
 
-  const categories = parsed.sections.map((s, i) => {
+  const categories = sections.map((s, i) => {
     const meta = raw[i] || {};
     return {
       title: meta.title || s.title,
@@ -1866,19 +2348,21 @@ function printPagesTree(pages, indentLevel) {
   const indent = '  '.repeat(indentLevel);
   for (const page of pages) {
     const desc = page.description ? ` ${styles.dim('— ' + page.description)}` : '';
-    console.log(`${indent}${styles.dim('·')} ${page.title} ${styles.dim(page.url)}${desc}`);
+    const url = page.url ? ` ${styles.dim(page.url)}` : '';
+    console.log(`${indent}${styles.dim('·')} ${page.title}${url}${desc}`);
     if (page.pages && page.pages.length > 0) {
       printPagesTree(page.pages, indentLevel + 1);
     }
   }
 }
 
-function stageOrganized(organized, stagingDir) {
+function stageOrganized(organized, stagingDir, opts = {}) {
   const pickIcon = makeIconPicker();
   const usedSlugs = new Set(); // cross-dir: duplicates validator is global
   const byDir = new Map();
   const subDirsByTopDir = new Map();
-  const counts = { fileCount: 0 };
+  const counts = { fileCount: 0, skippedApiRef: 0 };
+  const skipApiReference = !!opts.skipApiReference;
 
   /**
    * Write a page (and its descendants) into `dir`. A page with children gets
@@ -1890,22 +2374,29 @@ function stageOrganized(organized, stagingDir) {
     const slug = resolveSlug(deriveSlug(page.url, page.title), usedSlugs);
     usedSlugs.add(slug);
 
-    const relFilePath = `${dir}/${slug}.md`;
+    // Group-only nodes (e.g. a resource sub-group within API Reference) have
+    // no backing page on the source site — they're pure sidebar containers.
+    // Skip the stub write but still recurse so their children land in the
+    // right subdirectory.
+    const isGroupOnly = !page.url;
 
-    // Sub-pages don't get icons per design decision.
-    const frontmatter = buildFrontmatter(topDir, page, slug, pickIcon, { skipIcon: isSubPage });
-    // x-import points at the source URL for this stub. The content-import
-    // step reads it to fetch the page body. x-prefixed custom field is the
-    // git-format convention for metadata the schema doesn't know about.
-    frontmatter['x-import'] = toBrowsableUrl(page.url);
+    if (!isGroupOnly) {
+      const relFilePath = `${dir}/${slug}.md`;
+      // Sub-pages don't get icons per design decision.
+      const frontmatter = buildFrontmatter(topDir, page, slug, pickIcon, { skipIcon: isSubPage });
+      // x-import points at the source URL for this stub. The content-import
+      // step reads it to fetch the page body. x-prefixed custom field is the
+      // git-format convention for metadata the schema doesn't know about.
+      frontmatter['x-import'] = toBrowsableUrl(page.url);
 
-    const absPath = path.join(stagingDir, relFilePath);
-    fs.mkdirSync(path.dirname(absPath), { recursive: true });
-    fs.writeFileSync(absPath, matter.stringify('', frontmatter));
-    counts.fileCount++;
+      const absPath = path.join(stagingDir, relFilePath);
+      fs.mkdirSync(path.dirname(absPath), { recursive: true });
+      fs.writeFileSync(absPath, matter.stringify('', frontmatter));
+      counts.fileCount++;
 
-    if (!byDir.has(dir)) byDir.set(dir, []);
-    byDir.get(dir).push(slug);
+      if (!byDir.has(dir)) byDir.set(dir, []);
+      byDir.get(dir).push(slug);
+    }
 
     const children = page.pages || [];
     if (children.length > 0) {
@@ -1916,6 +2407,10 @@ function stageOrganized(organized, stagingDir) {
 
   for (const cat of organized.categories || []) {
     const { topDir, subDir } = routeCategory(cat.title);
+    if (skipApiReference && topDir === 'reference') {
+      counts.skippedApiRef += countPagesDeep(cat.pages || []);
+      continue;
+    }
     const dir = subDir ? `${topDir}/${subDir}` : topDir;
     if (subDir) {
       if (!subDirsByTopDir.has(topDir)) subDirsByTopDir.set(topDir, []);
@@ -1939,7 +2434,16 @@ function stageOrganized(organized, stagingDir) {
     fs.writeFileSync(orderPath, body);
   }
 
-  return { fileCount: counts.fileCount, dirCount: byDir.size };
+  return { fileCount: counts.fileCount, dirCount: byDir.size, skippedApiRef: counts.skippedApiRef };
+}
+
+function countPagesDeep(pages) {
+  let n = 0;
+  for (const p of pages || []) {
+    if (p.url) n++;
+    if (p.pages && p.pages.length) n += countPagesDeep(p.pages);
+  }
+  return n;
 }
 
 /**
