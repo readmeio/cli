@@ -7,6 +7,16 @@
     "readme": "./bin/readme.js",
     "readme_": "./bin/readme.js"
   },
+  "exports": {
+    "./prompts": "./src/prompts/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "bin",
+    "src",
+    "vendor",
+    "README.md"
+  ],
   "scripts": {
     "start": "node bin/readme.js",
     "test": "echo \"No tests yet\""

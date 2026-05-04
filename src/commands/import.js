@@ -9,6 +9,13 @@ import matter from 'gray-matter';
 import * as styles from '../utils/styles.js';
 import { syncOas, extractOperations } from './oas-sync.js';
 import OASNormalize from 'oas-normalize';
+import {
+  slotOrphansPrompt,
+  iconizeNavPrompt,
+  organizeFromSectionsPrompt,
+  organizeFromScratchPrompt,
+  stripCodeFences,
+} from '../prompts/index.js';
 
 export const command = 'import';
 export const order = 7;
@@ -1900,39 +1907,10 @@ function normalizePath(url) {
  * Returns the orphans Claude couldn't slot.
  */
 async function slotOrphansWithClaude(scraped, orphans, model) {
-  const systemPrompt = [
-    'You assign orphan documentation pages to existing categories.',
-    'Output ONLY a valid JSON array of integers — one per orphan page, in order.',
-    'Each integer is the category index (0-based) the orphan belongs in, or -1 if none fit.',
-    '',
-    'Example output: [0, 2, 0, 1, -1, 3]',
-    '',
-    'Guidance:',
-    '- Choose the best semantic fit based on the orphan\'s title and URL path.',
-    '- Only use -1 when no existing category is plausible.',
-  ].join('\n');
-
-  const catList = scraped.categories.map((c, i) => {
-    const sample = c.pages.slice(0, 3).map((p) => p.title).join(', ');
-    return `${i}. ${c.title}${sample ? ` (e.g. ${sample})` : ''}`;
+  const { systemPrompt, userPrompt } = slotOrphansPrompt({
+    categories: scraped.categories,
+    orphans,
   });
-
-  const orphanList = orphans.map((p, i) => {
-    let relPath = p.url;
-    try { relPath = new URL(p.url).pathname; } catch {}
-    return `${i}. ${p.title} — ${relPath}`;
-  });
-
-  const userPrompt = [
-    'Categories:',
-    ...catList,
-    '',
-    `${orphans.length} orphan pages to slot:`,
-    ...orphanList,
-    '',
-    `Output a JSON array of ${orphans.length} integers, one per orphan in order (category index 0..${scraped.categories.length - 1}, or -1 for none).`,
-  ].join('\n');
-
   const raw = await runJsonQuery({ systemPrompt, userPrompt, model });
   if (!Array.isArray(raw)) {
     // If the model didn't cooperate, return all orphans unassigned.
@@ -1960,22 +1938,9 @@ async function slotOrphansWithClaude(scraped, orphans, model) {
  * one FontAwesome icon per category. Tiny Claude call, fast.
  */
 async function iconizeScrapedNav(scraped, _unused, model, siteTitle) {
-  const systemPrompt = [
-    'You assign one FontAwesome Free Solid icon to each documentation category.',
-    'Output ONLY a valid JSON array of icon name strings, one per input category, in order.',
-    'Use the icon name only (no "fa-" prefix, no object wrapper).',
-    '',
-    'Example output: ["rocket", "book", "code", "gear"]',
-  ].join('\n');
-
-  const userPrompt = [
-    `${scraped.categories.length} categories:`,
-    '',
-    ...scraped.categories.map((c, i) => `${i}. ${c.title}`),
-    '',
-    'Return a JSON array of FontAwesome icon names, one per category, in order.',
-  ].join('\n');
-
+  const { systemPrompt, userPrompt } = iconizeNavPrompt({
+    categories: scraped.categories,
+  });
   const icons = await runJsonQuery({ systemPrompt, userPrompt, model });
   const iconArr = Array.isArray(icons) ? icons : [];
   return {
@@ -2038,31 +2003,10 @@ async function organizeFromSections(parsed, model) {
   // for Large Language Model Agents" section — neither is structural signal).
   const sections = usableSections(parsed.sections);
 
-  const systemPrompt = [
-    'You assign a FontAwesome Free Solid icon to each documentation section, and lightly polish the section title.',
-    'Output ONLY a valid JSON array — no prose, no markdown, no code fences.',
-    '',
-    'Schema:',
-    '[',
-    '  { "title": "<lightly polished Title Case, 1-4 words>", "icon": "<fontawesome icon name, no fa- prefix>" },',
-    '  ...',
-    ']',
-    '',
-    'Rules:',
-    '- Return exactly one entry per input section, in the same order.',
-    '- Keep the original title unless it clearly benefits from Title Case fixes; do not rename for topic/tone.',
-    '- Pick an icon that semantically fits the section (e.g. rocket for Getting Started, code for API, plug for Integrations).',
-  ].join('\n');
-
-  const userPrompt = [
-    `Site title: ${parsed.title || '(unknown)'}`,
-    `${sections.length} sections:`,
-    '',
-    ...sections.map((s, i) => `${i}. ${s.title} (${s.items.length} pages)`),
-    '',
-    'Output the JSON array now.',
-  ].join('\n');
-
+  const { systemPrompt, userPrompt } = organizeFromSectionsPrompt({
+    siteTitle: parsed.title,
+    sections,
+  });
   const raw = await runJsonQuery({ systemPrompt, userPrompt, model });
   if (!Array.isArray(raw)) {
     throw new Error('Fast-path expected a JSON array of {title, icon} entries.');
@@ -2085,31 +2029,6 @@ async function organizeFromSections(parsed, model) {
 }
 
 async function organizeFromScratch(parsed, model) {
-  const systemPrompt = [
-    'You organize documentation pages into a category hierarchy for a ReadMe-style docs site.',
-    'Output ONLY a valid JSON object that matches the schema below — no prose, no markdown, no code fences.',
-    '',
-    'Schema:',
-    '{',
-    '  "title": "<short site or doc title>",',
-    '  "categories": [',
-    '    {',
-    '      "title": "<Title Case, 1-4 words>",',
-    '      "icon": "<FontAwesome solid icon name, e.g. rocket, book, code, gear, plug, key, chart-line>",',
-    '      "pageIds": [<integer id from the input list>, ...]',
-    '    }',
-    '  ]',
-    '}',
-    '',
-    'Rules:',
-    '- Refer to pages by their integer `id` only — do NOT echo back titles, urls, or descriptions. The caller reconstructs full page data from the ids.',
-    '- If the input sections look meaningful, use them as category starting points; merge or rename ones that are redundant, too-broad, or generic (e.g. "Resources", "English", "Root URL").',
-    '- If the input sections are not useful, invent good categories from page titles and URLs.',
-    '- Every category MUST include a FontAwesome Free Solid icon name that semantically fits the category theme. Use the icon name only (no "fa-" prefix).',
-    '- Every input page id MUST appear in exactly one category. Do not drop or duplicate ids.',
-    '- Keep category titles human-readable, Title Case, 1-4 words.',
-  ].join('\n');
-
   const items = parsed.sections.flatMap((s) =>
     s.items.map((i) => ({
       section: s.title,
@@ -2119,26 +2038,10 @@ async function organizeFromScratch(parsed, model) {
     })),
   );
 
-  // Compress the input Claude sees: id + title + relative path is enough to
-  // categorize. Full URLs repeat the origin every row; descriptions rarely
-  // change category assignment. The full item data is re-joined on our side
-  // using `items[id]` once Claude returns pageIds.
-  const compactLines = items.map((it, idx) => {
-    let relPath = it.url;
-    try { relPath = new URL(it.url).pathname + new URL(it.url).search; } catch {}
-    return `${idx}\t${it.title}\t${relPath}`;
+  const { systemPrompt, userPrompt } = organizeFromScratchPrompt({
+    siteTitle: parsed.title,
+    items,
   });
-
-  const userPrompt = [
-    `Site title: ${parsed.title || '(unknown)'}`,
-    `Origin: ${(() => { try { return new URL(items[0].url).origin; } catch { return '(unknown)'; } })()}`,
-    `${items.length} pages to organize. Each line below is: \`id\\ttitle\\tpath\`.`,
-    '',
-    ...compactLines,
-    '',
-    `Output the organized JSON object now. Reference pages by \`pageIds\` (integers 0..${items.length - 1}) — do not echo page data back.`,
-  ].join('\n');
-
   const raw = await runJsonQuery({ systemPrompt, userPrompt, model });
 
   // Rehydrate pages from the id references Claude returned.
@@ -2228,11 +2131,7 @@ async function runJsonQuery({ systemPrompt, userPrompt, model }) {
     process.stdout.write('\n');
   }
 
-  const stripped = text.trim()
-    .replace(/^```json\s*/i, '')
-    .replace(/^```\s*/i, '')
-    .replace(/\s*```$/, '')
-    .trim();
+  const stripped = stripCodeFences(text);
 
   try {
     return JSON.parse(stripped);
