@@ -13,6 +13,7 @@
     "./commands/oas-sync": "./src/commands/oas-sync.js",
     "./commands/oas-validate": "./src/commands/oas-validate.js",
     "./commands/import": "./src/commands/import.js",
+    "./commands/pretty": "./src/commands/pretty.js",
     "./prompts": "./src/prompts/index.js",
     "./package.json": "./package.json"
   },
