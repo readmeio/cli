@@ -1,41 +1,35 @@
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-import { spawn } from 'node:child_process';
-import { createRequire } from 'node:module';
-import { Option } from 'commander';
-import { query } from '@anthropic-ai/claude-agent-sdk';
-import matter from 'gray-matter';
-import * as styles from '../utils/styles.js';
-import { syncOas, extractOperations } from './oas-sync.js';
-import OASNormalize from 'oas-normalize';
-import {
-  slotOrphansPrompt,
-  iconizeNavPrompt,
-  organizeFromSectionsPrompt,
-  organizeFromScratchPrompt,
-  stripCodeFences,
-} from '../prompts/index.js';
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { spawn } from 'node:child_process'
+import { createRequire } from 'node:module'
+import { Option } from 'commander'
+import { query } from '@anthropic-ai/claude-agent-sdk'
+import matter from 'gray-matter'
+import * as styles from '../utils/styles.js'
+import { syncOas, extractOperations } from './oas-sync.js'
+import OASNormalize from 'oas-normalize'
+import { slotOrphansPrompt, iconizeNavPrompt, organizeFromSectionsPrompt, organizeFromScratchPrompt, stripCodeFences } from '../prompts/index.js'
 
-export const command = 'import';
-export const order = 7;
-export const description = 'Import content from a URL and package it as a ReadMe zip';
-export const hidden = true;
-export const skipBootstrap = true;
+export const command = 'import'
+export const order = 7
+export const description = 'Import content from a URL and package it as a ReadMe zip'
+export const hidden = true
+export const skipBootstrap = true
 
 export function args(cmd) {
-  cmd.requiredOption('--source <url-or-file>', 'URL to import from, or path to a local OpenAPI spec (.json/.yaml/.yml)');
-  cmd.option('-o, --output <path>', 'Output zip path (defaults to <basename>-readme.zip in cwd)');
-  cmd.option('--model <name>', 'Claude model alias: haiku, sonnet, opus', 'sonnet');
-  cmd.option('--firecrawl-key <key>', 'Firecrawl API key (or set FIRECRAWL_API_KEY env var) — enables JS-rendered sidebar scraping');
-  cmd.option('--skip-api-reference', 'Drop pages routed to the API Reference / reference dir. Use when uploading the OAS spec separately.');
+  cmd.requiredOption('--source <url-or-file>', 'URL to import from, or path to a local OpenAPI spec (.json/.yaml/.yml)')
+  cmd.option('-o, --output <path>', 'Output zip path (defaults to <basename>-readme.zip in cwd)')
+  cmd.option('--model <name>', 'Claude model alias: haiku, sonnet, opus', 'sonnet')
+  cmd.option('--firecrawl-key <key>', 'Firecrawl API key (or set FIRECRAWL_API_KEY env var) — enables JS-rendered sidebar scraping')
+  cmd.option('--skip-api-reference', 'Drop pages routed to the API Reference / reference dir. Use when uploading the OAS spec separately.')
   // Internal dev-only flag: skip the zip, keep staging, and boot the dev server
   // against it for quick visual previews. Hidden from --help.
-  cmd.addOption(new Option('--test').hideHelp());
+  cmd.addOption(new Option('--test').hideHelp())
   // Dump intermediate pipeline artifacts (llms parse, scraped nav, orphan
   // handling, final organized tree) so we can diff stages when the produced
   // sidebar disagrees with the source.
-  cmd.addOption(new Option('--debug').hideHelp());
+  cmd.addOption(new Option('--debug').hideHelp())
 }
 
 /**
@@ -54,133 +48,121 @@ export function args(cmd) {
  * @returns {Promise<{ source: 'url' | 'oas', outputZip?: string, stagingDir?: string, fileCount: number, duration: number, phases: Array<{ label: string, ms: number }> }>}
  */
 export async function importDocs(options) {
-  const startedAt = Date.now();
-  const phases = [];
+  const startedAt = Date.now()
+  const phases = []
   const timePhase = async (label, fn) => {
-    const t = Date.now();
-    const result = await fn();
-    phases.push({ label, ms: Date.now() - t });
-    return result;
-  };
+    const t = Date.now()
+    const result = await fn()
+    phases.push({ label, ms: Date.now() - t })
+    return result
+  }
 
-  const debugSnapshots = options.debug ? {} : null;
+  const debugSnapshots = options.debug ? {} : null
 
   // Dispatch: http(s) URL → docs-site scrape flow; anything else → local OAS.
   if (!/^https?:\/\//i.test(options.source)) {
-    return runOasImport(options.source, options, startedAt, phases, timePhase);
+    return runOasImport(options.source, options, startedAt, phases, timePhase)
   }
 
-  let sourceUrl;
+  let sourceUrl
   try {
-    sourceUrl = new URL(options.source);
+    sourceUrl = new URL(options.source)
   } catch {
-    throw new Error(`Invalid --source URL: ${options.source}`);
+    throw new Error(`Invalid --source URL: ${options.source}`)
   }
 
-  const outputZip = path.resolve(
-    options.output || path.join(process.cwd(), `${sourceUrl.hostname}-readme.zip`),
-  );
+  const outputZip = path.resolve(options.output || path.join(process.cwd(), `${sourceUrl.hostname}-readme.zip`))
 
-  console.log();
-  styles.info(`Importing from ${styles.bold(sourceUrl.toString())}`);
-  if (!options.test) styles.info(`Output: ${styles.bold(outputZip)}`);
-  console.log();
+  console.log()
+  styles.info(`Importing from ${styles.bold(sourceUrl.toString())}`)
+  if (!options.test) styles.info(`Output: ${styles.bold(outputZip)}`)
+  console.log()
 
   // Build the list of llms.txt URLs to probe, walking up the supplied path
   // from most-specific to root. For `https://mintlify.com/docs/quickstart`
   // we try `/docs/quickstart/llms.txt`, then `/docs/llms.txt`, then root.
   // This catches sites that scope llms.txt to a docs subpath.
-  const llmsCandidates = buildLlmsCandidates(sourceUrl);
-  styles.info(`Checking for llms.txt (${llmsCandidates.length} candidate${llmsCandidates.length === 1 ? '' : 's'})...`);
+  const llmsCandidates = buildLlmsCandidates(sourceUrl)
+  styles.info(`Checking for llms.txt (${llmsCandidates.length} candidate${llmsCandidates.length === 1 ? '' : 's'})...`)
 
   const { llms, llmsUrl } = await timePhase('fetch llms.txt', async () => {
     for (const candidate of llmsCandidates) {
-      const res = await fetchLlmsTxt(candidate);
-      if (res.ok) return { llms: res, llmsUrl: candidate };
-      styles.info(styles.dim(`  ${candidate} → ${res.status ? `HTTP ${res.status}` : res.error || 'failed'}`));
+      const res = await fetchLlmsTxt(candidate)
+      if (res.ok) return { llms: res, llmsUrl: candidate }
+      styles.info(styles.dim(`  ${candidate} → ${res.status ? `HTTP ${res.status}` : res.error || 'failed'}`))
     }
-    return { llms: null, llmsUrl: null };
-  });
-  console.log();
+    return { llms: null, llmsUrl: null }
+  })
+  console.log()
 
   if (!llms) {
-    styles.warning(`No llms.txt found at any probed path — falling back to sidebar discovery via scrape.`);
+    styles.warning(`No llms.txt found at any probed path — falling back to sidebar discovery via scrape.`)
   } else {
-    styles.info(styles.dim(`Using ${llmsUrl}.`));
+    styles.info(styles.dim(`Using ${llmsUrl}.`))
   }
 
   if (debugSnapshots) {
-    debugSnapshots['01-llms-parsed.json'] = { llmsUrl, parsed: llms ? llms.parsed : null };
+    debugSnapshots['01-llms-parsed.json'] = { llmsUrl, parsed: llms ? llms.parsed : null }
   }
 
-  let knownUrls = [];
+  let knownUrls = []
   if (llms) {
-    const totalItems = llms.parsed.sections.reduce((n, s) => n + s.items.length, 0);
+    const totalItems = llms.parsed.sections.reduce((n, s) => n + s.items.length, 0)
     styles.ok(
       `Found llms.txt — ${styles.bold(String(totalItems))} page${totalItems === 1 ? '' : 's'} across ${styles.bold(String(llms.parsed.sections.length))} section${llms.parsed.sections.length === 1 ? '' : 's'}${llms.parsed.title ? ` (${llms.parsed.title})` : ''}.`,
-    );
+    )
 
-    const rawKnownUrls = llms.parsed.sections.flatMap((s) =>
-      s.items.map((i) => ({ title: i.text, url: i.url, description: i.description })),
-    );
+    const rawKnownUrls = llms.parsed.sections.flatMap((s) => s.items.map((i) => ({ title: i.text, url: i.url, description: i.description })))
 
     // Dedupe llms.txt entries by pathname. Some sites (zod.dev, fumadocs) list
     // every in-page anchor as its own llms.txt row (`/v4?id=wrapping-up`,
     // `/v4?id=metadata`, …) even though they all live on one rendered page.
     // We prefer the "cleanest" URL per path — the shortest one, which is
     // usually the one without a query string or hash.
-    const byKnownPath = new Map();
+    const byKnownPath = new Map()
     for (const p of rawKnownUrls) {
-      const key = normalizePath(p.url);
-      const prev = byKnownPath.get(key);
-      if (!prev || p.url.length < prev.url.length) byKnownPath.set(key, p);
+      const key = normalizePath(p.url)
+      const prev = byKnownPath.get(key)
+      if (!prev || p.url.length < prev.url.length) byKnownPath.set(key, p)
     }
-    knownUrls = Array.from(byKnownPath.values());
-    const dropped = rawKnownUrls.length - knownUrls.length;
+    knownUrls = Array.from(byKnownPath.values())
+    const dropped = rawKnownUrls.length - knownUrls.length
     if (dropped > 0) {
-      styles.info(
-        `${styles.dim(`Collapsed ${dropped} anchor/query duplicates → ${knownUrls.length} unique pages.`)}`,
-      );
+      styles.info(`${styles.dim(`Collapsed ${dropped} anchor/query duplicates → ${knownUrls.length} unique pages.`)}`)
     }
   }
 
-  console.log();
-  const firecrawlKey = options.firecrawlKey || process.env.FIRECRAWL_API_KEY || null;
+  console.log()
+  const firecrawlKey = options.firecrawlKey || process.env.FIRECRAWL_API_KEY || null
 
   // Mintlify fast path — the canonical sidebar lives in docs.json/mint.json
   // at origin root. When present it gives us perfect structure with zero
   // HTML parsing, so try it before falling back to generic nav scraping.
-  styles.info(`Probing for Mintlify config (docs.json, mint.json)...`);
-  const mintlifyStart = Date.now();
-  const mintlifyNav = await timePhase('mintlify probe', () =>
-    tryMintlifyNav(sourceUrl.toString(), knownUrls, firecrawlKey),
-  );
+  styles.info(`Probing for Mintlify config (docs.json, mint.json)...`)
+  const mintlifyStart = Date.now()
+  const mintlifyNav = await timePhase('mintlify probe', () => tryMintlifyNav(sourceUrl.toString(), knownUrls, firecrawlKey))
   if (debugSnapshots) {
-    debugSnapshots['02a-mintlify-nav.json'] = mintlifyNav ? JSON.parse(JSON.stringify(mintlifyNav)) : null;
+    debugSnapshots['02a-mintlify-nav.json'] = mintlifyNav ? JSON.parse(JSON.stringify(mintlifyNav)) : null
   }
   if (mintlifyNav) {
-    const pageCount = mintlifyNav.categories.reduce((n, c) => n + c.pages.length, 0);
+    const pageCount = mintlifyNav.categories.reduce((n, c) => n + c.pages.length, 0)
     styles.ok(
       `Found Mintlify config at ${styles.bold(mintlifyNav.source)} in ${styles.bold(formatDuration(Date.now() - mintlifyStart))} — ${styles.bold(String(mintlifyNav.categories.length))} categor${mintlifyNav.categories.length === 1 ? 'y' : 'ies'}, ${styles.bold(String(pageCount))} pages.`,
-    );
+    )
   }
-  console.log();
+  console.log()
 
-  let scraped;
-  let scrapeStart = Date.now();
+  let scraped
+  let scrapeStart = Date.now()
   if (mintlifyNav) {
-    scraped = { title: mintlifyNav.title, categories: mintlifyNav.categories };
+    scraped = { title: mintlifyNav.title, categories: mintlifyNav.categories }
   } else {
-    styles.info(
-      `Scraping sidebar nav from ${styles.bold(sourceUrl.toString())}${firecrawlKey ? ' ' + styles.dim('(via Firecrawl)') : ''}...`,
-    );
-    scrapeStart = Date.now();
-    scraped = await timePhase('scrape nav', () =>
-      scrapeNavFromSite(sourceUrl.toString(), knownUrls, firecrawlKey),
-    );
+    styles.info(`Scraping sidebar nav from ${styles.bold(sourceUrl.toString())}${firecrawlKey ? ' ' + styles.dim('(via Firecrawl)') : ''}...`)
+    scrapeStart = Date.now()
+    scraped = await timePhase('scrape nav', () => scrapeNavFromSite(sourceUrl.toString(), knownUrls, firecrawlKey))
   }
   if (debugSnapshots) {
-    debugSnapshots['02-scraped-raw.json'] = scraped ? JSON.parse(JSON.stringify(scraped)) : null;
+    debugSnapshots['02-scraped-raw.json'] = scraped ? JSON.parse(JSON.stringify(scraped)) : null
   }
   // Prefer llms.txt when it has strong multi-section structure and the
   // scrape was a thin snapshot (common on big multi-tab docs — Stripe, AWS,
@@ -188,39 +170,39 @@ export async function importDocs(options) {
   // this override the 4-category scrape wins over a 25-section llms.txt and
   // hundreds of real pages end up smeared into orphan buckets.
   if (scraped && llms && knownUrls.length > 0) {
-    const scrapedPages = scraped.categories.reduce((n, c) => n + c.pages.length, 0);
-    const coverage = scrapedPages / knownUrls.length;
-    const llmsUsable = usableSections(llms.parsed.sections);
+    const scrapedPages = scraped.categories.reduce((n, c) => n + c.pages.length, 0)
+    const coverage = scrapedPages / knownUrls.length
+    const llmsUsable = usableSections(llms.parsed.sections)
     if (llmsUsable.length >= 5 && coverage < 0.5) {
       styles.info(
         `Scrape covered ${styles.bold(Math.round(coverage * 100) + '%')} of llms.txt pages; preferring llms.txt's ${styles.bold(String(llmsUsable.length))} sections for structure.`,
-      );
-      scraped = null;
+      )
+      scraped = null
     }
   }
 
   if (scraped) {
-    const directMatches = scraped.categories.reduce((n, c) => n + c.pages.length, 0);
+    const directMatches = scraped.categories.reduce((n, c) => n + c.pages.length, 0)
     if (knownUrls.length > 0) {
-      const slotted = slotOrphansByPath(scraped, knownUrls);
+      const slotted = slotOrphansByPath(scraped, knownUrls)
       if (debugSnapshots) {
         debugSnapshots['03-after-slot-by-path.json'] = {
           scraped: JSON.parse(JSON.stringify(scraped)),
           unslottedOrphans: slotted,
-        };
+        }
       }
-      const totalMatched = scraped.categories.reduce((n, c) => n + c.pages.length, 0);
+      const totalMatched = scraped.categories.reduce((n, c) => n + c.pages.length, 0)
       styles.ok(
         `Scraped nav in ${styles.bold(formatDuration(Date.now() - scrapeStart))} — ${styles.bold(String(scraped.categories.length))} categor${scraped.categories.length === 1 ? 'y' : 'ies'}, ${styles.bold(String(directMatches))} direct matches + ${styles.bold(String(totalMatched - directMatches))} slotted by path = ${styles.bold(String(totalMatched))}/${knownUrls.length}.`,
-      );
+      )
       // Sweep pass first: any page whose URL has a strong reference segment
       // (e.g. `/api-reference/...`) belongs in the API Reference category,
       // even if the site's sidebar spotlighted it under Developers or similar.
       // Sidebars often surface a few endpoints as "featured" outside the
       // reference section — we respect the URL over the nav here.
-      const moved = reclassifyReferencePages(scraped);
+      const moved = reclassifyReferencePages(scraped)
       if (moved > 0) {
-        styles.info(`Moved ${styles.bold(String(moved))} page${moved === 1 ? '' : 's'} into ${styles.bold('API Reference')} based on URL path.`);
+        styles.info(`Moved ${styles.bold(String(moved))} page${moved === 1 ? '' : 's'} into ${styles.bold('API Reference')} based on URL path.`)
       }
 
       if (slotted.length > 0) {
@@ -230,12 +212,12 @@ export async function importDocs(options) {
         // category the sweep pass just built, if any) and nest it by resource
         // segment so routeCategory() maps the whole thing to ReadMe's
         // `reference/` top-level dir.
-        const apiResult = collectApiReferencePages(slotted, scraped);
-        const otherOrphans = apiResult.nonApiOrphans;
-        if (apiResult.category) scraped.categories.push(apiResult.category);
+        const apiResult = collectApiReferencePages(slotted, scraped)
+        const otherOrphans = apiResult.nonApiOrphans
+        if (apiResult.category) scraped.categories.push(apiResult.category)
 
-        const buckets = bucketOrphansByPathType(otherOrphans, scraped);
-        for (const b of buckets) scraped.categories.push(b);
+        const buckets = bucketOrphansByPathType(otherOrphans, scraped)
+        for (const b of buckets) scraped.categories.push(b)
         if (debugSnapshots) {
           debugSnapshots['04-after-orphan-buckets.json'] = {
             apiReferenceCollected: apiResult.category
@@ -246,17 +228,17 @@ export async function importDocs(options) {
               : null,
             buckets,
             scraped: JSON.parse(JSON.stringify(scraped)),
-          };
+          }
         }
-        const parts = [];
+        const parts = []
         if (apiResult.category) {
-          parts.push(`${styles.bold(String(apiResult.category.pages.length))} in ${styles.bold('API Reference')}`);
+          parts.push(`${styles.bold(String(apiResult.category.pages.length))} in ${styles.bold('API Reference')}`)
         }
         for (const b of buckets) {
-          parts.push(`${styles.bold(String(b.pages.length))} in ${styles.bold(b.title)}`);
+          parts.push(`${styles.bold(String(b.pages.length))} in ${styles.bold(b.title)}`)
         }
         if (parts.length > 0) {
-          styles.info(`${styles.bold(String(slotted.length))} orphan page${slotted.length === 1 ? '' : 's'} bucketed by URL type: ${parts.join(', ')}.`);
+          styles.info(`${styles.bold(String(slotted.length))} orphan page${slotted.length === 1 ? '' : 's'} bucketed by URL type: ${parts.join(', ')}.`)
         }
       }
     } else {
@@ -266,110 +248,108 @@ export async function importDocs(options) {
       // structure: pages that share a common prefix often live under the
       // same section in the site's real hierarchy.
       if (scraped.categories.length === 1) {
-        const reclustered = clusterByUrlPath(scraped.categories[0].pages);
+        const reclustered = clusterByUrlPath(scraped.categories[0].pages)
         if (reclustered) {
-          scraped.categories = reclustered;
+          scraped.categories = reclustered
           styles.ok(
             `Scraped nav in ${styles.bold(formatDuration(Date.now() - scrapeStart))} — re-clustered by URL path into ${styles.bold(String(scraped.categories.length))} categor${scraped.categories.length === 1 ? 'y' : 'ies'}, ${styles.bold(String(directMatches))} pages discovered (no llms.txt).`,
-          );
+          )
         } else {
           styles.ok(
             `Scraped nav in ${styles.bold(formatDuration(Date.now() - scrapeStart))} — ${styles.bold(String(scraped.categories.length))} categor${scraped.categories.length === 1 ? 'y' : 'ies'}, ${styles.bold(String(directMatches))} pages discovered (no llms.txt).`,
-          );
+          )
         }
       } else {
         styles.ok(
           `Scraped nav in ${styles.bold(formatDuration(Date.now() - scrapeStart))} — ${styles.bold(String(scraped.categories.length))} categor${scraped.categories.length === 1 ? 'y' : 'ies'}, ${styles.bold(String(directMatches))} pages discovered (no llms.txt).`,
-        );
+        )
       }
     }
   } else if (!llms) {
-    throw new Error(
-      `No llms.txt and the sidebar scrape found no usable structure — can't import ${sourceUrl.toString()}.`,
-    );
+    throw new Error(`No llms.txt and the sidebar scrape found no usable structure — can't import ${sourceUrl.toString()}.`)
   } else {
-    styles.warning(`Couldn't extract a useful nav — falling back to llms.txt-based organization.`);
+    styles.warning(`Couldn't extract a useful nav — falling back to llms.txt-based organization.`)
   }
-  console.log();
+  console.log()
 
-  let organized;
-  const organizeStart = Date.now();
+  let organized
+  const organizeStart = Date.now()
   if (scraped) {
     // No Claude call — icons deferred. Use a neutral placeholder so the tree
     // view still prints cleanly.
     organized = {
       title: (llms && llms.parsed.title) || null,
       categories: scraped.categories.map((c) => ({ title: c.title, icon: null, pages: c.pages })),
-    };
+    }
   } else {
-    const fastPath = sectionsLookUsable(llms.parsed.sections);
-    styles.info(
-      `Organizing with Claude (${styles.bold(options.model)}, ${fastPath ? 'fast path: icons only' : 'full reorg'})...`,
-    );
-    organized = await timePhase('claude organize', () => organizeWithClaude(llms.parsed, options.model));
+    const fastPath = sectionsLookUsable(llms.parsed.sections)
+    styles.info(`Organizing with Claude (${styles.bold(options.model)}, ${fastPath ? 'fast path: icons only' : 'full reorg'})...`)
+    organized = await timePhase('claude organize', () => organizeWithClaude(llms.parsed, options.model))
   }
-  styles.ok(`Organized in ${styles.bold(formatDuration(Date.now() - organizeStart))}.`);
+  styles.ok(`Organized in ${styles.bold(formatDuration(Date.now() - organizeStart))}.`)
   if (debugSnapshots) {
-    debugSnapshots['05-organized.json'] = organized;
-    const debugDir = path.join(os.tmpdir(), `readme-import-debug-${sourceUrl.hostname}-${Date.now()}`);
-    fs.mkdirSync(debugDir, { recursive: true });
+    debugSnapshots['05-organized.json'] = organized
+    const debugDir = path.join(os.tmpdir(), `readme-import-debug-${sourceUrl.hostname}-${Date.now()}`)
+    fs.mkdirSync(debugDir, { recursive: true })
     for (const [name, data] of Object.entries(debugSnapshots)) {
-      fs.writeFileSync(path.join(debugDir, name), JSON.stringify(data, null, 2));
+      fs.writeFileSync(path.join(debugDir, name), JSON.stringify(data, null, 2))
     }
-    styles.info(`${styles.dim(`Debug snapshots → ${debugDir}`)}`);
+    styles.info(`${styles.dim(`Debug snapshots → ${debugDir}`)}`)
   }
-  console.log();
+  console.log()
 
-  console.log(`  ${styles.bold(organized.title || '(untitled)')}`);
+  console.log(`  ${styles.bold(organized.title || '(untitled)')}`)
   for (const cat of organized.categories || []) {
-    console.log();
-    const iconLabel = cat.icon ? `${styles.brand(`[${cat.icon}]`)} ` : '';
-    console.log(`  ${iconLabel}${styles.bold(cat.title)}`);
-    printPagesTree(cat.pages || [], 2);
+    console.log()
+    const iconLabel = cat.icon ? `${styles.brand(`[${cat.icon}]`)} ` : ''
+    console.log(`  ${iconLabel}${styles.bold(cat.title)}`)
+    printPagesTree(cat.pages || [], 2)
   }
 
-  const stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'readme-import-'));
+  const stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'readme-import-'))
 
-  let result;
+  let result
   try {
-    styles.info(`Staging frontmatter stubs in ${styles.bold(stagingDir)}...`);
-    const stageStart = Date.now();
-    const staged = await timePhase('stage stubs', async () => stageOrganized(organized, stagingDir, { skipApiReference: !!options.skipApiReference }));
-    ensureDocsLandingPage(stagingDir, organized.title || sourceUrl.hostname);
-    styles.ok(`Staged ${styles.bold(String(staged.fileCount))} stub${staged.fileCount === 1 ? '' : 's'} across ${styles.bold(String(staged.dirCount))} director${staged.dirCount === 1 ? 'y' : 'ies'} in ${styles.bold(formatDuration(Date.now() - stageStart))}.`);
+    styles.info(`Staging frontmatter stubs in ${styles.bold(stagingDir)}...`)
+    const stageStart = Date.now()
+    const staged = await timePhase('stage stubs', async () => stageOrganized(organized, stagingDir, { skipApiReference: !!options.skipApiReference }))
+    ensureDocsLandingPage(stagingDir, organized.title || sourceUrl.hostname)
+    styles.ok(
+      `Staged ${styles.bold(String(staged.fileCount))} stub${staged.fileCount === 1 ? '' : 's'} across ${styles.bold(String(staged.dirCount))} director${staged.dirCount === 1 ? 'y' : 'ies'} in ${styles.bold(formatDuration(Date.now() - stageStart))}.`,
+    )
     if (staged.skippedApiRef > 0) {
-      styles.info(`Skipped ${styles.bold(String(staged.skippedApiRef))} API reference page${staged.skippedApiRef === 1 ? '' : 's'} (--skip-api-reference)`);
+      styles.info(`Skipped ${styles.bold(String(staged.skippedApiRef))} API reference page${staged.skippedApiRef === 1 ? '' : 's'} (--skip-api-reference)`)
     }
-    console.log();
+    console.log()
 
     if (options.test) {
-      styles.ok(`Done in ${styles.bold(formatDuration(Date.now() - startedAt))}! Staged ${styles.bold(String(staged.fileCount))} files at ${styles.bold(stagingDir)}`);
-      console.log();
-      styles.info('Starting the dev server for preview...');
-      console.log();
-      await runDevPreview(stagingDir);
-      return { source: 'url', stagingDir, fileCount: staged.fileCount, duration: Date.now() - startedAt, phases };
+      styles.ok(`Done in ${styles.bold(formatDuration(Date.now() - startedAt))}! Staged ${styles.bold(String(staged.fileCount))} files at ${styles.bold(stagingDir)}`)
+      console.log()
+      styles.info('Starting the dev server for preview...')
+      console.log()
+      await runDevPreview(stagingDir)
+      return { source: 'url', stagingDir, fileCount: staged.fileCount, duration: Date.now() - startedAt, phases }
     }
 
     if (staged.fileCount === 0) {
-      styles.warning('Staging directory is empty — skipping zip.');
-      return { source: 'url', fileCount: 0, duration: Date.now() - startedAt, phases };
+      styles.warning('Staging directory is empty — skipping zip.')
+      return { source: 'url', fileCount: 0, duration: Date.now() - startedAt, phases }
     }
 
-    styles.info(`Packaging ${styles.bold(String(staged.fileCount))} files into ${styles.bold(outputZip)}...`);
-    await timePhase('zip', () => createZip(stagingDir, outputZip));
+    styles.info(`Packaging ${styles.bold(String(staged.fileCount))} files into ${styles.bold(outputZip)}...`)
+    await timePhase('zip', () => createZip(stagingDir, outputZip))
 
-    console.log();
-    styles.ok(`Done in ${styles.bold(formatDuration(Date.now() - startedAt))}! Your ReadMe import is ready at ${styles.bold(outputZip)}`);
-    console.log(styles.dim(`  ⏱  ${phases.map((p) => `${p.label} ${formatDuration(p.ms)}`).join(' · ')}`));
-    result = { source: 'url', outputZip, fileCount: staged.fileCount, duration: Date.now() - startedAt, phases };
+    console.log()
+    styles.ok(`Done in ${styles.bold(formatDuration(Date.now() - startedAt))}! Your ReadMe import is ready at ${styles.bold(outputZip)}`)
+    console.log(styles.dim(`  ⏱  ${phases.map((p) => `${p.label} ${formatDuration(p.ms)}`).join(' · ')}`))
+    result = { source: 'url', outputZip, fileCount: staged.fileCount, duration: Date.now() - startedAt, phases }
   } finally {
     if (!options.test) {
-      fs.rmSync(stagingDir, { recursive: true, force: true });
+      fs.rmSync(stagingDir, { recursive: true, force: true })
     }
   }
 
-  return result;
+  return result
 }
 
 /**
@@ -381,12 +361,12 @@ export async function importDocs(options) {
  */
 export async function run(options) {
   try {
-    await importDocs(options);
+    await importDocs(options)
   } catch (err) {
-    styles.error(err.message || String(err));
-    process.exit(1);
+    styles.error(err.message || String(err))
+    process.exit(1)
   }
-  process.exit(0);
+  process.exit(0)
 }
 
 /**
@@ -395,44 +375,40 @@ export async function run(options) {
  * from the spec at render time, so we don't need to stub anything here.
  */
 async function runOasImport(sourcePath, options, startedAt, phases, timePhase) {
-  const absPath = path.resolve(sourcePath);
+  const absPath = path.resolve(sourcePath)
   if (!fs.existsSync(absPath) || !fs.statSync(absPath).isFile()) {
-    throw new Error(`File not found: ${absPath}`);
+    throw new Error(`File not found: ${absPath}`)
   }
-  const ext = path.extname(absPath).toLowerCase();
+  const ext = path.extname(absPath).toLowerCase()
   if (!['.json', '.yaml', '.yml'].includes(ext)) {
-    throw new Error(`Unsupported file type ${ext || '(none)'} — expected .json, .yaml, or .yml.`);
+    throw new Error(`Unsupported file type ${ext || '(none)'} — expected .json, .yaml, or .yml.`)
   }
 
-  const basename = path.basename(absPath, ext);
-  const outputZip = path.resolve(
-    options.output || path.join(process.cwd(), `${basename}-readme.zip`),
-  );
+  const basename = path.basename(absPath, ext)
+  const outputZip = path.resolve(options.output || path.join(process.cwd(), `${basename}-readme.zip`))
 
-  console.log();
-  styles.info(`Importing OpenAPI spec from ${styles.bold(absPath)}`);
-  if (!options.test) styles.info(`Output: ${styles.bold(outputZip)}`);
-  console.log();
+  console.log()
+  styles.info(`Importing OpenAPI spec from ${styles.bold(absPath)}`)
+  if (!options.test) styles.info(`Output: ${styles.bold(outputZip)}`)
+  console.log()
 
   // Parse + sanity-check it's actually an OAS before we stage anything.
   // We do this in two stages: a cheap parse + looks-like-OAS check (fail
   // fast on clearly wrong inputs), then a normalize step that will repair
   // fixable issues (Swagger 2 → OpenAPI 3 conversion, bundling $refs, etc.).
   const { spec, opCount, wasFixed, fixReason } = await timePhase('parse spec', async () => {
-    const raw = fs.readFileSync(absPath, 'utf-8');
-    let parsed;
+    const raw = fs.readFileSync(absPath, 'utf-8')
+    let parsed
     try {
-      parsed = ext === '.json' ? JSON.parse(raw) : yamlRequire().load(raw);
+      parsed = ext === '.json' ? JSON.parse(raw) : yamlRequire().load(raw)
     } catch (e) {
-      throw new Error(`Couldn't parse ${absPath} as ${ext === '.json' ? 'JSON' : 'YAML'}: ${e.message}`);
+      throw new Error(`Couldn't parse ${absPath} as ${ext === '.json' ? 'JSON' : 'YAML'}: ${e.message}`)
     }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      throw new Error(`File isn't a usable object: ${absPath}`);
+      throw new Error(`File isn't a usable object: ${absPath}`)
     }
     if (!looksLikeOas(parsed)) {
-      throw new Error(
-        `Not an OpenAPI/Swagger spec — no top-level openapi / swagger field and no paths section.`,
-      );
+      throw new Error(`Not an OpenAPI/Swagger spec — no top-level openapi / swagger field and no paths section.`)
     }
 
     // Normalize via oas-normalize. `bundle()` handles the common fix-ups:
@@ -440,115 +416,111 @@ async function runOasImport(sourcePath, options, startedAt, phases, timePhase) {
     // resolution. We try it first (even on apparently-valid specs) so Postman
     // collections actually get converted. If bundle errors we fall back to
     // the original spec when it passes validate, else fail hard.
-    const normalizer = new OASNormalize(parsed);
+    const normalizer = new OASNormalize(parsed)
     try {
-      const bundled = await normalizer.bundle();
-      const changed = JSON.stringify(bundled) !== JSON.stringify(parsed);
+      const bundled = await normalizer.bundle()
+      const changed = JSON.stringify(bundled) !== JSON.stringify(parsed)
       return {
         spec: bundled,
         opCount: countOperations(bundled),
         wasFixed: changed,
         fixReason: changed ? 'normalized (Swagger 2 → OpenAPI 3, Postman conversion, or $ref inlining)' : null,
-      };
+      }
     } catch (bundleErr) {
       try {
-        await normalizer.validate();
-        return { spec: parsed, opCount: countOperations(parsed), wasFixed: false };
+        await normalizer.validate()
+        return { spec: parsed, opCount: countOperations(parsed), wasFixed: false }
       } catch (validateErr) {
         throw new Error(
           `Spec is invalid and couldn't be auto-fixed.\n  Validation error: ${validateErr.message.split('\n')[0]}\n  Fix attempt error: ${bundleErr.message.split('\n')[0]}`,
-        );
+        )
       }
     }
-  });
+  })
 
   if (wasFixed) {
-    styles.warning(`Spec had issues — auto-fixed (${fixReason}).`);
+    styles.warning(`Spec had issues — auto-fixed (${fixReason}).`)
   }
 
-  const title = spec.info?.title || basename;
-  const version = spec.info?.version || null;
-  styles.ok(
-    `Parsed OpenAPI ${version ? 'v' + version + ' ' : ''}spec — ${styles.bold(title)} (${styles.bold(String(opCount))} operation${opCount === 1 ? '' : 's'}).`,
-  );
-  console.log();
+  const title = spec.info?.title || basename
+  const version = spec.info?.version || null
+  styles.ok(`Parsed OpenAPI ${version ? 'v' + version + ' ' : ''}spec — ${styles.bold(title)} (${styles.bold(String(opCount))} operation${opCount === 1 ? '' : 's'}).`)
+  console.log()
 
-  const stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'readme-import-'));
-  let result;
+  const stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'readme-import-'))
+  let result
   try {
     const { stagedName } = await timePhase('stage spec', async () => {
       // If we auto-fixed the spec, serialize the fixed version as JSON (always
       // writable, avoids YAML-ambiguity regressions). Otherwise copy the
       // original file verbatim so formatting/comments are preserved.
-      const rawName = path.basename(absPath);
-      let targetName;
-      let targetContent;
+      const rawName = path.basename(absPath)
+      let targetName
+      let targetContent
       if (wasFixed) {
-        targetName = rawName.replace(/\.(ya?ml|json)$/i, '.json');
-        targetContent = JSON.stringify(spec, null, 2);
+        targetName = rawName.replace(/\.(ya?ml|json)$/i, '.json')
+        targetContent = JSON.stringify(spec, null, 2)
       } else {
-        targetName = rawName;
-        targetContent = null; // signal to copy
+        targetName = rawName
+        targetContent = null // signal to copy
       }
-      const targetPath = path.join(stagingDir, 'reference', targetName);
-      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      const targetPath = path.join(stagingDir, 'reference', targetName)
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true })
       if (targetContent === null) {
-        fs.copyFileSync(absPath, targetPath);
+        fs.copyFileSync(absPath, targetPath)
       } else {
-        fs.writeFileSync(targetPath, targetContent);
+        fs.writeFileSync(targetPath, targetContent)
       }
 
       // syncOas walks reference/ and generates one <operationId>.md per
       // operation, grouped by tag. We pass stagingDir as the "git root" so
       // its refDir lookup lands on stagingDir/reference/.
-      syncOas(stagingDir);
-      return { stagedName: targetName };
-    });
+      syncOas(stagingDir)
+      return { stagedName: targetName }
+    })
 
     // Ensure there's always at least a landing page — OAS-only imports leave
     // docs/ empty, which makes `--test` dev server show "no pages" at /.
-    ensureDocsLandingPage(stagingDir, title, opCount);
+    ensureDocsLandingPage(stagingDir, title, opCount)
 
     // OAS operation pages don't need an x-import URL — their content is
     // intrinsic to the spec (summary/description live in the OpenAPI doc,
     // and the page's `api:` frontmatter already points back to it).
-    const pageCount = countReferencePages(stagingDir, stagedName);
+    const pageCount = countReferencePages(stagingDir, stagedName)
 
-    styles.ok(
-      `Staged ${styles.bold(stagedName)} and generated ${styles.bold(String(pageCount))} operation page${pageCount === 1 ? '' : 's'} under ${styles.bold('reference/')}.`,
-    );
-    console.log();
+    styles.ok(`Staged ${styles.bold(stagedName)} and generated ${styles.bold(String(pageCount))} operation page${pageCount === 1 ? '' : 's'} under ${styles.bold('reference/')}.`)
+    console.log()
 
     if (options.test) {
-      styles.ok(`Done in ${styles.bold(formatDuration(Date.now() - startedAt))}! Staged at ${styles.bold(stagingDir)}`);
-      console.log();
-      styles.info('Starting the dev server for preview...');
-      console.log();
-      await runDevPreview(stagingDir);
-      return { source: 'oas', stagingDir, fileCount: pageCount, duration: Date.now() - startedAt, phases };
+      styles.ok(`Done in ${styles.bold(formatDuration(Date.now() - startedAt))}! Staged at ${styles.bold(stagingDir)}`)
+      console.log()
+      styles.info('Starting the dev server for preview...')
+      console.log()
+      await runDevPreview(stagingDir)
+      return { source: 'oas', stagingDir, fileCount: pageCount, duration: Date.now() - startedAt, phases }
     }
 
-    await timePhase('zip', () => createZip(stagingDir, outputZip));
+    await timePhase('zip', () => createZip(stagingDir, outputZip))
 
-    console.log();
-    styles.ok(`Done in ${styles.bold(formatDuration(Date.now() - startedAt))}! Your ReadMe import is ready at ${styles.bold(outputZip)}`);
-    console.log(styles.dim(`  ⏱  ${phases.map((p) => `${p.label} ${formatDuration(p.ms)}`).join(' · ')}`));
-    result = { source: 'oas', outputZip, fileCount: pageCount, duration: Date.now() - startedAt, phases };
+    console.log()
+    styles.ok(`Done in ${styles.bold(formatDuration(Date.now() - startedAt))}! Your ReadMe import is ready at ${styles.bold(outputZip)}`)
+    console.log(styles.dim(`  ⏱  ${phases.map((p) => `${p.label} ${formatDuration(p.ms)}`).join(' · ')}`))
+    result = { source: 'oas', outputZip, fileCount: pageCount, duration: Date.now() - startedAt, phases }
   } finally {
-    if (!options.test) fs.rmSync(stagingDir, { recursive: true, force: true });
+    if (!options.test) fs.rmSync(stagingDir, { recursive: true, force: true })
   }
-  return result;
+  return result
 }
 
 // js-yaml is installed transitively (via oas-sync.js) but not in our direct
 // deps. Load it lazily on first use so the JSON-only path doesn't pay for it.
-let _yaml = null;
+let _yaml = null
 function yamlRequire() {
   if (!_yaml) {
-    const require = createRequire(import.meta.url);
-    _yaml = require('js-yaml');
+    const require = createRequire(import.meta.url)
+    _yaml = require('js-yaml')
   }
-  return _yaml;
+  return _yaml
 }
 
 /**
@@ -558,22 +530,22 @@ function yamlRequire() {
  * catch malformed inputs that slip through here.
  */
 function looksLikeOas(obj) {
-  if (!obj || typeof obj !== 'object') return false;
-  if (typeof obj.openapi === 'string' || typeof obj.swagger === 'string') return true;
-  if (obj.paths && typeof obj.paths === 'object') return true;
+  if (!obj || typeof obj !== 'object') return false
+  if (typeof obj.openapi === 'string' || typeof obj.swagger === 'string') return true
+  if (obj.paths && typeof obj.paths === 'object') return true
   // Postman collections — oas-normalize auto-converts these to OpenAPI.
-  if (obj.info && typeof obj.info.schema === 'string' && /getpostman\.com/i.test(obj.info.schema)) return true;
-  return false;
+  if (obj.info && typeof obj.info.schema === 'string' && /getpostman\.com/i.test(obj.info.schema)) return true
+  return false
 }
 
 function countOperations(spec) {
-  let n = 0;
+  let n = 0
   for (const p of Object.values(spec.paths || {})) {
     for (const k of Object.keys(p || {})) {
-      if (/^(get|post|put|patch|delete|options|head|trace)$/i.test(k)) n++;
+      if (/^(get|post|put|patch|delete|options|head|trace)$/i.test(k)) n++
     }
   }
-  return n;
+  return n
 }
 
 /**
@@ -581,23 +553,26 @@ function countOperations(spec) {
  * given spec file. Used only for the "generated N pages" success message.
  */
 function countReferencePages(stagingDir, specFilename) {
-  const refDir = path.join(stagingDir, 'reference');
-  if (!fs.existsSync(refDir)) return 0;
+  const refDir = path.join(stagingDir, 'reference')
+  if (!fs.existsSync(refDir)) return 0
 
-  let count = 0;
+  let count = 0
   const walk = (dir) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) { walk(full); continue; }
-      if (!entry.name.endsWith('.md')) continue;
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        walk(full)
+        continue
+      }
+      if (!entry.name.endsWith('.md')) continue
 
-      const parsed = matter(fs.readFileSync(full, 'utf-8'));
-      const fm = parsed.data || {};
-      if (fm.api && fm.api.file === specFilename) count++;
+      const parsed = matter(fs.readFileSync(full, 'utf-8'))
+      const fm = parsed.data || {}
+      if (fm.api && fm.api.file === specFilename) count++
     }
-  };
-  walk(refDir);
-  return count;
+  }
+  walk(refDir)
+  return count
 }
 
 /**
@@ -608,23 +583,21 @@ function countReferencePages(stagingDir, specFilename) {
  * `/docs/...` makes it look like nothing imported.
  */
 function ensureDocsLandingPage(stagingDir, siteTitle, opCount = 0) {
-  const docsDir = path.join(stagingDir, 'docs');
-  if (fs.existsSync(docsDir) && fs.readdirSync(docsDir).length > 0) return;
+  const docsDir = path.join(stagingDir, 'docs')
+  if (fs.existsSync(docsDir) && fs.readdirSync(docsDir).length > 0) return
 
-  const categoryDir = path.join(docsDir, 'Getting Started');
-  fs.mkdirSync(categoryDir, { recursive: true });
+  const categoryDir = path.join(docsDir, 'Getting Started')
+  fs.mkdirSync(categoryDir, { recursive: true })
 
-  const name = siteTitle || 'your API';
-  const title = siteTitle ? `Welcome to ${siteTitle}` : 'Getting Started';
-  const body = opCount > 0
-    ? `This import brought in **${opCount} API operation${opCount === 1 ? '' : 's'}** from ${name}.\n\n👉 [Browse the API Reference →](/reference)\n\nThis page is a placeholder landing. Replace or expand it with onboarding content specific to your API.\n`
-    : `This is a placeholder landing page. Replace it with your docs.\n`;
-  fs.writeFileSync(
-    path.join(categoryDir, 'getting-started.md'),
-    matter.stringify(body, { title, icon: formatIconClass('rocket') }),
-  );
-  fs.writeFileSync(path.join(categoryDir, '_order.yaml'), '- getting-started\n');
-  fs.writeFileSync(path.join(docsDir, '_order.yaml'), '- Getting Started\n');
+  const name = siteTitle || 'your API'
+  const title = siteTitle ? `Welcome to ${siteTitle}` : 'Getting Started'
+  const body =
+    opCount > 0
+      ? `This import brought in **${opCount} API operation${opCount === 1 ? '' : 's'}** from ${name}.\n\n👉 [Browse the API Reference →](/reference)\n\nThis page is a placeholder landing. Replace or expand it with onboarding content specific to your API.\n`
+      : `This is a placeholder landing page. Replace it with your docs.\n`
+  fs.writeFileSync(path.join(categoryDir, 'getting-started.md'), matter.stringify(body, { title, icon: formatIconClass('rocket') }))
+  fs.writeFileSync(path.join(categoryDir, '_order.yaml'), '- getting-started\n')
+  fs.writeFileSync(path.join(docsDir, '_order.yaml'), '- Getting Started\n')
 }
 
 /**
@@ -646,47 +619,45 @@ export async function runAgent({ userPrompt, systemPrompt, cwd, model }) {
     if (message.type === 'assistant' && message.message?.content) {
       for (const block of message.message.content) {
         if (block.type === 'text' && block.text?.trim()) {
-          console.log(styles.dim(block.text.trim()));
+          console.log(styles.dim(block.text.trim()))
         } else if (block.type === 'tool_use') {
-          console.log(`${styles.brand('›')} ${styles.bold(block.name)}`);
+          console.log(`${styles.brand('›')} ${styles.bold(block.name)}`)
         }
       }
     } else if (message.type === 'result') {
       if (message.subtype && message.subtype !== 'success') {
-        const err = new Error(
-          `Agent result subtype=${message.subtype}${message.error?.message ? ': ' + message.error.message : ''}`,
-        );
-        err.subtype = message.subtype;
-        err.result = message;
-        throw err;
+        const err = new Error(`Agent result subtype=${message.subtype}${message.error?.message ? ': ' + message.error.message : ''}`)
+        err.subtype = message.subtype
+        err.result = message
+        throw err
       }
-      return;
+      return
     }
   }
 }
 
 function makeStagingGuard(stagingDir) {
-  const absStaging = path.resolve(stagingDir);
-  const WRITE_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit', 'MultiEdit']);
+  const absStaging = path.resolve(stagingDir)
+  const WRITE_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit', 'MultiEdit'])
 
   return async (toolName, input) => {
-    if (!WRITE_TOOLS.has(toolName)) return { behavior: 'allow' };
-    const fp = input?.file_path;
+    if (!WRITE_TOOLS.has(toolName)) return { behavior: 'allow' }
+    const fp = input?.file_path
     if (typeof fp !== 'string' || !fp) {
-      return { behavior: 'deny', message: `${toolName}: missing file_path` };
+      return { behavior: 'deny', message: `${toolName}: missing file_path` }
     }
-    const abs = path.isAbsolute(fp) ? path.resolve(fp) : path.resolve(absStaging, fp);
-    const rel = path.relative(absStaging, abs);
-    const inside = rel && !rel.startsWith('..') && !path.isAbsolute(rel);
+    const abs = path.isAbsolute(fp) ? path.resolve(fp) : path.resolve(absStaging, fp)
+    const rel = path.relative(absStaging, abs)
+    const inside = rel && !rel.startsWith('..') && !path.isAbsolute(rel)
     if (!inside) {
-      styles.warning(`Blocked ${toolName} outside staging: ${fp}`);
+      styles.warning(`Blocked ${toolName} outside staging: ${fp}`)
       return {
         behavior: 'deny',
         message: `Writes must stay inside the staging directory ${absStaging}. Refused: ${fp}`,
-      };
+      }
     }
-    return { behavior: 'allow' };
-  };
+    return { behavior: 'allow' }
+  }
 }
 
 /**
@@ -698,73 +669,69 @@ function makeStagingGuard(stagingDir) {
  */
 function runDevPreview(stagingDir) {
   return new Promise((resolve, reject) => {
-    const selfBin = process.argv[1] && fs.existsSync(process.argv[1]) ? process.argv[1] : null;
-    const [cmd, args] = selfBin
-      ? [process.execPath, [selfBin, 'dev', '--no-check']]
-      : ['npx', ['--yes', '@readme/cli-beta', 'dev', '--no-check']];
+    const selfBin = process.argv[1] && fs.existsSync(process.argv[1]) ? process.argv[1] : null
+    const [cmd, args] = selfBin ? [process.execPath, [selfBin, 'dev', '--no-check']] : ['npx', ['--yes', '@readme/cli-beta', 'dev', '--no-check']]
     const child = spawn(cmd, args, {
       cwd: stagingDir,
       stdio: ['inherit', 'pipe', 'inherit'],
-    });
+    })
 
-    let opened = false;
+    let opened = false
     child.stdout.on('data', (chunk) => {
-      process.stdout.write(chunk);
-      if (opened) return;
-      const match = chunk.toString().match(/https?:\/\/localhost:\d+/);
+      process.stdout.write(chunk)
+      if (opened) return
+      const match = chunk.toString().match(/https?:\/\/localhost:\d+/)
       if (match) {
-        opened = true;
-        openUrl(match[0]);
+        opened = true
+        openUrl(match[0])
       }
-    });
+    })
 
-    child.on('close', () => resolve());
-    child.on('error', reject);
-  });
+    child.on('close', () => resolve())
+    child.on('error', reject)
+  })
 }
 
 function openUrl(url) {
-  const cmd = process.platform === 'darwin' ? 'open'
-    : process.platform === 'win32' ? 'cmd'
-    : 'xdg-open';
-  const args = process.platform === 'win32' ? ['/c', 'start', '""', url] : [url];
+  const cmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'cmd' : 'xdg-open'
+  const args = process.platform === 'win32' ? ['/c', 'start', '""', url] : [url]
   try {
-    spawn(cmd, args, { stdio: 'ignore', detached: true }).unref();
+    spawn(cmd, args, { stdio: 'ignore', detached: true }).unref()
   } catch {
     // Best-effort — the URL is still in the terminal output for the user.
   }
 }
 
 function listFiles(dir, prefix = '') {
-  const results = [];
-  if (!fs.existsSync(dir)) return results;
+  const results = []
+  if (!fs.existsSync(dir)) return results
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name.startsWith('.')) continue;
-    const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.name.startsWith('.')) continue
+    const rel = prefix ? `${prefix}/${entry.name}` : entry.name
     if (entry.isDirectory()) {
-      results.push(...listFiles(path.join(dir, entry.name), rel));
+      results.push(...listFiles(path.join(dir, entry.name), rel))
     } else {
-      results.push(rel);
+      results.push(rel)
     }
   }
-  return results;
+  return results
 }
 
 function createZip(sourceDir, outputZip) {
-  fs.mkdirSync(path.dirname(outputZip), { recursive: true });
-  if (fs.existsSync(outputZip)) fs.rmSync(outputZip);
+  fs.mkdirSync(path.dirname(outputZip), { recursive: true })
+  if (fs.existsSync(outputZip)) fs.rmSync(outputZip)
 
   return new Promise((resolve, reject) => {
     const child = spawn('zip', ['-r', '-q', outputZip, '.'], {
       cwd: sourceDir,
       stdio: 'inherit',
-    });
+    })
     child.on('close', (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`zip exited with code ${code}`));
-    });
-    child.on('error', reject);
-  });
+      if (code === 0) resolve()
+      else reject(new Error(`zip exited with code ${code}`))
+    })
+    child.on('error', reject)
+  })
 }
 
 /**
@@ -786,24 +753,24 @@ function createZip(sourceDir, outputZip) {
  * found or parseable.
  */
 async function tryMintlifyNav(sourceUrl, knownPages, firecrawlKey) {
-  const origin = new URL(sourceUrl).origin;
-  const fetchHtml = firecrawlKey ? makeFirecrawlFetcher(firecrawlKey) : fetchHtmlDirect;
+  const origin = new URL(sourceUrl).origin
+  const fetchHtml = firecrawlKey ? makeFirecrawlFetcher(firecrawlKey) : fetchHtmlDirect
 
-  const byPath = new Map();
-  for (const p of knownPages) byPath.set(normalizePath(p.url), p);
+  const byPath = new Map()
+  for (const p of knownPages) byPath.set(normalizePath(p.url), p)
 
   for (const filename of ['docs.json', 'mint.json']) {
-    const configUrl = `${origin}/${filename}`;
-    const body = await fetchHtml(configUrl);
-    if (!body) continue;
-    const config = extractMintlifyConfig(body);
-    if (!config || !config.navigation) continue;
-    const parsed = parseMintlifyConfig(config, origin, byPath);
+    const configUrl = `${origin}/${filename}`
+    const body = await fetchHtml(configUrl)
+    if (!body) continue
+    const config = extractMintlifyConfig(body)
+    if (!config || !config.navigation) continue
+    const parsed = parseMintlifyConfig(config, origin, byPath)
     if (parsed.categories.length > 0) {
-      return { source: configUrl, title: parsed.title, categories: parsed.categories };
+      return { source: configUrl, title: parsed.title, categories: parsed.categories }
     }
   }
-  return null;
+  return null
 }
 
 /**
@@ -814,48 +781,50 @@ async function tryMintlifyNav(sourceUrl, knownPages, firecrawlKey) {
  *   - HTML-escaped JSON
  */
 function extractMintlifyConfig(body) {
-  try { return JSON.parse(body); } catch {}
+  try {
+    return JSON.parse(body)
+  } catch {}
   // Pull out the first balanced `{ ... }` that contains a "navigation" key.
-  const navIdx = body.indexOf('"navigation"');
-  if (navIdx === -1) return null;
-  let start = body.lastIndexOf('{', navIdx);
+  const navIdx = body.indexOf('"navigation"')
+  if (navIdx === -1) return null
+  let start = body.lastIndexOf('{', navIdx)
   while (start !== -1) {
     for (let end = body.lastIndexOf('}'); end > start; end = body.lastIndexOf('}', end - 1)) {
-      const candidate = body.slice(start, end + 1);
+      const candidate = body.slice(start, end + 1)
       try {
-        const parsed = JSON.parse(candidate);
-        if (parsed && parsed.navigation) return parsed;
+        const parsed = JSON.parse(candidate)
+        if (parsed && parsed.navigation) return parsed
       } catch {}
     }
-    start = body.lastIndexOf('{', start - 1);
+    start = body.lastIndexOf('{', start - 1)
   }
-  return null;
+  return null
 }
 
 function parseMintlifyConfig(config, origin, byPath) {
-  const title = config.name || null;
-  const categories = [];
+  const title = config.name || null
+  const categories = []
 
   const slugToTitle = (slug) => {
-    const base = String(slug).split('/').pop() || slug;
+    const base = String(slug).split('/').pop() || slug
     return base
       .split(/[-_]/)
       .filter(Boolean)
       .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-      .join(' ');
-  };
+      .join(' ')
+  }
 
   const pageToEntry = (p) => {
     // Simple slug string → leaf page
     if (typeof p === 'string') {
-      const slug = p.replace(/^\//, '');
-      const url = `${origin}/${slug}.md`;
-      const known = byPath.get(normalizePath(url));
+      const slug = p.replace(/^\//, '')
+      const url = `${origin}/${slug}.md`
+      const known = byPath.get(normalizePath(url))
       return {
         title: known?.title || slugToTitle(slug),
         url,
         ...(known?.description ? { description: known.description } : {}),
-      };
+      }
     }
     if (p && typeof p === 'object') {
       // Nested group: recurse
@@ -864,52 +833,52 @@ function parseMintlifyConfig(config, origin, byPath) {
           title: p.group,
           url: null,
           pages: p.pages.map(pageToEntry).filter(Boolean),
-        };
+        }
       }
       // Some v2 shapes: { page: "slug", title?: "..." }
       if (typeof p.page === 'string') {
-        const slug = p.page.replace(/^\//, '');
-        const url = `${origin}/${slug}.md`;
-        const known = byPath.get(normalizePath(url));
+        const slug = p.page.replace(/^\//, '')
+        const url = `${origin}/${slug}.md`
+        const known = byPath.get(normalizePath(url))
         return {
           title: p.title || known?.title || slugToTitle(slug),
           url,
           ...(known?.description ? { description: known.description } : {}),
-        };
+        }
       }
     }
-    return null;
-  };
+    return null
+  }
 
   const pushGroup = (group) => {
-    if (!group || !Array.isArray(group.pages)) return;
-    const pages = group.pages.map(pageToEntry).filter(Boolean);
-    if (pages.length === 0) return;
-    categories.push({ title: group.group || 'Untitled', pages });
-  };
+    if (!group || !Array.isArray(group.pages)) return
+    const pages = group.pages.map(pageToEntry).filter(Boolean)
+    if (pages.length === 0) return
+    categories.push({ title: group.group || 'Untitled', pages })
+  }
 
-  const nav = config.navigation;
+  const nav = config.navigation
   // v1: navigation is an array of groups
   if (Array.isArray(nav)) {
-    for (const g of nav) pushGroup(g);
+    for (const g of nav) pushGroup(g)
   }
   // v2: navigation.tabs[].groups[]
   else if (Array.isArray(nav?.tabs)) {
     for (const tab of nav.tabs) {
-      for (const g of tab.groups || []) pushGroup(g);
+      for (const g of tab.groups || []) pushGroup(g)
     }
   }
   // v2: navigation.groups[] (no tabs)
   else if (Array.isArray(nav?.groups)) {
-    for (const g of nav.groups) pushGroup(g);
+    for (const g of nav.groups) pushGroup(g)
   }
   // v2: navigation.pages[] (flat)
   else if (Array.isArray(nav?.pages)) {
-    const pages = nav.pages.map(pageToEntry).filter(Boolean);
-    if (pages.length > 0) categories.push({ title: 'Documentation', pages });
+    const pages = nav.pages.map(pageToEntry).filter(Boolean)
+    if (pages.length > 0) categories.push({ title: 'Documentation', pages })
   }
 
-  return { title, categories };
+  return { title, categories }
 }
 
 /**
@@ -924,26 +893,26 @@ function parseMintlifyConfig(config, origin, byPath) {
  * sidebar won), sometimes last (a flat alphabetized index block won).
  */
 function scoreNavTree(tree) {
-  const count = tree.categories.reduce((n, c) => n + c.pages.length, 0);
-  const cats = tree.categories.length;
-  const hierarchyBonus = cats >= 2 ? cats * 5 : -20;
+  const count = tree.categories.reduce((n, c) => n + c.pages.length, 0)
+  const cats = tree.categories.length
+  const hierarchyBonus = cats >= 2 ? cats * 5 : -20
   // Alphabetical penalty: real sidebars are curated (Overview first, related
   // topics grouped). Auto-generated indexes, search clouds, and footer link
   // lists tend to be strictly alphabetized. When a category's pages come in
   // alpha order it's almost always noise masquerading as structure.
-  let alphaPenalty = 0;
+  let alphaPenalty = 0
   for (const c of tree.categories) {
-    const titles = (c.pages || []).map((p) => (p.title || '').toLowerCase());
-    if (titles.length >= 3 && isMonotonicAlpha(titles)) alphaPenalty -= 15;
+    const titles = (c.pages || []).map((p) => (p.title || '').toLowerCase())
+    if (titles.length >= 3 && isMonotonicAlpha(titles)) alphaPenalty -= 15
   }
-  return count + hierarchyBonus + alphaPenalty;
+  return count + hierarchyBonus + alphaPenalty
 }
 
 function isMonotonicAlpha(titles) {
   for (let i = 1; i < titles.length; i++) {
-    if (titles[i] < titles[i - 1]) return false;
+    if (titles[i] < titles[i - 1]) return false
   }
-  return true;
+  return true
 }
 
 /**
@@ -957,41 +926,41 @@ function isMonotonicAlpha(titles) {
  */
 async function scrapeNavFromSite(sourceUrl, knownPages, firecrawlKey) {
   // Index known pages by normalized pathname so we can match nav hrefs against them.
-  const byPath = new Map();
-  for (const p of knownPages) byPath.set(normalizePath(p.url), p);
+  const byPath = new Map()
+  for (const p of knownPages) byPath.set(normalizePath(p.url), p)
 
-  const fetchHtml = firecrawlKey ? makeFirecrawlFetcher(firecrawlKey) : fetchHtmlDirect;
+  const fetchHtml = firecrawlKey ? makeFirecrawlFetcher(firecrawlKey) : fetchHtmlDirect
 
-  const visited = new Set();
-  const matched = new Map(); // normalizedPath → page
-  const placed = new Set(); // URLs already placed into some category (prevents cross-category duplication when round-1 visits reshape the tree)
-  const categoryByTitle = new Map();
-  const categoryOrder = [];
+  const visited = new Set()
+  const matched = new Map() // normalizedPath → page
+  const placed = new Set() // URLs already placed into some category (prevents cross-category duplication when round-1 visits reshape the tree)
+  const categoryByTitle = new Map()
+  const categoryOrder = []
 
   // Fetch one URL, pick its best nav block, and merge anything new into our
   // running tree. Each page on a typical docs site renders the full sidebar
   // with its own branch expanded, so repeated visits into different branches
   // accumulate coverage.
   async function visit(url) {
-    const vkey = normalizePath(url);
-    if (visited.has(vkey)) return 0;
-    visited.add(vkey);
+    const vkey = normalizePath(url)
+    if (visited.has(vkey)) return 0
+    visited.add(vkey)
 
-    const html = await fetchHtml(url);
-    if (!html) return 0;
+    const html = await fetchHtml(url)
+    if (!html) return 0
 
-    const base = new URL(url);
-    let best = { score: -Infinity, count: 0, tree: null };
+    const base = new URL(url)
+    let best = { score: -Infinity, count: 0, tree: null }
 
     // Tier 1: <nav>/<aside> elements — semantic markup, almost always the real sidebar.
-    const blockRegex = /<(nav|aside)\b[^>]*>([\s\S]*?)<\/\1>/gi;
-    let m;
+    const blockRegex = /<(nav|aside)\b[^>]*>([\s\S]*?)<\/\1>/gi
+    let m
     while ((m = blockRegex.exec(html)) !== null) {
-      const tree = parseNavBlock(m[2], base, byPath);
-      const score = scoreNavTree(tree);
+      const tree = parseNavBlock(m[2], base, byPath)
+      const score = scoreNavTree(tree)
       if (score > best.score) {
-        const count = tree.categories.reduce((n, c) => n + c.pages.length, 0);
-        best = { score, count, tree };
+        const count = tree.categories.reduce((n, c) => n + c.pages.length, 0)
+        best = { score, count, tree }
       }
     }
 
@@ -1000,11 +969,11 @@ async function scrapeNavFromSite(sourceUrl, knownPages, firecrawlKey) {
     // Mintlify-style stacks (greenflash.ai, mintlify.com clones) where the sidebar
     // lives in a plain <div>. We need balanced-tag extraction since divs nest.
     for (const block of extractSidebarContainers(html)) {
-      const tree = parseNavBlock(block, base, byPath);
-      const score = scoreNavTree(tree);
+      const tree = parseNavBlock(block, base, byPath)
+      const score = scoreNavTree(tree)
       if (score > best.score) {
-        const count = tree.categories.reduce((n, c) => n + c.pages.length, 0);
-        best = { score, count, tree };
+        const count = tree.categories.reduce((n, c) => n + c.pages.length, 0)
+        best = { score, count, tree }
       }
     }
 
@@ -1012,36 +981,36 @@ async function scrapeNavFromSite(sourceUrl, knownPages, firecrawlKey) {
     // alphabetical link clusters elsewhere on the page (TOCs, footers, indexes)
     // can pollute the result. Only used when earlier tiers didn't find enough.
     if (best.count < 10) {
-      const wholeTree = parseNavBlock(html, base, byPath);
-      const seen = new Set();
-      const filtered = [];
+      const wholeTree = parseNavBlock(html, base, byPath)
+      const seen = new Set()
+      const filtered = []
       for (const cat of wholeTree.categories) {
-        const keptPages = filterDedupePages(cat.pages, seen);
-        if (keptPages.length >= 2) filtered.push({ ...cat, pages: keptPages });
+        const keptPages = filterDedupePages(cat.pages, seen)
+        if (keptPages.length >= 2) filtered.push({ ...cat, pages: keptPages })
       }
-      const filteredCount = filtered.reduce((n, c) => n + c.pages.length, 0);
-      const filteredTree = { title: null, categories: filtered };
-      const filteredScore = scoreNavTree(filteredTree);
+      const filteredCount = filtered.reduce((n, c) => n + c.pages.length, 0)
+      const filteredTree = { title: null, categories: filtered }
+      const filteredScore = scoreNavTree(filteredTree)
       // Compare on score, not count — a noisy 20-link alphabetical cluster
       // shouldn't replace a clean 8-link real sidebar.
       if (filteredScore > best.score) {
-        best = { score: filteredScore, count: filteredCount, tree: filteredTree };
+        best = { score: filteredScore, count: filteredCount, tree: filteredTree }
       }
     }
 
-    if (!best.tree) return 0;
+    if (!best.tree) return 0
 
-    let added = 0;
+    let added = 0
     for (const cat of best.tree.categories) {
-      let existing = categoryByTitle.get(cat.title);
+      let existing = categoryByTitle.get(cat.title)
       if (!existing) {
-        existing = { title: cat.title, pages: [] };
-        categoryByTitle.set(cat.title, existing);
-        categoryOrder.push(existing);
+        existing = { title: cat.title, pages: [] }
+        categoryByTitle.set(cat.title, existing)
+        categoryOrder.push(existing)
       }
-      added += mergePages(cat.pages, existing, matched);
+      added += mergePages(cat.pages, existing, matched)
     }
-    return added;
+    return added
   }
 
   /**
@@ -1053,43 +1022,45 @@ async function scrapeNavFromSite(sourceUrl, knownPages, firecrawlKey) {
    * Returns the number of newly-added unique pages across the entire sub-tree.
    */
   function mergePages(incoming, target, matched) {
-    let added = 0;
+    let added = 0
     for (const page of incoming) {
-      const norm = normalizePath(page.url);
-      let existing = target.pages.find((p) => p.url === page.url)
-        || target.pages.find((p) => normalizePath(p.url) === norm);
+      const norm = normalizePath(page.url)
+      let existing = target.pages.find((p) => p.url === page.url) || target.pages.find((p) => normalizePath(p.url) === norm)
       if (!existing) {
         // Already lives in a different category — don't add here.
         if (placed.has(norm)) {
           if (page.pages && page.pages.length > 0) {
             // Still merge its children into wherever the canonical page lives.
-            const canonical = matched.get(norm);
-            if (canonical) added += mergePages(page.pages, canonical, matched);
+            const canonical = matched.get(norm)
+            if (canonical) added += mergePages(page.pages, canonical, matched)
           }
-          continue;
+          continue
         }
         existing = {
           title: page.title,
           url: page.url,
           ...(page.description ? { description: page.description } : {}),
           pages: [],
-        };
-        target.pages.push(existing);
-        placed.add(norm);
-        if (!matched.has(norm)) { matched.set(norm, existing); added++; }
+        }
+        target.pages.push(existing)
+        placed.add(norm)
+        if (!matched.has(norm)) {
+          matched.set(norm, existing)
+          added++
+        }
       }
       if (page.pages && page.pages.length > 0) {
-        added += mergePages(page.pages, existing, matched);
+        added += mergePages(page.pages, existing, matched)
       }
     }
-    return added;
+    return added
   }
 
   // Round 0: the source URL itself — reveals top-level + the source page's branch.
-  const r0Start = Date.now();
-  await visit(sourceUrl);
-  const r0Ms = Date.now() - r0Start;
-  if (categoryOrder.length === 0) return null;
+  const r0Start = Date.now()
+  await visit(sourceUrl)
+  const r0Ms = Date.now() - r0Start
+  if (categoryOrder.length === 0) return null
 
   // Round 1 (parallel): visit pages so each branch has a chance to expose
   // its sub-items. Sidebars on most docs sites auto-expand the current
@@ -1101,28 +1072,33 @@ async function scrapeNavFromSite(sourceUrl, knownPages, firecrawlKey) {
   // enough. Without llms.txt (discovery mode) everything may have collapsed
   // into a single flat category and we don't yet know which of those pages
   // is a parent; visit all of them up to a cap.
-  const isDiscovery = knownPages.length === 0;
-  const MAX_DISCOVERY_FETCHES = 20;
+  const isDiscovery = knownPages.length === 0
+  const MAX_DISCOVERY_FETCHES = 20
   const r1Urls = isDiscovery
     ? flattenTree(categoryOrder).slice(0, MAX_DISCOVERY_FETCHES)
-    : categoryOrder.map((c) => c.pages[0]).filter(Boolean).map((p) => toBrowsableUrl(p.url));
-  const r1Start = Date.now();
+    : categoryOrder
+        .map((c) => c.pages[0])
+        .filter(Boolean)
+        .map((p) => toBrowsableUrl(p.url))
+  const r1Start = Date.now()
   // Firecrawl standard-plan concurrency is 10; 5 leaves headroom for retries.
   // Native HTTP can run hotter since we're hitting our own loopback.
-  await visitAllInParallel(r1Urls, visit, firecrawlKey ? 5 : 10);
-  const r1Ms = Date.now() - r1Start;
-  console.log(styles.dim(`  ⏱  scrape breakdown: round0=${formatDuration(r0Ms)} round1=${formatDuration(r1Ms)} (${r1Urls.length} ${isDiscovery ? 'discovery' : 'category rep'} fetches)`));
+  await visitAllInParallel(r1Urls, visit, firecrawlKey ? 5 : 10)
+  const r1Ms = Date.now() - r1Start
+  console.log(
+    styles.dim(`  ⏱  scrape breakdown: round0=${formatDuration(r0Ms)} round1=${formatDuration(r1Ms)} (${r1Urls.length} ${isDiscovery ? 'discovery' : 'category rep'} fetches)`),
+  )
 
   // Accept thresholds — looser in discovery mode (no llms.txt) where even a
   // single flat "Overview" bucket is better than nothing, stricter when we
   // have llms.txt to compare against.
-  const categories = categoryOrder.filter((c) => c.pages.length > 0);
+  const categories = categoryOrder.filter((c) => c.pages.length > 0)
   if (isDiscovery) {
-    if (categories.length < 1 || matched.size < 5) return null;
+    if (categories.length < 1 || matched.size < 5) return null
   } else {
-    if (categories.length < 2 || matched.size < 10) return null;
+    if (categories.length < 2 || matched.size < 10) return null
   }
-  return { title: null, categories };
+  return { title: null, categories }
 }
 
 /**
@@ -1138,24 +1114,24 @@ async function scrapeNavFromSite(sourceUrl, knownPages, firecrawlKey) {
  * boundaries.
  */
 function extractSidebarContainers(html) {
-  const SIDEBAR_TAGS = ['div', 'ul', 'section'];
+  const SIDEBAR_TAGS = ['div', 'ul', 'section']
   // Match attribute patterns commonly used for the sidebar. Case-insensitive
   // partial-string matches on id/class so "sidebar-group", "sidebarNav",
   // "DocsSidebar__container" etc. all hit.
   const SIDEBAR_ATTR_RE =
-    /\b(?:id|class|aria-label|data-testid)=(?:"[^"]*sidebar[^"]*"|'[^']*sidebar[^']*'|"[^"]*navigation[^"]*"|'[^']*navigation[^']*')|\brole=(?:"navigation"|'navigation')/i;
+    /\b(?:id|class|aria-label|data-testid)=(?:"[^"]*sidebar[^"]*"|'[^']*sidebar[^']*'|"[^"]*navigation[^"]*"|'[^']*navigation[^']*')|\brole=(?:"navigation"|'navigation')/i
 
-  const out = [];
+  const out = []
   for (const tag of SIDEBAR_TAGS) {
-    const openRe = new RegExp(`<${tag}\\b([^>]*)>`, 'gi');
-    let m;
+    const openRe = new RegExp(`<${tag}\\b([^>]*)>`, 'gi')
+    let m
     while ((m = openRe.exec(html)) !== null) {
-      if (!SIDEBAR_ATTR_RE.test(m[1])) continue;
-      const inner = extractBalancedTag(html, tag, m.index + m[0].length);
-      if (inner != null && inner.length > 100) out.push(inner);
+      if (!SIDEBAR_ATTR_RE.test(m[1])) continue
+      const inner = extractBalancedTag(html, tag, m.index + m[0].length)
+      if (inner != null && inner.length > 100) out.push(inner)
     }
   }
-  return out;
+  return out
 }
 
 /**
@@ -1167,20 +1143,20 @@ function extractSidebarContainers(html) {
  * (we only call this for non-void containers: div/ul/section).
  */
 function extractBalancedTag(html, tag, startIdx) {
-  const re = new RegExp(`<(/?)${tag}\\b[^>]*>`, 'gi');
-  re.lastIndex = startIdx;
-  let depth = 1;
-  let m;
+  const re = new RegExp(`<(/?)${tag}\\b[^>]*>`, 'gi')
+  re.lastIndex = startIdx
+  let depth = 1
+  let m
   while ((m = re.exec(html)) !== null) {
     if (m[1] === '/') {
-      depth--;
-      if (depth === 0) return html.slice(startIdx, m.index);
+      depth--
+      if (depth === 0) return html.slice(startIdx, m.index)
     } else {
-      depth++;
+      depth++
     }
-    if (re.lastIndex - startIdx > 1_500_000) return null; // safety cap
+    if (re.lastIndex - startIdx > 1_500_000) return null // safety cap
   }
-  return null;
+  return null
 }
 
 function parseNavBlock(blockHtml, base, byPath) {
@@ -1193,96 +1169,98 @@ function parseNavBlock(blockHtml, base, byPath) {
   //  4. <ul …>            — start of nested list → subsequent <a>s are
   //     children of the most recently emitted <a> at the outer level
   //  5. </ul>             — close of nested list → pop parent stack
-  const tokenRegex = /<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>|<a\b[^>]*\bhref="([^"]+)"[^>]*>([\s\S]*?)<\/a>|<p\b[^>]*>([\s\S]*?)<\/p>|<ul\b[^>]*>|<\/ul>/gi;
+  const tokenRegex = /<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>|<a\b[^>]*\bhref="([^"]+)"[^>]*>([\s\S]*?)<\/a>|<p\b[^>]*>([\s\S]*?)<\/p>|<ul\b[^>]*>|<\/ul>/gi
 
-  const categories = [];
-  let current = null;
-  let leading = null;
+  const categories = []
+  let current = null
+  let leading = null
   // Stack of parent page objects. When inside a nested <ul>, new links attach
   // to the top of the stack (= the <a> that preceded the opening <ul>).
-  const parentStack = [];
+  const parentStack = []
   // The most recent link we emitted, at the current depth. Becomes the parent
   // if a <ul> opens next.
-  let lastLinkAtDepth = null;
+  let lastLinkAtDepth = null
 
   const resetCategoryState = () => {
-    parentStack.length = 0;
-    lastLinkAtDepth = null;
-  };
+    parentStack.length = 0
+    lastLinkAtDepth = null
+  }
 
-  let m;
+  let m
   while ((m = tokenRegex.exec(blockHtml)) !== null) {
-    const token = m[0];
+    const token = m[0]
 
     if (/^<\/ul\b/i.test(token)) {
-      parentStack.pop();
-      lastLinkAtDepth = null;
-      continue;
+      parentStack.pop()
+      lastLinkAtDepth = null
+      continue
     }
     if (/^<ul\b/i.test(token)) {
       // A <ul> opening right after a link means that link becomes a parent.
-      if (lastLinkAtDepth) parentStack.push(lastLinkAtDepth);
-      lastLinkAtDepth = null;
-      continue;
+      if (lastLinkAtDepth) parentStack.push(lastLinkAtDepth)
+      lastLinkAtDepth = null
+      continue
     }
 
     if (m[1]) {
-      const title = stripTags(m[2]).trim();
-      if (!title) continue;
-      current = { title, pages: [] };
-      categories.push(current);
-      resetCategoryState();
-      continue;
+      const title = stripTags(m[2]).trim()
+      if (!title) continue
+      current = { title, pages: [] }
+      categories.push(current)
+      resetCategoryState()
+      continue
     }
     if (m[5] !== undefined) {
-      const title = stripTags(m[5]).trim();
-      if (!title || title.length > 60 || /[.!?]\s*$/.test(title)) continue;
-      current = { title, pages: [] };
-      categories.push(current);
-      resetCategoryState();
-      continue;
+      const title = stripTags(m[5]).trim()
+      if (!title || title.length > 60 || /[.!?]\s*$/.test(title)) continue
+      current = { title, pages: [] }
+      categories.push(current)
+      resetCategoryState()
+      continue
     }
 
     // Link.
-    const href = m[3];
-    if (!href || href.startsWith('#') || href.startsWith('mailto:') || href.startsWith('javascript:')) continue;
-    let abs;
-    try { abs = new URL(href, base).toString(); } catch { continue; }
+    const href = m[3]
+    if (!href || href.startsWith('#') || href.startsWith('mailto:') || href.startsWith('javascript:')) continue
+    let abs
+    try {
+      abs = new URL(href, base).toString()
+    } catch {
+      continue
+    }
 
     // byPath is populated from llms.txt. When it's empty we're in discovery
     // mode — fall back to synthesizing a page entry from the link itself,
     // filtered to same-origin non-asset URLs so we don't slurp every footer,
     // social, or static file link on the page.
-    let page = byPath.size > 0 ? byPath.get(normalizePath(abs)) : null;
+    let page = byPath.size > 0 ? byPath.get(normalizePath(abs)) : null
     if (!page && byPath.size === 0) {
-      if (!isDiscoverableLink(abs, base)) continue;
-      const text = stripTags(m[4] || '').trim();
-      if (!text || text.length > 150) continue;
-      page = { title: text, url: abs };
+      if (!isDiscoverableLink(abs, base)) continue
+      const text = stripTags(m[4] || '').trim()
+      if (!text || text.length > 150) continue
+      page = { title: text, url: abs }
     }
-    if (!page) continue;
+    if (!page) continue
 
-    const parent = parentStack.length > 0
-      ? parentStack[parentStack.length - 1]
-      : (current || (leading || (leading = { title: 'Overview', pages: [] })));
-    if (leading && parent === leading && categories[0] !== leading) categories.unshift(leading);
+    const parent = parentStack.length > 0 ? parentStack[parentStack.length - 1] : current || leading || (leading = { title: 'Overview', pages: [] })
+    if (leading && parent === leading && categories[0] !== leading) categories.unshift(leading)
 
-    const existing = parent.pages.find((p) => p.url === page.url);
+    const existing = parent.pages.find((p) => p.url === page.url)
     if (existing) {
-      lastLinkAtDepth = existing;
+      lastLinkAtDepth = existing
     } else {
       const newPage = {
         title: page.title,
         url: page.url,
         ...(page.description ? { description: page.description } : {}),
         pages: [],
-      };
-      parent.pages.push(newPage);
-      lastLinkAtDepth = newPage;
+      }
+      parent.pages.push(newPage)
+      lastLinkAtDepth = newPage
     }
   }
 
-  return { title: null, categories: categories.filter((c) => c.pages.length > 0) };
+  return { title: null, categories: categories.filter((c) => c.pages.length > 0) }
 }
 
 /**
@@ -1299,47 +1277,51 @@ function parseNavBlock(blockHtml, base, byPath) {
  * Returns { category, nonApiOrphans, mergedScrapedTitles }.
  */
 function collectApiReferencePages(orphans, scraped) {
-  const API_PREFIX_RE = /^\/(api[-_]?reference|api|reference)(\/|$)/i;
+  const API_PREFIX_RE = /^\/(api[-_]?reference|api|reference)(\/|$)/i
   const isApiUrl = (url) => {
-    try { return API_PREFIX_RE.test(new URL(url).pathname); } catch { return false; }
-  };
-  const cleanTitle = (t) => (t || '').replace(/[\u200B-\u200F\uFEFF]/g, '').trim();
-  const isApiCategoryTitle = (t) => /^(api[ -]?reference|reference)$/i.test(cleanTitle(t));
+    try {
+      return API_PREFIX_RE.test(new URL(url).pathname)
+    } catch {
+      return false
+    }
+  }
+  const cleanTitle = (t) => (t || '').replace(/[\u200B-\u200F\uFEFF]/g, '').trim()
+  const isApiCategoryTitle = (t) => /^(api[ -]?reference|reference)$/i.test(cleanTitle(t))
 
-  const apiPages = [];
-  const seenUrls = new Set();
+  const apiPages = []
+  const seenUrls = new Set()
   const push = (p) => {
-    if (!p || !p.url) return;
+    if (!p || !p.url) return
     // Skip non-page assets like /api-reference/openapi.json that some
     // llms.txt files list alongside real pages.
-    if (/\.(json|yaml|yml)$/i.test(p.url)) return;
-    if (seenUrls.has(p.url)) return;
-    seenUrls.add(p.url);
-    apiPages.push(p);
-  };
+    if (/\.(json|yaml|yml)$/i.test(p.url)) return
+    if (seenUrls.has(p.url)) return
+    seenUrls.add(p.url)
+    apiPages.push(p)
+  }
 
   // Pull pages out of any scraped category that already looks like API
   // Reference — even (especially) if it's a partial, DOM-polluted one.
-  const mergedScrapedTitles = [];
-  const keptCategories = [];
+  const mergedScrapedTitles = []
+  const keptCategories = []
   for (const cat of scraped.categories) {
     if (isApiCategoryTitle(cat.title)) {
-      mergedScrapedTitles.push(cat.title);
-      for (const p of cat.pages || []) push(p);
+      mergedScrapedTitles.push(cat.title)
+      for (const p of cat.pages || []) push(p)
     } else {
-      keptCategories.push(cat);
+      keptCategories.push(cat)
     }
   }
-  scraped.categories = keptCategories;
+  scraped.categories = keptCategories
 
-  const nonApiOrphans = [];
+  const nonApiOrphans = []
   for (const p of orphans) {
-    if (isApiUrl(p.url)) push(p);
-    else nonApiOrphans.push(p);
+    if (isApiUrl(p.url)) push(p)
+    else nonApiOrphans.push(p)
   }
 
   if (apiPages.length === 0) {
-    return { category: null, nonApiOrphans, mergedScrapedTitles };
+    return { category: null, nonApiOrphans, mergedScrapedTitles }
   }
 
   // Nest by the resource segment after the API prefix, e.g.
@@ -1348,23 +1330,25 @@ function collectApiReferencePages(orphans, scraped) {
   //   /api-reference/openapi.json              → top-level (no resource)
   // Preserves first-encountered order for both groups and their pages so the
   // final sidebar mirrors input order.
-  const groupOrder = [];
-  const groupPages = new Map();
-  const topLevel = [];
+  const groupOrder = []
+  const groupPages = new Map()
+  const topLevel = []
   for (const p of apiPages) {
-    let segs = [];
-    try { segs = new URL(p.url).pathname.split('/').filter(Boolean); } catch {}
+    let segs = []
+    try {
+      segs = new URL(p.url).pathname.split('/').filter(Boolean)
+    } catch {}
     // segs[0] is the api-prefix itself; segs[1] (if any) is the resource.
-    const resource = segs.length >= 3 ? segs[1] : null;
+    const resource = segs.length >= 3 ? segs[1] : null
     if (!resource) {
-      topLevel.push(p);
-      continue;
+      topLevel.push(p)
+      continue
     }
     if (!groupPages.has(resource)) {
-      groupPages.set(resource, []);
-      groupOrder.push(resource);
+      groupPages.set(resource, [])
+      groupOrder.push(resource)
     }
-    groupPages.get(resource).push(p);
+    groupPages.get(resource).push(p)
   }
 
   const titleize = (slug) =>
@@ -1372,23 +1356,23 @@ function collectApiReferencePages(orphans, scraped) {
       .split(/[-_]/)
       .filter(Boolean)
       .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-      .join(' ');
+      .join(' ')
 
-  const pages = [];
-  for (const p of topLevel) pages.push(p);
+  const pages = []
+  for (const p of topLevel) pages.push(p)
   for (const key of groupOrder) {
     pages.push({
       title: titleize(key),
       url: null,
       pages: groupPages.get(key),
-    });
+    })
   }
 
   return {
     category: { title: 'API Reference', pages },
     nonApiOrphans,
     mergedScrapedTitles,
-  };
+  }
 }
 
 /**
@@ -1405,7 +1389,7 @@ function bucketOrphansByPathType(orphans, scraped) {
     reference: 'API Reference',
     api: 'API Reference',
     'api-reference': 'API Reference',
-    'api_reference': 'API Reference',
+    api_reference: 'API Reference',
     endpoints: 'API Reference',
     endpoint: 'API Reference',
     changelog: 'Changelog',
@@ -1417,56 +1401,70 @@ function bucketOrphansByPathType(orphans, scraped) {
     guides: 'Guides',
     docs: 'Other Docs',
     doc: 'Other Docs',
-  };
+  }
   // Strong top-level type segments. If ANY path segment matches, treat that
   // as the bucket type — `/api-reference/prompts/archive-prompt` belongs in
   // "API Reference", not in a sub-bucket called "Prompts".
-  const STRONG_TYPE = /^(api[-_]?reference|endpoints?|changelog|release[-_]?notes?|releases)$/i;
+  const STRONG_TYPE = /^(api[-_]?reference|endpoints?|changelog|release[-_]?notes?|releases)$/i
   // Segments that look like version/locale prefixes, not category types.
   // Walked from the end until we find a real category-type segment.
-  const VERSION_LOCALE = /^(v?\d+(\.\d+)*|main|master|latest|stable|next|current|ent|enterprise|en|en-us|en_us|fr|de|es|ja|zh|ko|pt)$/i;
+  const VERSION_LOCALE = /^(v?\d+(\.\d+)*|main|master|latest|stable|next|current|ent|enterprise|en|en-us|en_us|fr|de|es|ja|zh|ko|pt)$/i
   // Normalize title for merge-matching: strip invisible chars, lowercase, trim.
-  const normTitle = (t) => String(t || '').replace(INVISIBLE_CHARS, '').trim().toLowerCase();
+  const normTitle = (t) =>
+    String(t || '')
+      .replace(INVISIBLE_CHARS, '')
+      .trim()
+      .toLowerCase()
 
   // Map existing scraped categories by normalized title so we can merge
   // orphans into them instead of creating a parallel "(orphans)" bucket that
   // routes to the wrong top-level directory.
-  const byNormTitle = new Map();
-  for (const cat of scraped.categories) byNormTitle.set(normTitle(cat.title), cat);
+  const byNormTitle = new Map()
+  for (const cat of scraped.categories) byNormTitle.set(normTitle(cat.title), cat)
   // Buckets we've created so later orphans can pile onto the same one.
-  const newBuckets = new Map();
+  const newBuckets = new Map()
 
   for (const p of orphans) {
-    let url;
-    try { url = new URL(p.url); } catch { continue; }
-    const pathname = url.pathname;
+    let url
+    try {
+      url = new URL(p.url)
+    } catch {
+      continue
+    }
+    const pathname = url.pathname
     // Skip OAS spec endpoints — `/api-reference/openapi.json` etc. aren't
     // documentation pages and shouldn't become stubs.
-    if (/\.(json|ya?ml)$/i.test(pathname)) continue;
+    if (/\.(json|ya?ml)$/i.test(pathname)) continue
 
-    const segs = pathname.split('/').filter(Boolean);
-    let type = null;
+    const segs = pathname.split('/').filter(Boolean)
+    let type = null
     // First: any strong top-level type anywhere in the path wins.
     for (const seg of segs) {
-      if (STRONG_TYPE.test(seg)) { type = seg.toLowerCase(); break; }
+      if (STRONG_TYPE.test(seg)) {
+        type = seg.toLowerCase()
+        break
+      }
     }
     // Fallback: walk the segment-before-slug backwards, skip version/locale.
     if (!type) {
       for (let i = segs.length - 2; i >= 0; i--) {
-        if (!VERSION_LOCALE.test(segs[i])) { type = segs[i].toLowerCase(); break; }
+        if (!VERSION_LOCALE.test(segs[i])) {
+          type = segs[i].toLowerCase()
+          break
+        }
       }
     }
 
-    const rawTitle = type ? (TYPE_TITLES[type] || titleCase(type)) : 'Other';
-    const key = normTitle(rawTitle);
+    const rawTitle = type ? TYPE_TITLES[type] || titleCase(type) : 'Other'
+    const key = normTitle(rawTitle)
 
-    let bucket = byNormTitle.get(key);
+    let bucket = byNormTitle.get(key)
     if (!bucket) {
-      bucket = newBuckets.get(key);
+      bucket = newBuckets.get(key)
       if (!bucket) {
-        bucket = { title: rawTitle, pages: [] };
-        newBuckets.set(key, bucket);
-        byNormTitle.set(key, bucket);
+        bucket = { title: rawTitle, pages: [] }
+        newBuckets.set(key, bucket)
+        byNormTitle.set(key, bucket)
       }
     }
 
@@ -1474,18 +1472,18 @@ function bucketOrphansByPathType(orphans, scraped) {
       title: p.title,
       url: p.url,
       ...(p.description ? { description: p.description } : {}),
-    });
+    })
   }
 
   // Existing scraped categories were mutated in place. Return only genuinely
   // new buckets for the caller to append.
-  return Array.from(newBuckets.values()).sort((a, b) => b.pages.length - a.pages.length);
+  return Array.from(newBuckets.values()).sort((a, b) => b.pages.length - a.pages.length)
 }
 
 function titleCase(s) {
   return String(s)
     .replace(/[-_]+/g, ' ')
-    .replace(/\b\w/g, (c) => c.toUpperCase());
+    .replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
 /**
@@ -1500,64 +1498,68 @@ function titleCase(s) {
  * Returns the number of pages relocated.
  */
 function reclassifyReferencePages(scraped) {
-  const REFERENCE_SEGMENT = /^(api[-_]?reference|endpoints?)$/i;
-  const normTitle = (t) => String(t || '').replace(INVISIBLE_CHARS, '').trim().toLowerCase();
+  const REFERENCE_SEGMENT = /^(api[-_]?reference|endpoints?)$/i
+  const normTitle = (t) =>
+    String(t || '')
+      .replace(INVISIBLE_CHARS, '')
+      .trim()
+      .toLowerCase()
 
   const looksLikeRefUrl = (url) => {
     try {
-      const segs = new URL(url).pathname.split('/').filter(Boolean);
-      return segs.some((s) => REFERENCE_SEGMENT.test(s));
+      const segs = new URL(url).pathname.split('/').filter(Boolean)
+      return segs.some((s) => REFERENCE_SEGMENT.test(s))
     } catch {
-      return false;
+      return false
     }
-  };
+  }
 
   // Find (or create) the canonical API Reference category. Prefer an existing
   // one with a reference-shaped title so we don't end up with duplicates.
-  let refCat = scraped.categories.find((c) => /^(api[ -]?reference|reference|api|endpoints?)$/i.test(normTitle(c.title).replace(/\s+/g, ' ')));
-  const existedBefore = Boolean(refCat);
+  let refCat = scraped.categories.find((c) => /^(api[ -]?reference|reference|api|endpoints?)$/i.test(normTitle(c.title).replace(/\s+/g, ' ')))
+  const existedBefore = Boolean(refCat)
 
-  const collected = [];
+  const collected = []
   const filterPages = (pages) => {
-    const kept = [];
+    const kept = []
     for (const p of pages || []) {
       if (looksLikeRefUrl(p.url)) {
         // Flatten sub-pages when relocating — API Reference is a flat list.
-        collectFlat(p, collected);
-        continue;
+        collectFlat(p, collected)
+        continue
       }
-      if (p.pages && p.pages.length > 0) p.pages = filterPages(p.pages);
-      kept.push(p);
+      if (p.pages && p.pages.length > 0) p.pages = filterPages(p.pages)
+      kept.push(p)
     }
-    return kept;
-  };
+    return kept
+  }
 
   // Never pull pages out of the reference category itself.
   for (const cat of scraped.categories) {
-    if (cat === refCat) continue;
-    cat.pages = filterPages(cat.pages);
+    if (cat === refCat) continue
+    cat.pages = filterPages(cat.pages)
   }
 
-  if (collected.length === 0) return 0;
+  if (collected.length === 0) return 0
 
   if (!refCat) {
-    refCat = { title: 'API Reference', pages: [] };
-    scraped.categories.push(refCat);
+    refCat = { title: 'API Reference', pages: [] }
+    scraped.categories.push(refCat)
   }
   // Dedupe against anything already in the reference category.
-  const seen = new Set(refCat.pages.map((p) => normalizePath(p.url)));
+  const seen = new Set(refCat.pages.map((p) => normalizePath(p.url)))
   for (const p of collected) {
-    const key = normalizePath(p.url);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    refCat.pages.push(p);
+    const key = normalizePath(p.url)
+    if (seen.has(key)) continue
+    seen.add(key)
+    refCat.pages.push(p)
   }
 
   // Drop now-empty categories (other than the reference one we may have just created).
-  scraped.categories = scraped.categories.filter((c) => c === refCat || (c.pages && c.pages.length > 0));
+  scraped.categories = scraped.categories.filter((c) => c === refCat || (c.pages && c.pages.length > 0))
 
   // If the category existed before but the relocation was a no-op, surface 0.
-  return existedBefore ? collected.length : collected.length;
+  return existedBefore ? collected.length : collected.length
 }
 
 function collectFlat(page, out) {
@@ -1565,9 +1567,9 @@ function collectFlat(page, out) {
     title: page.title,
     url: page.url,
     ...(page.description ? { description: page.description } : {}),
-  });
+  })
   if (page.pages && page.pages.length > 0) {
-    for (const child of page.pages) collectFlat(child, out);
+    for (const child of page.pages) collectFlat(child, out)
   }
 }
 
@@ -1579,26 +1581,29 @@ function collectFlat(page, out) {
  * orphans that still have no ancestor match.
  */
 function slotOrphansByPath(scraped, knownPages) {
-  const matched = new Set();
-  const pathToCategory = new Map(); // normalizedPath → category
+  const matched = new Set()
+  const pathToCategory = new Map() // normalizedPath → category
   for (const cat of scraped.categories) {
     for (const p of cat.pages) {
-      const norm = normalizePath(p.url);
-      matched.add(norm);
-      pathToCategory.set(norm, cat);
+      const norm = normalizePath(p.url)
+      matched.add(norm)
+      pathToCategory.set(norm, cat)
     }
   }
 
-  const orphans = [];
+  const orphans = []
   for (const p of knownPages) {
-    const norm = normalizePath(p.url);
-    if (matched.has(norm)) continue;
+    const norm = normalizePath(p.url)
+    if (matched.has(norm)) continue
 
-    let bestCat = null;
-    let bestLen = -1;
+    let bestCat = null
+    let bestLen = -1
     for (const [navPath, cat] of pathToCategory) {
       if (navPath && (norm === navPath || norm.startsWith(navPath + '/'))) {
-        if (navPath.length > bestLen) { bestCat = cat; bestLen = navPath.length; }
+        if (navPath.length > bestLen) {
+          bestCat = cat
+          bestLen = navPath.length
+        }
       }
     }
 
@@ -1607,13 +1612,13 @@ function slotOrphansByPath(scraped, knownPages) {
         title: p.title,
         url: p.url,
         ...(p.description ? { description: p.description } : {}),
-      });
-      matched.add(norm);
+      })
+      matched.add(norm)
     } else {
-      orphans.push(p);
+      orphans.push(p)
     }
   }
-  return orphans;
+  return orphans
 }
 
 /**
@@ -1628,27 +1633,27 @@ function slotOrphansByPath(scraped, knownPages) {
  * under landing-page headings.
  */
 function filterDedupePages(pages, seen) {
-  const out = [];
+  const out = []
   for (const p of pages) {
-    const norm = normalizePath(p.url);
-    if (seen.has(norm)) continue;
-    seen.add(norm);
-    const childPages = p.pages ? filterDedupePages(p.pages, seen) : [];
-    out.push({ ...p, pages: childPages });
+    const norm = normalizePath(p.url)
+    if (seen.has(norm)) continue
+    seen.add(norm)
+    const childPages = p.pages ? filterDedupePages(p.pages, seen) : []
+    out.push({ ...p, pages: childPages })
   }
-  return out;
+  return out
 }
 
 function flattenTree(categories) {
-  const out = [];
+  const out = []
   function walk(pages) {
     for (const p of pages || []) {
-      out.push(toBrowsableUrl(p.url));
-      if (p.pages && p.pages.length > 0) walk(p.pages);
+      out.push(toBrowsableUrl(p.url))
+      if (p.pages && p.pages.length > 0) walk(p.pages)
     }
   }
-  for (const c of categories || []) walk(c.pages);
-  return out;
+  for (const c of categories || []) walk(c.pages)
+  return out
 }
 
 /**
@@ -1658,11 +1663,11 @@ function flattenTree(categories) {
  */
 function toBrowsableUrl(url) {
   try {
-    const u = new URL(url);
-    u.pathname = u.pathname.replace(/\.(md|mdx)$/i, '');
-    return u.toString();
+    const u = new URL(url)
+    u.pathname = u.pathname.replace(/\.(md|mdx)$/i, '')
+    return u.toString()
   } catch {
-    return url;
+    return url
   }
 }
 
@@ -1674,11 +1679,11 @@ async function fetchHtmlDirect(url) {
     const res = await fetch(url, {
       redirect: 'follow',
       headers: { 'User-Agent': 'readme-cli-import' },
-    });
-    if (!res.ok) return '';
-    return await res.text();
+    })
+    if (!res.ok) return ''
+    return await res.text()
   } catch {
-    return '';
+    return ''
   }
 }
 
@@ -1696,7 +1701,7 @@ function makeFirecrawlFetcher(apiKey) {
       const res = await fetch('https://api.firecrawl.dev/v1/scrape', {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${apiKey}`,
+          Authorization: `Bearer ${apiKey}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
@@ -1707,22 +1712,22 @@ function makeFirecrawlFetcher(apiKey) {
           // Block common ad/tracking domains so we don't burn time on them.
           blockAds: true,
         }),
-      });
+      })
       if (!res.ok) {
-        styles.warning(`Firecrawl HTTP ${res.status} for ${url}`);
-        return '';
+        styles.warning(`Firecrawl HTTP ${res.status} for ${url}`)
+        return ''
       }
-      const body = await res.json();
+      const body = await res.json()
       if (!body.success) {
-        styles.warning(`Firecrawl error for ${url}: ${body.error || 'unknown'}`);
-        return '';
+        styles.warning(`Firecrawl error for ${url}: ${body.error || 'unknown'}`)
+        return ''
       }
-      return body.data?.rawHtml || body.data?.html || '';
+      return body.data?.rawHtml || body.data?.html || ''
     } catch (e) {
-      styles.warning(`Firecrawl fetch failed for ${url}: ${e.message}`);
-      return '';
+      styles.warning(`Firecrawl fetch failed for ${url}: ${e.message}`)
+      return ''
     }
-  };
+  }
 }
 
 /**
@@ -1730,14 +1735,14 @@ function makeFirecrawlFetcher(apiKey) {
  * Order of completion doesn't matter — visit() merges into shared state.
  */
 async function visitAllInParallel(urls, visit, concurrency) {
-  let i = 0;
+  let i = 0
   async function worker() {
     while (i < urls.length) {
-      const idx = i++;
-      await visit(urls[idx]);
+      const idx = i++
+      await visit(urls[idx])
     }
   }
-  await Promise.all(Array.from({ length: Math.min(concurrency, urls.length) }, worker));
+  await Promise.all(Array.from({ length: Math.min(concurrency, urls.length) }, worker))
 }
 
 /**
@@ -1747,17 +1752,20 @@ async function visitAllInParallel(urls, visit, concurrency) {
  * follow-up fetches don't help coverage.
  */
 function urlNamespace(url) {
-  const NS_SKIP = /^(v?\d+(\.\d+)*|main|master|latest|stable|next|current|ent|enterprise|en|en-us|en_us|fr|de|es|ja|zh|ko|pt)$/i;
+  const NS_SKIP = /^(v?\d+(\.\d+)*|main|master|latest|stable|next|current|ent|enterprise|en|en-us|en_us|fr|de|es|ja|zh|ko|pt)$/i
   try {
-    const u = new URL(url);
-    const segs = u.pathname.split('/').filter(Boolean);
-    let ns = '';
+    const u = new URL(url)
+    const segs = u.pathname.split('/').filter(Boolean)
+    let ns = ''
     for (const s of segs) {
-      if (!NS_SKIP.test(s)) { ns = s.toLowerCase(); break; }
+      if (!NS_SKIP.test(s)) {
+        ns = s.toLowerCase()
+        break
+      }
     }
-    return `${u.origin}/${ns}`;
+    return `${u.origin}/${ns}`
   } catch {
-    return '';
+    return ''
   }
 }
 
@@ -1777,51 +1785,55 @@ function urlNamespace(url) {
  *     page lives in its own category and we'd just be renaming "Overview".
  */
 function clusterByUrlPath(pages) {
-  if (!pages || pages.length < 3) return null;
+  if (!pages || pages.length < 3) return null
 
   const parts = pages.map((p) => {
-    try { return new URL(p.url).pathname.split('/').filter(Boolean); } catch { return []; }
-  });
-  if (parts.some((pp) => pp.length === 0)) return null;
+    try {
+      return new URL(p.url).pathname.split('/').filter(Boolean)
+    } catch {
+      return []
+    }
+  })
+  if (parts.some((pp) => pp.length === 0)) return null
 
   // Longest common prefix depth.
-  let commonDepth = 0;
+  let commonDepth = 0
   while (commonDepth < parts[0].length) {
-    const seg = parts[0][commonDepth];
-    if (!parts.every((pp) => pp[commonDepth] === seg)) break;
-    commonDepth++;
+    const seg = parts[0][commonDepth]
+    if (!parts.every((pp) => pp[commonDepth] === seg)) break
+    commonDepth++
   }
 
   // The segment right after the common base is the category key.
-  const keyIdx = commonDepth;
-  const byKey = new Map();
+  const keyIdx = commonDepth
+  const byKey = new Map()
   for (let i = 0; i < pages.length; i++) {
-    const key = parts[i][keyIdx];
+    const key = parts[i][keyIdx]
     // Skip pages that have no segment at the cluster index (they're AT the
     // common base — those would become their own "index"-like category).
-    if (!key) continue;
-    if (!byKey.has(key)) byKey.set(key, []);
-    byKey.get(key).push(pages[i]);
+    if (!key) continue
+    if (!byKey.has(key)) byKey.set(key, [])
+    byKey.get(key).push(pages[i])
   }
 
   // Reject weak clusterings: need at least 2 groups AND at least one group
   // with multiple pages (otherwise every "category" is a single page, which
   // is just Overview renamed).
-  if (byKey.size < 2) return null;
-  if (![...byKey.values()].some((arr) => arr.length >= 2)) return null;
+  if (byKey.size < 2) return null
+  if (![...byKey.values()].some((arr) => arr.length >= 2)) return null
 
   // Preserve first-appearance order so the sidebar reflects source order.
-  const firstSeen = new Map();
+  const firstSeen = new Map()
   pages.forEach((p, i) => {
-    const key = parts[i][keyIdx];
-    if (key && !firstSeen.has(key)) firstSeen.set(key, i);
-  });
-  const orderedKeys = [...byKey.keys()].sort((a, b) => firstSeen.get(a) - firstSeen.get(b));
+    const key = parts[i][keyIdx]
+    if (key && !firstSeen.has(key)) firstSeen.set(key, i)
+  })
+  const orderedKeys = [...byKey.keys()].sort((a, b) => firstSeen.get(a) - firstSeen.get(b))
 
   const rawClusters = orderedKeys.map((key) => ({
     title: titleCase(key),
     pages: byKey.get(key),
-  }));
+  }))
 
   // A cluster with exactly one top-level page is NOT a real category — it's
   // a parent page with children wrapped in a pseudo-category label. Categories
@@ -1829,22 +1841,20 @@ function clusterByUrlPath(pages) {
   // content AND children. Collect those singletons into a shared
   // "Documentation" bucket so they're siblings at the top level, each with
   // their own sub-tree intact.
-  const multipageClusters = rawClusters.filter((c) => c.pages.length >= 2);
-  const singletonPages = rawClusters
-    .filter((c) => c.pages.length === 1)
-    .flatMap((c) => c.pages);
+  const multipageClusters = rawClusters.filter((c) => c.pages.length >= 2)
+  const singletonPages = rawClusters.filter((c) => c.pages.length === 1).flatMap((c) => c.pages)
 
-  const out = [];
+  const out = []
   if (singletonPages.length > 0) {
-    out.push({ title: 'Documentation', pages: singletonPages });
+    out.push({ title: 'Documentation', pages: singletonPages })
   }
-  out.push(...multipageClusters);
+  out.push(...multipageClusters)
 
   // If we didn't actually produce any multi-page cluster, clustering added no
   // value — every page was a singleton and we'd just have renamed Overview.
   // Tell the caller to stick with the original flat shape.
-  if (multipageClusters.length === 0) return null;
-  return out;
+  if (multipageClusters.length === 0) return null
+  return out
 }
 
 /**
@@ -1853,26 +1863,27 @@ function clusterByUrlPath(pages) {
  * asset file types, build artifacts, and anchors-on-same-page.
  */
 function isDiscoverableLink(abs, base) {
-  let u;
-  try { u = new URL(abs); } catch { return false; }
-  if (u.origin !== base.origin) return false;
-  const p = u.pathname.toLowerCase();
-  if (!p || p === '/') return false;
-  if (/\.(png|jpe?g|gif|svg|webp|ico|css|js|pdf|zip|tar|gz|woff2?|ttf|mp4|mp3)$/i.test(p)) return false;
-  if (p.startsWith('/_next/') || p.startsWith('/__/') || p.includes('/static/') || p.includes('/assets/')) return false;
-  return true;
+  let u
+  try {
+    u = new URL(abs)
+  } catch {
+    return false
+  }
+  if (u.origin !== base.origin) return false
+  const p = u.pathname.toLowerCase()
+  if (!p || p === '/') return false
+  if (/\.(png|jpe?g|gif|svg|webp|ico|css|js|pdf|zip|tar|gz|woff2?|ttf|mp4|mp3)$/i.test(p)) return false
+  if (p.startsWith('/_next/') || p.startsWith('/__/') || p.includes('/static/') || p.includes('/assets/')) return false
+  return true
 }
 
 // Zero-width spaces, direction marks, word joiner, BOM — some docs sites
 // inject these into sidebar headings (docs.greenflash.ai prefixes
 // "API Reference" with U+200B), which otherwise defeats downstream
 // title-matching regexes like routeCategory's.
-const INVISIBLE_CHARS = new RegExp(
-  '[\\u200B-\\u200F\\u202A-\\u202E\\u2060\\uFEFF]',
-  'g',
-);
+const INVISIBLE_CHARS = new RegExp('[\\u200B-\\u200F\\u202A-\\u202E\\u2060\\uFEFF]', 'g')
 function stripTags(s) {
-  return decodeEntities(String(s).replace(/<[^>]+>/g, '')).replace(INVISIBLE_CHARS, '');
+  return decodeEntities(String(s).replace(/<[^>]+>/g, '')).replace(INVISIBLE_CHARS, '')
 }
 
 /**
@@ -1883,11 +1894,11 @@ function stripTags(s) {
  * see in practice plus numeric and hex forms.
  */
 function decodeEntities(s) {
-  if (!s || s.indexOf('&') === -1) return s;
+  if (!s || s.indexOf('&') === -1) return s
   return s
     .replace(/&(?:#x([0-9a-f]+)|#(\d+));/gi, (_, hex, dec) => {
-      const code = hex ? parseInt(hex, 16) : parseInt(dec, 10);
-      return Number.isFinite(code) ? String.fromCodePoint(code) : _;
+      const code = hex ? parseInt(hex, 16) : parseInt(dec, 10)
+      return Number.isFinite(code) ? String.fromCodePoint(code) : _
     })
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
@@ -1902,7 +1913,7 @@ function decodeEntities(s) {
     .replace(/&rsquo;/g, '’')
     .replace(/&lsquo;/g, '‘')
     .replace(/&ldquo;/g, '“')
-    .replace(/&rdquo;/g, '”');
+    .replace(/&rdquo;/g, '”')
 }
 
 /**
@@ -1911,12 +1922,12 @@ function decodeEntities(s) {
  */
 function normalizePath(url) {
   try {
-    const u = new URL(url);
-    let p = u.pathname.replace(/\/$/, '').toLowerCase();
-    p = p.replace(/\.(md|mdx|html?)$/i, '');
-    return p;
+    const u = new URL(url)
+    let p = u.pathname.replace(/\/$/, '').toLowerCase()
+    p = p.replace(/\.(md|mdx|html?)$/i, '')
+    return p
   } catch {
-    return String(url).toLowerCase();
+    return String(url).toLowerCase()
   }
 }
 
@@ -1931,27 +1942,27 @@ async function slotOrphansWithClaude(scraped, orphans, model) {
   const { systemPrompt, userPrompt } = slotOrphansPrompt({
     categories: scraped.categories,
     orphans,
-  });
-  const raw = await runJsonQuery({ systemPrompt, userPrompt, model });
+  })
+  const raw = await runJsonQuery({ systemPrompt, userPrompt, model })
   if (!Array.isArray(raw)) {
     // If the model didn't cooperate, return all orphans unassigned.
-    return orphans;
+    return orphans
   }
 
-  const leftover = [];
+  const leftover = []
   orphans.forEach((p, i) => {
-    const idx = Number.isInteger(raw[i]) ? raw[i] : -1;
+    const idx = Number.isInteger(raw[i]) ? raw[i] : -1
     if (idx >= 0 && idx < scraped.categories.length) {
       scraped.categories[idx].pages.push({
         title: p.title,
         url: p.url,
         ...(p.description ? { description: p.description } : {}),
-      });
+      })
     } else {
-      leftover.push(p);
+      leftover.push(p)
     }
-  });
-  return leftover;
+  })
+  return leftover
 }
 
 /**
@@ -1961,9 +1972,9 @@ async function slotOrphansWithClaude(scraped, orphans, model) {
 async function iconizeScrapedNav(scraped, _unused, model, siteTitle) {
   const { systemPrompt, userPrompt } = iconizeNavPrompt({
     categories: scraped.categories,
-  });
-  const icons = await runJsonQuery({ systemPrompt, userPrompt, model });
-  const iconArr = Array.isArray(icons) ? icons : [];
+  })
+  const icons = await runJsonQuery({ systemPrompt, userPrompt, model })
+  const iconArr = Array.isArray(icons) ? icons : []
   return {
     title: siteTitle || null,
     categories: scraped.categories.map((c, i) => ({
@@ -1971,7 +1982,7 @@ async function iconizeScrapedNav(scraped, _unused, model, siteTitle) {
       icon: iconArr[i] || 'folder',
       pages: c.pages,
     })),
-  };
+  }
 }
 
 /**
@@ -1984,7 +1995,8 @@ async function iconizeScrapedNav(scraped, _unused, model, siteTitle) {
 // llms.txt files (e.g. Stripe's "Docs" section is where pages go that don't
 // fit into a named product tab), so always drop them rather than promote the
 // grab-bag contents to a top-level sidebar category.
-const GENERIC_SECTION_RE = /^(resources?|english|root url|pages?|docs?|documentation|content|available languages.*|site|sitemap|index|home|optional|instructions?(\s|:).*|miscellaneous|misc|other)$/i;
+const GENERIC_SECTION_RE =
+  /^(resources?|english|root url|pages?|docs?|documentation|content|available languages.*|site|sitemap|index|home|optional|instructions?(\s|:).*|miscellaneous|misc|other)$/i
 
 /**
  * Return the subset of llms.txt sections that carry real structural signal —
@@ -1992,25 +2004,20 @@ const GENERIC_SECTION_RE = /^(resources?|english|root url|pages?|docs?|documenta
  * and oversized ones (site-dumps masquerading as sections).
  */
 function usableSections(sections) {
-  if (!sections) return [];
-  return sections.filter(
-    (s) =>
-      s.title &&
-      !GENERIC_SECTION_RE.test(s.title.trim()) &&
-      s.items && s.items.length > 0 && s.items.length <= 200,
-  );
+  if (!sections) return []
+  return sections.filter((s) => s.title && !GENERIC_SECTION_RE.test(s.title.trim()) && s.items && s.items.length > 0 && s.items.length <= 200)
 }
 
 function sectionsLookUsable(sections) {
-  if (!sections || sections.length > 40) return false;
-  return usableSections(sections).length >= 3;
+  if (!sections || sections.length > 40) return false
+  return usableSections(sections).length >= 3
 }
 
 async function organizeWithClaude(parsed, model) {
   if (sectionsLookUsable(parsed.sections)) {
-    return organizeFromSections(parsed, model);
+    return organizeFromSections(parsed, model)
   }
-  return organizeFromScratch(parsed, model);
+  return organizeFromScratch(parsed, model)
 }
 
 /**
@@ -2022,19 +2029,19 @@ async function organizeFromSections(parsed, model) {
   // Drop generic/empty/oversized sections so they don't pollute the sidebar
   // (e.g. Stripe's llms.txt has a "Docs" catch-all and a 0-item "Instructions
   // for Large Language Model Agents" section — neither is structural signal).
-  const sections = usableSections(parsed.sections);
+  const sections = usableSections(parsed.sections)
 
   const { systemPrompt, userPrompt } = organizeFromSectionsPrompt({
     siteTitle: parsed.title,
     sections,
-  });
-  const raw = await runJsonQuery({ systemPrompt, userPrompt, model });
+  })
+  const raw = await runJsonQuery({ systemPrompt, userPrompt, model })
   if (!Array.isArray(raw)) {
-    throw new Error('Fast-path expected a JSON array of {title, icon} entries.');
+    throw new Error('Fast-path expected a JSON array of {title, icon} entries.')
   }
 
   const categories = sections.map((s, i) => {
-    const meta = raw[i] || {};
+    const meta = raw[i] || {}
     return {
       title: meta.title || s.title,
       icon: meta.icon || 'folder',
@@ -2043,10 +2050,10 @@ async function organizeFromSections(parsed, model) {
         url: it.url,
         ...(it.description ? { description: it.description } : {}),
       })),
-    };
-  });
+    }
+  })
 
-  return { title: parsed.title || null, categories };
+  return { title: parsed.title || null, categories }
 }
 
 async function organizeFromScratch(parsed, model) {
@@ -2057,38 +2064,36 @@ async function organizeFromScratch(parsed, model) {
       url: i.url,
       description: i.description || undefined,
     })),
-  );
+  )
 
   const { systemPrompt, userPrompt } = organizeFromScratchPrompt({
     siteTitle: parsed.title,
     items,
-  });
-  const raw = await runJsonQuery({ systemPrompt, userPrompt, model });
+  })
+  const raw = await runJsonQuery({ systemPrompt, userPrompt, model })
 
   // Rehydrate pages from the id references Claude returned.
-  const expandedCategories = [];
-  const usedIds = new Set();
+  const expandedCategories = []
+  const usedIds = new Set()
   for (const cat of raw.categories || []) {
-    const pages = [];
+    const pages = []
     for (const id of cat.pageIds || []) {
-      const item = items[id];
-      if (!item) continue; // ignore out-of-range ids
-      if (usedIds.has(id)) continue; // ignore dupes
-      usedIds.add(id);
+      const item = items[id]
+      if (!item) continue // ignore out-of-range ids
+      if (usedIds.has(id)) continue // ignore dupes
+      usedIds.add(id)
       pages.push({
         title: item.title,
         url: item.url,
         ...(item.description ? { description: item.description } : {}),
-      });
+      })
     }
-    expandedCategories.push({ title: cat.title, icon: cat.icon, pages });
+    expandedCategories.push({ title: cat.title, icon: cat.icon, pages })
   }
 
   // Safety net: if Claude dropped any ids, park them under a leftover category
   // so we never silently lose pages.
-  const missing = items
-    .map((it, idx) => (usedIds.has(idx) ? null : { id: idx, ...it }))
-    .filter(Boolean);
+  const missing = items.map((it, idx) => (usedIds.has(idx) ? null : { id: idx, ...it })).filter(Boolean)
   if (missing.length > 0) {
     expandedCategories.push({
       title: 'Uncategorized',
@@ -2098,11 +2103,11 @@ async function organizeFromScratch(parsed, model) {
         url: it.url,
         ...(it.description ? { description: it.description } : {}),
       })),
-    });
-    styles.warning(`Claude missed ${missing.length} page${missing.length === 1 ? '' : 's'} — parked under "Uncategorized".`);
+    })
+    styles.warning(`Claude missed ${missing.length} page${missing.length === 1 ? '' : 's'} — parked under "Uncategorized".`)
   }
 
-  return { title: raw.title, categories: expandedCategories };
+  return { title: raw.title, categories: expandedCategories }
 }
 
 /**
@@ -2111,20 +2116,20 @@ async function organizeFromScratch(parsed, model) {
  * look like a hang, and strips stray code fences if the model adds them.
  */
 async function runJsonQuery({ systemPrompt, userPrompt, model }) {
-  console.log();
-  console.log(styles.dim('─ system prompt ─'));
-  console.log(styles.dim(systemPrompt));
-  console.log(styles.dim('─ user prompt (first 80 lines) ─'));
-  console.log(styles.dim(userPrompt.split('\n').slice(0, 80).join('\n')));
-  const userLineCount = userPrompt.split('\n').length;
+  console.log()
+  console.log(styles.dim('─ system prompt ─'))
+  console.log(styles.dim(systemPrompt))
+  console.log(styles.dim('─ user prompt (first 80 lines) ─'))
+  console.log(styles.dim(userPrompt.split('\n').slice(0, 80).join('\n')))
+  const userLineCount = userPrompt.split('\n').length
   if (userLineCount > 80) {
-    console.log(styles.dim(`… (${userLineCount - 80} more lines)`));
+    console.log(styles.dim(`… (${userLineCount - 80} more lines)`))
   }
-  console.log(styles.dim('─'.repeat(40)));
-  console.log();
+  console.log(styles.dim('─'.repeat(40)))
+  console.log()
 
-  const heartbeat = setInterval(() => process.stdout.write(styles.dim('.')), 1000);
-  let text = '';
+  const heartbeat = setInterval(() => process.stdout.write(styles.dim('.')), 1000)
+  let text = ''
   try {
     for await (const message of query({
       prompt: userPrompt,
@@ -2136,33 +2141,31 @@ async function runJsonQuery({ systemPrompt, userPrompt, model }) {
     })) {
       if (message.type === 'assistant' && message.message?.content) {
         for (const block of message.message.content) {
-          if (block.type === 'text' && block.text) text += block.text;
+          if (block.type === 'text' && block.text) text += block.text
         }
       } else if (message.type === 'result') {
         if (message.subtype && message.subtype !== 'success') {
-          throw new Error(
-            `Claude failed: ${message.subtype}${message.error?.message ? ' — ' + message.error.message : ''}`,
-          );
+          throw new Error(`Claude failed: ${message.subtype}${message.error?.message ? ' — ' + message.error.message : ''}`)
         }
-        break;
+        break
       }
     }
   } finally {
-    clearInterval(heartbeat);
-    process.stdout.write('\n');
+    clearInterval(heartbeat)
+    process.stdout.write('\n')
   }
 
-  const stripped = stripCodeFences(text);
+  const stripped = stripCodeFences(text)
 
   try {
-    return JSON.parse(stripped);
+    return JSON.parse(stripped)
   } catch (e) {
     throw new Error(
       `Claude returned invalid JSON: ${e.message}\n` +
-      `Output length: ${stripped.length} chars. Likely hit the model's output limit — try --model sonnet.\n\n` +
-      `First 500 chars:\n${stripped.slice(0, 500)}\n\n` +
-      `Last 500 chars:\n${stripped.slice(-500)}`,
-    );
+        `Output length: ${stripped.length} chars. Likely hit the model's output limit — try --model sonnet.\n\n` +
+        `First 500 chars:\n${stripped.slice(0, 500)}\n\n` +
+        `Last 500 chars:\n${stripped.slice(-500)}`,
+    )
   }
 }
 
@@ -2179,19 +2182,22 @@ async function runJsonQuery({ systemPrompt, userPrompt, model }) {
  * Returns deduped URLs in probe order.
  */
 function buildLlmsCandidates(sourceUrl) {
-  const out = [];
-  const seen = new Set();
+  const out = []
+  const seen = new Set()
   const add = (url) => {
-    if (!seen.has(url)) { seen.add(url); out.push(url); }
-  };
-
-  const origin = sourceUrl.origin;
-  const segs = sourceUrl.pathname.split('/').filter(Boolean);
-  for (let i = segs.length; i >= 0; i--) {
-    const prefix = segs.slice(0, i).join('/');
-    add(`${origin}${prefix ? '/' + prefix : ''}/llms.txt`);
+    if (!seen.has(url)) {
+      seen.add(url)
+      out.push(url)
+    }
   }
-  return out;
+
+  const origin = sourceUrl.origin
+  const segs = sourceUrl.pathname.split('/').filter(Boolean)
+  for (let i = segs.length; i >= 0; i--) {
+    const prefix = segs.slice(0, i).join('/')
+    add(`${origin}${prefix ? '/' + prefix : ''}/llms.txt`)
+  }
+  return out
 }
 
 /**
@@ -2203,12 +2209,12 @@ async function fetchLlmsTxt(llmsUrl) {
     const res = await fetch(llmsUrl, {
       redirect: 'follow',
       headers: { 'User-Agent': 'readme-cli-import' },
-    });
-    if (!res.ok) return { ok: false, status: res.status };
-    const text = await res.text();
-    return { ok: true, status: res.status, parsed: parseLlmsTxt(text) };
+    })
+    if (!res.ok) return { ok: false, status: res.status }
+    const text = await res.text()
+    return { ok: true, status: res.status, parsed: parseLlmsTxt(text) }
   } catch (e) {
-    return { ok: false, error: e.message };
+    return { ok: false, error: e.message }
   }
 }
 
@@ -2218,39 +2224,42 @@ async function fetchLlmsTxt(llmsUrl) {
  * land in an implicit "Resources" section.
  */
 function parseLlmsTxt(body) {
-  const lines = body.split(/\r?\n/);
-  let title = null;
-  const sections = [];
-  let current = null;
+  const lines = body.split(/\r?\n/)
+  let title = null
+  const sections = []
+  let current = null
 
-  const itemRe = /^\s*-\s*\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)(?:\s*[:—–-]\s*(.+))?/;
+  const itemRe = /^\s*-\s*\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)(?:\s*[:—–-]\s*(.+))?/
 
   for (const line of lines) {
-    const h1 = line.match(/^#\s+(.+)$/);
-    if (h1 && !title) { title = h1[1].trim(); continue; }
-
-    const h2 = line.match(/^##\s+(.+)$/);
-    if (h2) {
-      current = { title: h2[1].trim(), items: [] };
-      sections.push(current);
-      continue;
+    const h1 = line.match(/^#\s+(.+)$/)
+    if (h1 && !title) {
+      title = h1[1].trim()
+      continue
     }
 
-    const item = line.match(itemRe);
+    const h2 = line.match(/^##\s+(.+)$/)
+    if (h2) {
+      current = { title: h2[1].trim(), items: [] }
+      sections.push(current)
+      continue
+    }
+
+    const item = line.match(itemRe)
     if (item) {
       if (!current) {
-        current = { title: 'Resources', items: [] };
-        sections.push(current);
+        current = { title: 'Resources', items: [] }
+        sections.push(current)
       }
       current.items.push({
         text: item[1].trim(),
         url: item[2].replace(/[.,;]+$/, ''),
         description: item[3] ? item[3].trim() : null,
-      });
+      })
     }
   }
 
-  return { title, sections };
+  return { title, sections }
 }
 
 /**
@@ -2265,24 +2274,24 @@ function parseLlmsTxt(body) {
  * with no leading bullet character, to show them as children of the parent.
  */
 function printPagesTree(pages, indentLevel) {
-  const indent = '  '.repeat(indentLevel);
+  const indent = '  '.repeat(indentLevel)
   for (const page of pages) {
-    const desc = page.description ? ` ${styles.dim('— ' + page.description)}` : '';
-    const url = page.url ? ` ${styles.dim(page.url)}` : '';
-    console.log(`${indent}${styles.dim('·')} ${page.title}${url}${desc}`);
+    const desc = page.description ? ` ${styles.dim('— ' + page.description)}` : ''
+    const url = page.url ? ` ${styles.dim(page.url)}` : ''
+    console.log(`${indent}${styles.dim('·')} ${page.title}${url}${desc}`)
     if (page.pages && page.pages.length > 0) {
-      printPagesTree(page.pages, indentLevel + 1);
+      printPagesTree(page.pages, indentLevel + 1)
     }
   }
 }
 
 function stageOrganized(organized, stagingDir, opts = {}) {
-  const pickIcon = makeIconPicker();
-  const usedSlugs = new Set(); // cross-dir: duplicates validator is global
-  const byDir = new Map();
-  const subDirsByTopDir = new Map();
-  const counts = { fileCount: 0, skippedApiRef: 0 };
-  const skipApiReference = !!opts.skipApiReference;
+  const pickIcon = makeIconPicker()
+  const usedSlugs = new Set() // cross-dir: duplicates validator is global
+  const byDir = new Map()
+  const subDirsByTopDir = new Map()
+  const counts = { fileCount: 0, skippedApiRef: 0 }
+  const skipApiReference = !!opts.skipApiReference
 
   /**
    * Write a page (and its descendants) into `dir`. A page with children gets
@@ -2291,79 +2300,81 @@ function stageOrganized(organized, stagingDir, opts = {}) {
    * This matches git-format's on-disk convention for nested sidebars.
    */
   function writePage(page, dir, topDir, isSubPage = false) {
-    const slug = resolveSlug(deriveSlug(page.url, page.title), usedSlugs);
-    usedSlugs.add(slug);
+    const slug = resolveSlug(deriveSlug(page.url, page.title), usedSlugs)
+    usedSlugs.add(slug)
 
     // Group-only nodes (e.g. a resource sub-group within API Reference) have
     // no backing page on the source site — they're pure sidebar containers.
     // Skip the stub write but still recurse so their children land in the
     // right subdirectory.
-    const isGroupOnly = !page.url;
+    const isGroupOnly = !page.url
 
     if (!isGroupOnly) {
-      const relFilePath = `${dir}/${slug}.md`;
+      const relFilePath = `${dir}/${slug}.md`
       // Sub-pages don't get icons per design decision.
-      const frontmatter = buildFrontmatter(topDir, page, slug, pickIcon, { skipIcon: isSubPage });
+      const frontmatter = buildFrontmatter(topDir, page, slug, pickIcon, { skipIcon: isSubPage })
       // x-import points at the source URL for this stub. The content-import
       // step reads it to fetch the page body. x-prefixed custom field is the
       // git-format convention for metadata the schema doesn't know about.
-      frontmatter['x-import'] = toBrowsableUrl(page.url);
+      frontmatter['x-import'] = toBrowsableUrl(page.url)
+      // hide pages that need import
+      frontmatter.hidden = true
 
-      const absPath = path.join(stagingDir, relFilePath);
-      fs.mkdirSync(path.dirname(absPath), { recursive: true });
-      fs.writeFileSync(absPath, matter.stringify('', frontmatter));
-      counts.fileCount++;
+      const absPath = path.join(stagingDir, relFilePath)
+      fs.mkdirSync(path.dirname(absPath), { recursive: true })
+      fs.writeFileSync(absPath, matter.stringify('', frontmatter))
+      counts.fileCount++
 
-      if (!byDir.has(dir)) byDir.set(dir, []);
-      byDir.get(dir).push(slug);
+      if (!byDir.has(dir)) byDir.set(dir, [])
+      byDir.get(dir).push(slug)
     }
 
-    const children = page.pages || [];
+    const children = page.pages || []
     if (children.length > 0) {
-      const subDir = `${dir}/${slug}`;
-      for (const child of children) writePage(child, subDir, topDir, true);
+      const subDir = `${dir}/${slug}`
+      for (const child of children) writePage(child, subDir, topDir, true)
     }
   }
 
   for (const cat of organized.categories || []) {
-    const { topDir, subDir } = routeCategory(cat.title);
+    const { topDir, subDir } = routeCategory(cat.title)
     if (skipApiReference && topDir === 'reference') {
-      counts.skippedApiRef += countPagesDeep(cat.pages || []);
-      continue;
+      counts.skippedApiRef += countPagesDeep(cat.pages || [])
+      continue
     }
-    const dir = subDir ? `${topDir}/${subDir}` : topDir;
+    const dir = subDir ? `${topDir}/${subDir}` : topDir
     if (subDir) {
-      if (!subDirsByTopDir.has(topDir)) subDirsByTopDir.set(topDir, []);
-      if (!subDirsByTopDir.get(topDir).includes(subDir)) subDirsByTopDir.get(topDir).push(subDir);
+      if (!subDirsByTopDir.has(topDir)) subDirsByTopDir.set(topDir, [])
+      if (!subDirsByTopDir.get(topDir).includes(subDir)) subDirsByTopDir.get(topDir).push(subDir)
     }
 
-    for (const page of cat.pages || []) writePage(page, dir, topDir, false);
+    for (const page of cat.pages || []) writePage(page, dir, topDir, false)
   }
 
   // Per-directory _order.yaml preserves input order in the sidebar.
   for (const [dir, slugs] of byDir) {
-    const orderPath = path.join(stagingDir, dir, '_order.yaml');
-    const body = slugs.map((s) => `- ${yamlSafeSlug(s)}`).join('\n') + '\n';
-    fs.writeFileSync(orderPath, body);
+    const orderPath = path.join(stagingDir, dir, '_order.yaml')
+    const body = slugs.map((s) => `- ${yamlSafeSlug(s)}`).join('\n') + '\n'
+    fs.writeFileSync(orderPath, body)
   }
 
   // Top-level _order.yaml (e.g. docs/_order.yaml) lists category subfolders.
   for (const [topDir, subs] of subDirsByTopDir) {
-    const orderPath = path.join(stagingDir, topDir, '_order.yaml');
-    const body = subs.map((s) => `- ${yamlSafeSlug(s)}`).join('\n') + '\n';
-    fs.writeFileSync(orderPath, body);
+    const orderPath = path.join(stagingDir, topDir, '_order.yaml')
+    const body = subs.map((s) => `- ${yamlSafeSlug(s)}`).join('\n') + '\n'
+    fs.writeFileSync(orderPath, body)
   }
 
-  return { fileCount: counts.fileCount, dirCount: byDir.size, skippedApiRef: counts.skippedApiRef };
+  return { fileCount: counts.fileCount, dirCount: byDir.size, skippedApiRef: counts.skippedApiRef }
 }
 
 function countPagesDeep(pages) {
-  let n = 0;
+  let n = 0
   for (const p of pages || []) {
-    if (p.url) n++;
-    if (p.pages && p.pages.length) n += countPagesDeep(p.pages);
+    if (p.url) n++
+    if (p.pages && p.pages.length) n += countPagesDeep(p.pages)
   }
-  return n;
+  return n
 }
 
 /**
@@ -2371,41 +2382,41 @@ function countPagesDeep(pages) {
  * category subdir. docs/ is the only top dir that takes a subfolder.
  */
 function routeCategory(title) {
-  const t = (title || '').trim();
-  if (/^(api[ -]?reference|reference|api|endpoints?)$/i.test(t)) return { topDir: 'reference', subDir: null };
-  if (/^(recipes?|cookbook|tutorials?|how[ -]?tos?)$/i.test(t)) return { topDir: 'recipes', subDir: null };
-  if (/^(custom[ -]?pages?|landing( page)?s?)$/i.test(t)) return { topDir: 'custom_pages', subDir: null };
-  if (/^(custom[ -]?blocks?|snippets?|reusable( content)?)$/i.test(t)) return { topDir: 'custom_blocks', subDir: null };
-  return { topDir: 'docs', subDir: t || 'Documentation' };
+  const t = (title || '').trim()
+  if (/^(api[ -]?reference|reference|api|endpoints?)$/i.test(t)) return { topDir: 'reference', subDir: null }
+  if (/^(recipes?|cookbook|tutorials?|how[ -]?tos?)$/i.test(t)) return { topDir: 'recipes', subDir: null }
+  if (/^(custom[ -]?pages?|landing( page)?s?)$/i.test(t)) return { topDir: 'custom_pages', subDir: null }
+  if (/^(custom[ -]?blocks?|snippets?|reusable( content)?)$/i.test(t)) return { topDir: 'custom_blocks', subDir: null }
+  return { topDir: 'docs', subDir: t || 'Documentation' }
 }
 
 function buildFrontmatter(topDir, page, slug, pickIcon, opts = {}) {
-  const fm = {};
-  const title = (page.title || titleCase(slug)).trim();
+  const fm = {}
+  const title = (page.title || titleCase(slug)).trim()
 
   if (topDir === 'custom_blocks') {
-    fm.name = title;
+    fm.name = title
   } else {
-    fm.title = title;
+    fm.title = title
   }
 
   if (page.description && page.description.trim()) {
-    fm.excerpt = page.description.trim();
+    fm.excerpt = page.description.trim()
   }
 
   // Sub-pages skip icons by design — the parent carries the nav icon, and
   // children render without one.
-  if (opts.skipIcon) return fm;
+  if (opts.skipIcon) return fm
 
   // Recipes use `recipe.icon` instead of a top-level `icon` (per git-format schema).
-  const icon = pickIcon(slug, title);
+  const icon = pickIcon(slug, title)
   if (topDir === 'recipes') {
-    fm.recipe = { color: '#018ef5', icon: icon || 'book-open' };
+    fm.recipe = { color: '#018ef5', icon: icon || 'book-open' }
   } else if (topDir === 'docs' || topDir === 'reference') {
-    fm.icon = formatIconClass(icon);
+    fm.icon = formatIconClass(icon)
   }
 
-  return fm;
+  return fm
 }
 
 /**
@@ -2413,14 +2424,14 @@ function buildFrontmatter(topDir, page, slug, pickIcon, opts = {}) {
  * the result, drops any leading numeric prefix (common in imports).
  */
 function deriveSlug(url, fallbackTitle) {
-  let raw = '';
+  let raw = ''
   try {
-    const segs = new URL(url).pathname.split('/').filter(Boolean);
-    raw = segs[segs.length - 1] || '';
+    const segs = new URL(url).pathname.split('/').filter(Boolean)
+    raw = segs[segs.length - 1] || ''
   } catch {}
-  raw = raw.replace(/\.(md|mdx|html?)$/i, '').replace(/^\d+[-_.]/, '');
-  const slug = kebabCase(raw || fallbackTitle || 'page');
-  return slug || 'page';
+  raw = raw.replace(/\.(md|mdx|html?)$/i, '').replace(/^\d+[-_.]/, '')
+  const slug = kebabCase(raw || fallbackTitle || 'page')
+  return slug || 'page'
 }
 
 /**
@@ -2429,24 +2440,26 @@ function deriveSlug(url, fallbackTitle) {
  * directories, not just within a directory, so uniqueness must be global.
  */
 function resolveSlug(slug, usedSlugs) {
-  if (!usedSlugs.has(slug)) return slug;
-  let n = 2;
-  while (usedSlugs.has(`${slug}-${n}`)) n++;
-  return `${slug}-${n}`;
+  if (!usedSlugs.has(slug)) return slug
+  let n = 2
+  while (usedSlugs.has(`${slug}-${n}`)) n++
+  return `${slug}-${n}`
 }
 
 // Values YAML interprets as non-strings need quoting when used as _order entries.
-const YAML_UNSAFE = /^(?:\d+\.?\d*|true|false|yes|no|on|off|null|~)$/i;
+const YAML_UNSAFE = /^(?:\d+\.?\d*|true|false|yes|no|on|off|null|~)$/i
 function yamlSafeSlug(slug) {
-  return YAML_UNSAFE.test(slug) ? `"${slug}"` : slug;
+  return YAML_UNSAFE.test(slug) ? `"${slug}"` : slug
 }
 
 function kebabCase(s) {
-  return String(s)
-    .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '') || 'page';
+  return (
+    String(s)
+      .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'page'
+  )
 }
 
 // Keyword → FontAwesome icon. Ported from v1 (most-specific entries first).
@@ -2486,64 +2499,67 @@ const ICON_RULES = [
   [/\b(data|datasets?|database|db|tables?|schemas?)\b/, ['database', 'table', 'server']],
   [/\b(ai|ml|machine[- ]?learning|llm|models?)\b/, ['robot', 'brain', 'microchip']],
   [/\b(globe|language|locale|i18n|internationalization|translations?)\b/, ['globe', 'language', 'earth-americas']],
-];
+]
 
-const DEFAULT_ICON_POOL = ['file-lines', 'file', 'bookmark', 'note-sticky', 'circle', 'square', 'diamond'];
+const DEFAULT_ICON_POOL = ['file-lines', 'file', 'bookmark', 'note-sticky', 'circle', 'square', 'diamond']
 
 // ReadMe's hub sidebar renders `<i class="{icon}">` with no normalization, so
 // a bare "rocket" matches no CSS. Prefix short names with `fa-solid fa-` so
 // readme.com's FontAwesome 6 Pro stylesheet picks them up. Leaves values that
 // already include a space or a `fa-` prefix untouched.
 function formatIconClass(icon) {
-  if (!icon) return icon;
-  if (icon.includes(' ') || icon.startsWith('fa-')) return icon;
-  return `fa-solid fa-${icon}`;
+  if (!icon) return icon
+  if (icon.includes(' ') || icon.startsWith('fa-')) return icon
+  return `fa-solid fa-${icon}`
 }
 
 function makeIconPicker() {
-  const used = new Set();
+  const used = new Set()
   // Every icon we could ever return, deduped so the round-robin fallback
   // spreads evenly. Order puts rule icons first (semantically meaningful)
   // then defaults — this order is also the cycle order once the pool is
   // exhausted.
-  const allIcons = Array.from(new Set([
-    ...ICON_RULES.flatMap(([, icons]) => icons),
-    ...DEFAULT_ICON_POOL,
-  ]));
-  let cycleIndex = 0;
+  const allIcons = Array.from(new Set([...ICON_RULES.flatMap(([, icons]) => icons), ...DEFAULT_ICON_POOL]))
+  let cycleIndex = 0
 
   return function pickIcon(slug, title) {
-    const haystack = `${slug || ''} ${title || ''}`.toLowerCase();
+    const haystack = `${slug || ''} ${title || ''}`.toLowerCase()
 
     // First pass: find a semantically-matching rule whose candidates aren't
     // all already taken globally.
     for (const [re, icons] of ICON_RULES) {
-      if (!re.test(haystack)) continue;
+      if (!re.test(haystack)) continue
       for (const icon of icons) {
-        if (!used.has(icon)) { used.add(icon); return icon; }
+        if (!used.has(icon)) {
+          used.add(icon)
+          return icon
+        }
       }
     }
 
     // No rule matched, or all matching rules' candidates are taken. Take the
     // first globally-unused icon from the full pool.
     for (const icon of allIcons) {
-      if (!used.has(icon)) { used.add(icon); return icon; }
+      if (!used.has(icon)) {
+        used.add(icon)
+        return icon
+      }
     }
 
     // Pool exhausted — spread reuse evenly via round-robin rather than
     // piling every remaining page onto one icon.
-    const icon = allIcons[cycleIndex % allIcons.length];
-    cycleIndex++;
-    return icon;
-  };
+    const icon = allIcons[cycleIndex % allIcons.length]
+    cycleIndex++
+    return icon
+  }
 }
 
 function formatDuration(ms) {
-  const safe = Math.max(0, ms);
+  const safe = Math.max(0, ms)
   // Show ms under a second so sub-second work doesn't misleadingly read as "0m 0s".
-  if (safe < 1000) return `${Math.round(safe)}ms`;
-  const totalSeconds = Math.round(safe / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}m ${seconds}s`;
+  if (safe < 1000) return `${Math.round(safe)}ms`
+  const totalSeconds = Math.round(safe / 1000)
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return `${minutes}m ${seconds}s`
 }
