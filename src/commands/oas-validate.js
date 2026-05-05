@@ -55,16 +55,38 @@ const RULES = {
 };
 
 /**
- * Validate all OAS files in reference/ and print results.
- * Returns { totalErrors, totalWarnings, totalValid, fileCount } or null if no specs found.
+ * Validate all OAS files under `<gitRoot>/reference/`. Pure programmatic API:
+ * returns per-file results without printing or exiting.
+ *
+ * @param {object}  [opts]
+ * @param {string}  [opts.cwd]          Repo root (defaults to process.cwd()).
+ * @param {boolean} [opts.dereference]  Also dereference $ref pointers (matches ReadMe server validation).
+ * @returns {Promise<null | {
+ *   fileCount: number,
+ *   totalErrors: number,
+ *   totalWarnings: number,
+ *   totalValid: number,
+ *   results: Array<{
+ *     filename: string,
+ *     title: string,
+ *     version: string,
+ *     opCount: number,
+ *     errors: Array<{ message: string }>,
+ *     warnings: Array<{ message: string }>,
+ *     valid: boolean,
+ *   }>,
+ * }>}
+ *   Returns null if there's no reference/ dir or no spec files.
  */
-export async function validateOasFiles(gitRoot, { dereference = false } = {}) {
+export async function validateOas({ cwd, dereference = false } = {}) {
+  const gitRoot = cwd || process.cwd();
   const refDir = path.join(gitRoot, 'reference');
   if (!fs.existsSync(refDir)) return null;
 
   const oasFiles = findOasFiles(refDir);
   if (oasFiles.length === 0) return null;
 
+  const results = [];
   let totalErrors = 0;
   let totalWarnings = 0;
   let totalValid = 0;
@@ -75,27 +97,24 @@ export async function validateOasFiles(gitRoot, { dereference = false } = {}) {
     const title = spec.info?.title || filename;
     const version = spec.openapi || spec.swagger || 'unknown';
     const opCount = extractOperations(spec).size;
-    const meta = `${filename} · ${version} · ${opCount} ${opCount === 1 ? 'endpoint' : 'endpoints'}`;
 
-    let result;
+    let normalizerResult;
     try {
       const normalizer = new OASNormalize(raw, { enablePaths: false });
-      result = await normalizer.validate({
+      normalizerResult = await normalizer.validate({
         shouldThrowIfInvalid: false,
         parser: { validate: { rules: RULES } },
       });
     } catch (err) {
-      totalErrors++;
-      console.log();
-      console.log(`  ${styles.err('●')} ${styles.bold(title)} ${styles.dim(`(${meta})`)}`);
-      console.log(`    ${styles.err('✘')} ${err.message || String(err)}`);
+      const errors = [{ message: err.message || String(err) }];
+      results.push({ filename, title, version, opCount, errors, warnings: [], valid: false });
+      totalErrors += 1;
       continue;
     }
 
-    const errors = result.valid ? [] : (result.errors || []);
-    const warnings = result.warnings || [];
+    const errors = normalizerResult.valid ? [] : (normalizerResult.errors || []);
+    const warnings = normalizerResult.warnings || [];
 
-    // Try dereferencing all $ref pointers (this is what ReadMe's server does).
     if (dereference) {
       try {
         const normalizer = new OASNormalize(raw, { enablePaths: false });
@@ -106,7 +125,8 @@ export async function validateOasFiles(gitRoot, { dereference = false } = {}) {
       }
     }
 
-    // Check for malformed $ref pointers (oas-normalize doesn't catch these).
+    // Catches malformed pointers like "#components/..." (missing slash) that
+    // oas-normalize accepts.
     const badRefs = findBadRefs(spec);
     for (const { path: refPath, ref } of badRefs) {
       errors.push({ message: `Malformed $ref: "${ref}" at ${refPath} (should start with "#/")` });
@@ -114,29 +134,45 @@ export async function validateOasFiles(gitRoot, { dereference = false } = {}) {
 
     totalErrors += errors.length;
     totalWarnings += warnings.length;
-    if (errors.length === 0) totalValid++;
+    const valid = errors.length === 0;
+    if (valid) totalValid += 1;
 
-    const dot = errors.length > 0
+    results.push({ filename, title, version, opCount, errors, warnings, valid });
+  }
+
+  return { fileCount: oasFiles.length, totalErrors, totalWarnings, totalValid, results };
+}
+
+/**
+ * Validate OAS files and print results (used by the CLI command).
+ * Returns the same aggregate shape `validateOas` does.
+ *
+ * @deprecated Prefer `validateOas` for programmatic use; this helper prints to
+ * stdout. Kept exported for backward compatibility.
+ */
+export async function validateOasFiles(gitRoot, { dereference = false } = {}) {
+  const summary = await validateOas({ cwd: gitRoot, dereference });
+  if (!summary) return null;
+
+  for (const r of summary.results) {
+    const meta = `${r.filename} · ${r.version} · ${r.opCount} ${r.opCount === 1 ? 'endpoint' : 'endpoints'}`;
+    const dot = r.errors.length > 0
       ? styles.err('●')
-      : warnings.length > 0 ? styles.warn('●') : styles.success('●');
+      : r.warnings.length > 0 ? styles.warn('●') : styles.success('●');
 
     console.log();
-    console.log(`  ${dot} ${styles.bold(title)} ${styles.dim(`(${meta})`)}`);
+    console.log(`  ${dot} ${styles.bold(r.title)} ${styles.dim(`(${meta})`)}`);
 
-    if (errors.length === 0 && warnings.length === 0) {
+    if (r.errors.length === 0 && r.warnings.length === 0) {
       console.log(`    ${styles.success('Valid')}`);
       continue;
     }
-
-    for (const e of errors) {
-      console.log(`    ${styles.err('✘')} ${e.message}`);
-    }
-    for (const w of warnings) {
-      console.log(`    ${styles.warn('⚠')} ${w.message}`);
-    }
+    for (const e of r.errors) console.log(`    ${styles.err('✘')} ${e.message}`);
+    for (const w of r.warnings) console.log(`    ${styles.warn('⚠')} ${w.message}`);
   }
 
-  return { totalErrors, totalWarnings, totalValid, fileCount: oasFiles.length };
+  const { totalErrors, totalWarnings, totalValid, fileCount } = summary;
+  return { totalErrors, totalWarnings, totalValid, fileCount };
 }
 
 export async function run(options, _cmd, ctx) {

@@ -276,9 +276,19 @@ function syncOneOas(refDir, oasFilename, spec) {
 }
 
 /**
- * Run the sync and return per-file changes. Used by both the CLI command and the validator --fix.
+ * Sync reference pages with the OpenAPI spec(s) under `<gitRoot>/reference/`.
+ *
+ * Pure programmatic API: returns per-file change descriptors and prints
+ * nothing. Used by the CLI command, the lint --fix flow, and external
+ * callers.
+ *
+ * @param {string | { cwd?: string }} input  Repo root path, or `{ cwd }` object.
+ * @returns {null | Array<{ filename: string, spec: object, opCount: number,
+ *   changes: { added: string[], deleted: string[], updated: string[] } }>}
+ *   Returns null if there's no reference/ dir or no specs.
  */
-export function syncOas(gitRoot) {
+export function syncOas(input) {
+  const gitRoot = typeof input === 'string' ? input : (input?.cwd || process.cwd());
   const refDir = path.join(gitRoot, 'reference');
   if (!fs.existsSync(refDir)) return null;
 

@@ -8,6 +8,11 @@
     "readme_": "./bin/readme.js"
   },
   "exports": {
+    ".": "./src/index.js",
+    "./commands/lint": "./src/commands/lint.js",
+    "./commands/oas-sync": "./src/commands/oas-sync.js",
+    "./commands/oas-validate": "./src/commands/oas-validate.js",
+    "./commands/import": "./src/commands/import.js",
     "./prompts": "./src/prompts/index.js",
     "./package.json": "./package.json"
   },

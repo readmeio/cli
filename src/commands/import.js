@@ -38,7 +38,22 @@ export function args(cmd) {
   cmd.addOption(new Option('--debug').hideHelp());
 }
 
-export async function run(options) {
+/**
+ * Run the importer programmatically. Mirrors the CLI command but throws on
+ * fatal errors instead of calling `process.exit`, and returns a result object
+ * on success.
+ *
+ * @param {object} options
+ * @param {string} options.source             URL to import from, or path to a local OAS spec.
+ * @param {string} [options.output]           Output zip path. Defaults to `<basename>-readme.zip` in cwd.
+ * @param {string} [options.model]            Claude model alias: 'haiku' | 'sonnet' | 'opus'. Defaults to 'sonnet'.
+ * @param {string} [options.firecrawlKey]     Firecrawl API key (falls back to FIRECRAWL_API_KEY env var).
+ * @param {boolean} [options.skipApiReference] Drop pages routed to the API Reference dir.
+ * @param {boolean} [options.test]            Skip the zip, keep staging, and boot the dev server.
+ * @param {boolean} [options.debug]           Dump intermediate pipeline artifacts to a tmp dir.
+ * @returns {Promise<{ source: 'url' | 'oas', outputZip?: string, stagingDir?: string, fileCount: number, duration: number, phases: Array<{ label: string, ms: number }> }>}
+ */
+export async function importDocs(options) {
   const startedAt = Date.now();
   const phases = [];
   const timePhase = async (label, fn) => {
@@ -59,8 +74,7 @@ export async function run(options) {
   try {
     sourceUrl = new URL(options.source);
   } catch {
-    styles.error(`Invalid --source URL: ${styles.bold(options.source)}`);
-    process.exit(1);
+    throw new Error(`Invalid --source URL: ${options.source}`);
   }
 
   const outputZip = path.resolve(
@@ -270,10 +284,9 @@ export async function run(options) {
       }
     }
   } else if (!llms) {
-    styles.error(
-      `No llms.txt and the sidebar scrape found no usable structure — can't import ${styles.bold(sourceUrl.toString())}.`,
+    throw new Error(
+      `No llms.txt and the sidebar scrape found no usable structure — can't import ${sourceUrl.toString()}.`,
     );
-    process.exit(1);
   } else {
     styles.warning(`Couldn't extract a useful nav — falling back to llms.txt-based organization.`);
   }
@@ -317,6 +330,7 @@ export async function run(options) {
 
   const stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'readme-import-'));
 
+  let result;
   try {
     styles.info(`Staging frontmatter stubs in ${styles.bold(stagingDir)}...`);
     const stageStart = Date.now();
@@ -334,12 +348,12 @@ export async function run(options) {
       styles.info('Starting the dev server for preview...');
       console.log();
       await runDevPreview(stagingDir);
-      return;
+      return { source: 'url', stagingDir, fileCount: staged.fileCount, duration: Date.now() - startedAt, phases };
     }
 
     if (staged.fileCount === 0) {
       styles.warning('Staging directory is empty — skipping zip.');
-      return;
+      return { source: 'url', fileCount: 0, duration: Date.now() - startedAt, phases };
     }
 
     styles.info(`Packaging ${styles.bold(String(staged.fileCount))} files into ${styles.bold(outputZip)}...`);
@@ -348,19 +362,30 @@ export async function run(options) {
     console.log();
     styles.ok(`Done in ${styles.bold(formatDuration(Date.now() - startedAt))}! Your ReadMe import is ready at ${styles.bold(outputZip)}`);
     console.log(styles.dim(`  ⏱  ${phases.map((p) => `${p.label} ${formatDuration(p.ms)}`).join(' · ')}`));
+    result = { source: 'url', outputZip, fileCount: staged.fileCount, duration: Date.now() - startedAt, phases };
   } finally {
     if (!options.test) {
       fs.rmSync(stagingDir, { recursive: true, force: true });
     }
   }
 
-  // Node won't exit on its own — the Claude SDK and fetch keep-alive both
-  // hold open handles that idle for 20-30s before timing out. We're truly
-  // done by this point, so force-exit to match wall time with the "Done in"
-  // message.
-  // Node won't exit on its own — the Claude SDK and fetch keep-alive hold
-  // open handles that idle for 20-30s before timing out. Force-exit to match
-  // wall time with the "Done in" message.
+  return result;
+}
+
+/**
+ * CLI entrypoint. Wraps `importDocs` with friendly error reporting and a
+ * force-exit on success — the Claude SDK and fetch keep-alive both hold open
+ * handles that idle for 20-30s before timing out, and we're done by this
+ * point so we exit explicitly to match wall-clock time with the "Done in"
+ * message.
+ */
+export async function run(options) {
+  try {
+    await importDocs(options);
+  } catch (err) {
+    styles.error(err.message || String(err));
+    process.exit(1);
+  }
   process.exit(0);
 }
 
@@ -372,13 +397,11 @@ export async function run(options) {
 async function runOasImport(sourcePath, options, startedAt, phases, timePhase) {
   const absPath = path.resolve(sourcePath);
   if (!fs.existsSync(absPath) || !fs.statSync(absPath).isFile()) {
-    styles.error(`File not found: ${styles.bold(absPath)}`);
-    process.exit(1);
+    throw new Error(`File not found: ${absPath}`);
   }
   const ext = path.extname(absPath).toLowerCase();
   if (!['.json', '.yaml', '.yml'].includes(ext)) {
-    styles.error(`Unsupported file type ${styles.bold(ext || '(none)')} — expected .json, .yaml, or .yml.`);
-    process.exit(1);
+    throw new Error(`Unsupported file type ${ext || '(none)'} — expected .json, .yaml, or .yml.`);
   }
 
   const basename = path.basename(absPath, ext);
@@ -401,18 +424,15 @@ async function runOasImport(sourcePath, options, startedAt, phases, timePhase) {
     try {
       parsed = ext === '.json' ? JSON.parse(raw) : yamlRequire().load(raw);
     } catch (e) {
-      styles.error(`Couldn't parse ${styles.bold(absPath)} as ${ext === '.json' ? 'JSON' : 'YAML'}: ${e.message}`);
-      process.exit(1);
+      throw new Error(`Couldn't parse ${absPath} as ${ext === '.json' ? 'JSON' : 'YAML'}: ${e.message}`);
     }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      styles.error(`File isn't a usable object: ${styles.bold(absPath)}`);
-      process.exit(1);
+      throw new Error(`File isn't a usable object: ${absPath}`);
     }
     if (!looksLikeOas(parsed)) {
-      styles.error(
-        `Not an OpenAPI/Swagger spec — no top-level ${styles.bold('openapi')} / ${styles.bold('swagger')} field and no ${styles.bold('paths')} section.`,
+      throw new Error(
+        `Not an OpenAPI/Swagger spec — no top-level openapi / swagger field and no paths section.`,
       );
-      process.exit(1);
     }
 
     // Normalize via oas-normalize. `bundle()` handles the common fix-ups:
@@ -435,10 +455,9 @@ async function runOasImport(sourcePath, options, startedAt, phases, timePhase) {
         await normalizer.validate();
         return { spec: parsed, opCount: countOperations(parsed), wasFixed: false };
       } catch (validateErr) {
-        styles.error(`Spec is invalid and couldn't be auto-fixed.`);
-        styles.info(styles.dim(`  Validation error: ${validateErr.message.split('\n')[0]}`));
-        styles.info(styles.dim(`  Fix attempt error: ${bundleErr.message.split('\n')[0]}`));
-        process.exit(1);
+        throw new Error(
+          `Spec is invalid and couldn't be auto-fixed.\n  Validation error: ${validateErr.message.split('\n')[0]}\n  Fix attempt error: ${bundleErr.message.split('\n')[0]}`,
+        );
       }
     }
   });
@@ -455,6 +474,7 @@ async function runOasImport(sourcePath, options, startedAt, phases, timePhase) {
   console.log();
 
   const stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'readme-import-'));
+  let result;
   try {
     const { stagedName } = await timePhase('stage spec', async () => {
       // If we auto-fixed the spec, serialize the fixed version as JSON (always
@@ -505,7 +525,7 @@ async function runOasImport(sourcePath, options, startedAt, phases, timePhase) {
       styles.info('Starting the dev server for preview...');
       console.log();
       await runDevPreview(stagingDir);
-      return;
+      return { source: 'oas', stagingDir, fileCount: pageCount, duration: Date.now() - startedAt, phases };
     }
 
     await timePhase('zip', () => createZip(stagingDir, outputZip));
@@ -513,10 +533,11 @@ async function runOasImport(sourcePath, options, startedAt, phases, timePhase) {
     console.log();
     styles.ok(`Done in ${styles.bold(formatDuration(Date.now() - startedAt))}! Your ReadMe import is ready at ${styles.bold(outputZip)}`);
     console.log(styles.dim(`  ⏱  ${phases.map((p) => `${p.label} ${formatDuration(p.ms)}`).join(' · ')}`));
+    result = { source: 'oas', outputZip, fileCount: pageCount, duration: Date.now() - startedAt, phases };
   } finally {
     if (!options.test) fs.rmSync(stagingDir, { recursive: true, force: true });
   }
-  process.exit(0);
+  return result;
 }
 
 // js-yaml is installed transitively (via oas-sync.js) but not in our direct
