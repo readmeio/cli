@@ -2,7 +2,7 @@
 
 A command-line tool for writing, previewing, and managing your [ReadMe](https://readme.com) docs from your terminal.
 
-> **Currently in beta!** Things may change, break, or otherwise be a little rough around the edges. We'd love your feedback. Please [open an issue](https://github.com/readmeio/cli/issues) if you run into anything or have ideas for improvements.
+> **We want feedback!** If you need a new feature or find a bug, please [open an issue](https://github.com/readmeio/cli/issues).
 
 ## Commands
 
@@ -52,4 +52,4 @@ npx @readme/cli dev
 
 ## Feedback
 
-This is a beta! If something doesn't work right, or if you have suggestions, please [open an issue](https://github.com/readmeio/cli/issues). We're actively building this and want to hear from you.
+If something doesn't work right, or if you have suggestions, please [open an issue](https://github.com/readmeio/cli/issues). We're actively building this and want to hear from you.
