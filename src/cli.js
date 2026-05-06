@@ -62,6 +62,10 @@ export async function main() {
   }
   mods.sort((a, b) => (a.order || 0) - (b.order || 0));
 
+  // Map of registered primary commands to their category, for the categorized
+  // help renderer below.
+  const commandCategories = new Map();
+
   for (const mod of mods) {
     const isPlay = mod.command === 'play';
     const hidePlay = isPlay && (!hasPet || isRunningInClaude);
@@ -91,7 +95,57 @@ export async function main() {
         await mod.run(...args, ctx);
       }
     });
+
+    if (mod.category) commandCategories.set(cmd, mod.category);
   }
+
+  // Suppress commander's auto-generated Commands: section — we render our own
+  // categorized version below via addHelpText('after').
+  program.configureHelp({ visibleCommands: () => [] });
+
+  program.addHelpText('after', () => {
+    // Group registered commands by category. The built-in `help` command
+    // doesn't go through the loop above, so we add it manually.
+    const groups = { 'Linting': [], 'OAS Tooling': [], 'Other': [] };
+    for (const [cmd, category] of commandCategories.entries()) {
+      if (cmd._hidden) continue;
+      if (!groups[category]) groups[category] = [];
+      groups[category].push(cmd);
+    }
+    // Commander's built-in help command isn't in program.commands — fetch via private getter.
+    const helpCmd = program._getHelpCommand && program._getHelpCommand();
+    if (helpCmd) groups['Other'].push(helpCmd);
+
+    const allCmds = Object.values(groups).flat();
+    if (allCmds.length === 0) return '';
+    const nameWidth = Math.max(...allCmds.map((c) => c.name().length));
+
+    // Map cmd → its source module so we can pull optional helpHint.
+    const cmdToMod = new Map();
+    for (const mod of mods) {
+      const cmd = program.commands.find((c) => c.name() === mod.command);
+      if (cmd) cmdToMod.set(cmd, mod);
+    }
+
+    const lines = [''];
+    for (const [category, cmds] of Object.entries(groups)) {
+      if (cmds.length === 0) continue;
+      lines.push(`${styles.bold(`${category} Commands:`)}`);
+      for (const cmd of cmds) {
+        const name = cmd.name().padEnd(nameWidth);
+        const desc = cmd.description() || '';
+        lines.push(`  ${name}  ${desc}`);
+        const hint = cmdToMod.get(cmd)?.helpHint;
+        if (hint) {
+          for (const hintLine of hint.split('\n')) {
+            lines.push(`  ${' '.repeat(nameWidth)}  ${styles.dim(hintLine)}`);
+          }
+        }
+      }
+      lines.push('');
+    }
+    return lines.join('\n').trimEnd();
+  });
 
   // Show a random tip after help
   program.addHelpText('afterAll', () => {
@@ -120,12 +174,15 @@ export async function main() {
     return;
   }
 
-  // Support colon syntax (e.g. "eyes:right" → "eyes right")
+  // Support colon syntax (e.g. "eyes:right" → "eyes right"). Find the first
+  // non-flag positional so global options like --no-check don't bypass the rewrite.
   const argv = [...process.argv];
-  const cmdArg = argv[2];
+  let cmdIdx = 2;
+  while (cmdIdx < argv.length && argv[cmdIdx].startsWith('-')) cmdIdx++;
+  const cmdArg = argv[cmdIdx];
   if (cmdArg && cmdArg.includes(':') && !program.commands.some((c) => c.name() === cmdArg)) {
     const [base, ...rest] = cmdArg.split(':');
-    argv.splice(2, 1, base, rest.join(':'));
+    argv.splice(cmdIdx, 1, base, rest.join(':'));
   }
 
   await program.parseAsync(argv);

@@ -6,6 +6,7 @@ import * as styles from '../utils/styles.js';
 
 export const command = 'oas:validate';
 export const order = 3;
+export const category = 'OAS Tooling';
 export const description = 'Validate OpenAPI spec files';
 
 export function args(cmd) {

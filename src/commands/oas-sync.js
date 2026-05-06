@@ -9,6 +9,7 @@ const yaml = require('js-yaml');
 
 export const command = 'oas:sync';
 export const order = 2;
+export const category = 'OAS Tooling';
 export const description = 'Sync reference pages with OpenAPI specs';
 
 const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'options', 'head', 'trace']);

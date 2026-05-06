@@ -5,7 +5,7 @@ import { createRequire } from "node:module";
 import ora from "ora";
 import * as styles from "./styles.js";
 import { hasClaude } from "./claude.js";
-import { hasGithubRemote, hasGithubWorkflow, getWorkflowVersion, WORKFLOW_VERSION } from "./git.js";
+import { hasGithubRemote, hasGithubWorkflow, getWorkflowVersion, WORKFLOW_VERSION, detectPlatform, hasReadmeWorkflow, PLATFORMS } from "./git.js";
 import { getRandomTip } from "./tips.js";
 
 const require = createRequire(import.meta.url);
@@ -156,12 +156,20 @@ export function createHumanReporter() {
       if (unfixed.length > 0 && !isRunningInClaude) {
         const hasWorkflow = gitRoot ? hasGithubWorkflow(gitRoot) : true;
         const workflowVersion = gitRoot ? getWorkflowVersion(gitRoot) : null;
+        const detection = gitRoot ? detectPlatform(gitRoot) : { recommended: null };
+        const detectedPlatform = detection.recommended;
+        const hasCiWorkflow = detectedPlatform && gitRoot
+          ? hasReadmeWorkflow(gitRoot, detectedPlatform)
+          : true;
         const tip = getRandomTip({
           isRunningInClaude,
           hasClaude: hasClaude(),
           hasGithubRemote: hasGithubRemote(),
           hasGithubWorkflow: hasWorkflow,
           workflowOutdated: hasWorkflow && workflowVersion !== null && workflowVersion < WORKFLOW_VERSION,
+          detectedPlatform,
+          detectedPlatformLabel: detectedPlatform ? PLATFORMS[detectedPlatform].label : null,
+          hasCiWorkflow,
         });
         if (tip) tip.render();
       }

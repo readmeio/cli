@@ -3,6 +3,7 @@ import * as styles from '../utils/styles.js';
 
 export const command = 'versions';
 export const order = 4;
+export const category = 'Other';
 export const description = 'List all doc versions and their branches';
 
 const VERSION_RE = /^v\d+(\.\d+)*$/;

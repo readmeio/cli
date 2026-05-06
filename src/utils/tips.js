@@ -15,6 +15,17 @@ const tips = [
   {
     weight: 1,
     commands: ['lint', 'oas:validate'],
+    condition: (ctx) => !ctx.isRunningInClaude && ctx.detectedPlatform && !ctx.hasCiWorkflow,
+    render(ctx) {
+      const label = ctx?.detectedPlatformLabel || 'CI';
+      console.log(`  💡 ${styles.bold('Tip:')} Set up ${label} to lint your docs on every PR!`);
+      console.log(`     ${styles.dim('⎿')}  ${styles.orange(`${styles.binName()} setup`)}`);
+      console.log();
+    },
+  },
+  {
+    weight: 1,
+    commands: ['lint', 'oas:validate'],
     condition: (ctx) => !ctx.isRunningInClaude && ctx.hasClaude,
     render() {
       console.log(`  💡 ${styles.bold('Tip:')} Claude can fix these issues for you easily!`);
@@ -29,16 +40,6 @@ const tips = [
     render() {
       console.log(`  💡 ${styles.bold('Tip:')} Install Claude to automatically fix these issues!`);
       console.log(`     ${styles.dim('⎿')}  ${styles.dim('https://claude.ai/download')}`);
-      console.log();
-    },
-  },
-  {
-    weight: 1,
-    commands: ['lint', 'oas:validate'],
-    condition: (ctx) => !ctx.isRunningInClaude && ctx.hasGithubRemote && !ctx.hasGithubWorkflow,
-    render() {
-      console.log(`  💡 ${styles.bold('Tip:')} Set up GitHub Actions to lint your docs on every PR!`);
-      console.log(`     ${styles.dim('⎿')}  ${styles.orange(`${styles.binName()} setup:github`)}`);
       console.log();
     },
   },
@@ -79,9 +80,11 @@ export function getRandomTip(context) {
   // Weighted random selection
   const totalWeight = eligible.reduce((sum, t) => sum + (t.weight || 1), 0);
   let rand = Math.random() * totalWeight;
+  let chosen = eligible[eligible.length - 1];
   for (const tip of eligible) {
     rand -= tip.weight || 1;
-    if (rand <= 0) return tip;
+    if (rand <= 0) { chosen = tip; break; }
   }
-  return eligible[eligible.length - 1];
+  // Bind context so render() can read it without a second argument.
+  return { render: () => chosen.render(context) };
 }
