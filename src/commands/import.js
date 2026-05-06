@@ -664,13 +664,13 @@ function makeStagingGuard(stagingDir) {
  * Hand off to the dev command so the user can preview the staged docs. Reuses
  * the currently-running CLI binary so fixes to the dev server ship immediately
  * to users already on this version (and so local development doesn't need a
- * publish to test). Falls back to `npx @readme/cli-beta` if we can't locate
+ * publish to test). Falls back to `npx @readme/cli` if we can't locate
  * ourselves. Stdout is piped so we can detect the server's URL and open it.
  */
 function runDevPreview(stagingDir) {
   return new Promise((resolve, reject) => {
     const selfBin = process.argv[1] && fs.existsSync(process.argv[1]) ? process.argv[1] : null
-    const [cmd, args] = selfBin ? [process.execPath, [selfBin, 'dev', '--no-check']] : ['npx', ['--yes', '@readme/cli-beta', 'dev', '--no-check']]
+    const [cmd, args] = selfBin ? [process.execPath, [selfBin, 'dev', '--no-check']] : ['npx', ['--yes', '@readme/cli', 'dev', '--no-check']]
     const child = spawn(cmd, args, {
       cwd: stagingDir,
       stdio: ['inherit', 'pipe', 'inherit'],

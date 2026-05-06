@@ -255,7 +255,7 @@ export function createGithubReporter() {
           body += `| ${fileLink(r.file)} | ${label} ${r.message} |\n`;
         }
         body += "\n";
-        body += "> \u{1F4A1} **Tip:** Run `npx @readme/cli-beta lint --fix` locally to automatically fix some of these issues.\n\n";
+        body += "> \u{1F4A1} **Tip:** Run `npx @readme/cli lint --fix` locally to automatically fix some of these issues.\n\n";
       }
 
       // OAS change detection
@@ -274,7 +274,7 @@ export function createGithubReporter() {
             for (const f of files) {
               body += `- ${fileLink(f)}\n`;
             }
-            body += "\nRun `npx @readme/cli-beta oas:sync` to sync these changes to ReadMe.\n\n";
+            body += "\nRun `npx @readme/cli oas:sync` to sync these changes to ReadMe.\n\n";
           }
         } catch {
           // git diff failed — skip OAS section silently

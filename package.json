@@ -1,5 +1,5 @@
 {
-  "name": "@readme/cli-beta",
+  "name": "@readme/cli",
   "version": "0.0.25",
   "description": "The ReadMe CLI",
   "type": "module",

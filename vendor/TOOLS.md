@@ -1,19 +1,19 @@
 # CLI Tools
 
-The ReadMe CLI (`npx @readme/cli-beta`) has several commands that can help fix issues automatically. Run these before trying to fix things by hand.
+The ReadMe CLI (`npx @readme/cli`) has several commands that can help fix issues automatically. Run these before trying to fix things by hand.
 
-## `npx @readme/cli-beta lint --fix`
+## `npx @readme/cli lint --fix`
 
 Automatically fixes common linting issues: ordering problems, frontmatter cleanup, numbering suffixes, etc. Always try this first.
 
-## `npx @readme/cli-beta oas:sync`
+## `npx @readme/cli oas:sync`
 
 Syncs reference pages with OpenAPI specs. Fixes many OAS-related issues automatically: creates missing endpoint pages, removes stale ones, updates titles/excerpts to match the spec, and maintains `_order.yaml` files. Run this whenever you see `oas-reference` errors.
 
-## `npx @readme/cli-beta lint`
+## `npx @readme/cli lint`
 
 Runs all validators and reports errors/warnings. Use this to check your work after making changes.
 
-## `npx @readme/cli-beta dev`
+## `npx @readme/cli dev`
 
 Starts a local dev server to preview docs. Useful for visually verifying changes.

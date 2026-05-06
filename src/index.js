@@ -1,5 +1,5 @@
 /**
- * Programmatic API for `@readme/cli-beta`.
+ * Programmatic API for `@readme/cli`.
  *
  * Each function mirrors the behavior of its CLI command but returns
  * structured data and never calls `process.exit`. Callers own how to format,

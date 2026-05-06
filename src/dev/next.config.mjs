@@ -9,7 +9,7 @@ export default {
   // When installed via `npx`, this directory lives inside `node_modules`, and
   // Next's SWC loader excludes `node_modules` from JSX transformation by
   // default. Marking our own package as a transpile target bypasses that.
-  transpilePackages: ['@readme/cli-beta'],
+  transpilePackages: ['@readme/cli'],
   serverExternalPackages: ['gray-matter', 'js-yaml', '@readme/markdown'],
   webpack: (config) => {
     // Suppress noisy cache serialization warnings from large @readme/markdown bundle

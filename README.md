@@ -11,7 +11,7 @@ A command-line tool for writing, previewing, and managing your [ReadMe](https://
 Checks your docs for errors: things like invalid frontmatter, missing files, duplicate slugs, and more. Handy for catching issues before you push.
 
 ```bash
-npx @readme/cli-beta lint [--fix] [--json]
+npx @readme/cli lint [--fix] [--json]
 ```
 
 Use `--fix` to automatically fix what it can, or `--json` for machine-readable output (great for CI).
@@ -21,7 +21,7 @@ Use `--fix` to automatically fix what it can, or `--json` for machine-readable o
 Syncs your `reference/` directory with your OpenAPI spec. It'll create, update, or remove pages based on your spec's operations.
 
 ```bash
-npx @readme/cli-beta oas:sync
+npx @readme/cli oas:sync
 ```
 
 ### Import
@@ -29,7 +29,7 @@ npx @readme/cli-beta oas:sync
 Imports content from an external folder and converts it into ReadMe's format using Claude. Great for migrating existing docs.
 
 ```bash
-npx @readme/cli-beta import
+npx @readme/cli import
 ```
 
 ### Versions
@@ -37,7 +37,7 @@ npx @readme/cli-beta import
 Lists all your doc versions and their branches.
 
 ```bash
-npx @readme/cli-beta versions
+npx @readme/cli versions
 ```
 
 ### Dev Server
@@ -47,7 +47,7 @@ npx @readme/cli-beta versions
 Starts a local dev server so you can preview your docs as you write them. Watches for changes and refreshes automatically.
 
 ```bash
-npx @readme/cli-beta dev
+npx @readme/cli dev
 ```
 
 ## Feedback

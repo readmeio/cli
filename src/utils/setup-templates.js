@@ -74,7 +74,7 @@ jobs:
         env:
           NODE_AUTH_TOKEN: \${{ secrets.GITHUB_TOKEN }}
           GITHUB_BASE_SHA: \${{ github.event.pull_request.base.sha }}
-        run: npx -y @readme/cli-beta --no-check lint --github > comment.md
+        run: npx -y @readme/cli --no-check lint --github > comment.md
 
       - name: Comment on PR
         uses: actions/github-script@v7
@@ -139,7 +139,7 @@ readme-lint:
   script:
     - git fetch origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
     - export GITHUB_BASE_SHA="$(git rev-parse origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME)"
-    - npx -y @readme/cli-beta --no-check lint --github > comment.md || echo "LINT_FAILED=1" >> lint.env
+    - npx -y @readme/cli --no-check lint --github > comment.md || echo "LINT_FAILED=1" >> lint.env
     - |
       if [ -s comment.md ] && grep -q '<!-- readme-lint-results -->' comment.md; then
         BODY=$(cat comment.md)
@@ -178,7 +178,7 @@ pipelines:
           script:
             - export GITHUB_BASE_SHA="$(git rev-parse origin/$BITBUCKET_PR_DESTINATION_BRANCH)"
             - LINT_RC=0
-            - npx -y @readme/cli-beta --no-check lint --github > comment.md || LINT_RC=$?
+            - npx -y @readme/cli --no-check lint --github > comment.md || LINT_RC=$?
             - |
               if [ -s comment.md ] && grep -q '<!-- readme-lint-results -->' comment.md; then
                 BODY=$(cat comment.md)
@@ -219,7 +219,7 @@ jobs:
             git fetch origin "$BASE_BRANCH" || true
             export GITHUB_BASE_SHA="$(git rev-parse origin/$BASE_BRANCH 2>/dev/null || echo '')"
             set +e
-            npx -y @readme/cli-beta --no-check lint --github > comment.md
+            npx -y @readme/cli --no-check lint --github > comment.md
             LINT_RC=$?
             set -e
             if [ -n "$CIRCLE_PULL_REQUEST" ] && grep -q '<!-- readme-lint-results -->' comment.md; then
@@ -281,7 +281,7 @@ tasks:
     use: [code, node]
     run: |
       set +e
-      GITHUB_BASE_SHA="\${{ init.base-sha }}" npx -y @readme/cli-beta --no-check lint --github > comment.md
+      GITHUB_BASE_SHA="\${{ init.base-sha }}" npx -y @readme/cli --no-check lint --github > comment.md
       echo $? > lint.rc
     filter:
       - comment.md
