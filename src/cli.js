@@ -3,6 +3,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Command } from 'commander';
 import { createRequire } from 'node:module';
+import updateNotifier from 'update-notifier';
 import bootstrap from './bootstrap.js';
 import * as styles from './utils/styles.js';
 import { header, setPalette, isAgenticCli } from './utils/eyes.js';
@@ -15,6 +16,10 @@ const pkg = require('../package.json');
 const isRunningInClaude = isAgenticCli();
 
 export async function main() {
+  if (!isRunningInClaude) {
+    updateNotifier({ pkg }).notify({ defer: true, isGlobal: true });
+  }
+
   const program = new Command();
 
   // Load tamagotchi state if it exists for personalized header
