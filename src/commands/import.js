@@ -2538,7 +2538,7 @@ function stageOrganized(organized, stagingDir, opts = {}) {
       // git-format convention for metadata the schema doesn't know about.
       frontmatter['x-import'] = toBrowsableUrl(page.url)
       // hide pages that need import
-      frontmatter.hidden = true
+      frontmatter.hidden = 'true'
 
       const absPath = path.join(stagingDir, relFilePath)
       fs.mkdirSync(path.dirname(absPath), { recursive: true })
