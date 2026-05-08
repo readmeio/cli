@@ -7,7 +7,7 @@ import { Option } from 'commander'
 import { query } from '@anthropic-ai/claude-agent-sdk'
 import matter from 'gray-matter'
 import * as styles from '../utils/styles.js'
-import { syncOas, extractOperations } from './oas-sync.js'
+import { syncOas } from './oas-sync.js'
 import OASNormalize from 'oas-normalize'
 import { slotOrphansPrompt, iconizeNavPrompt, organizeFromSectionsPrompt, organizeFromScratchPrompt, stripCodeFences } from '../prompts/index.js'
 
@@ -20,7 +20,7 @@ export const skipBootstrap = true
 export function args(cmd) {
   cmd.requiredOption('--source <url-or-file>', 'URL to import from, or path to a local OpenAPI spec (.json/.yaml/.yml)')
   cmd.option('-o, --output <path>', 'Output zip path (defaults to <basename>-readme.zip in cwd)')
-  cmd.option('--model <name>', 'Claude model alias: haiku, sonnet, opus', 'sonnet')
+  cmd.addOption(new Option('-m, --model <name>', 'Claude model alias: haiku, sonnet, opus').choices(['haiku', 'sonnet', 'opus']))
   cmd.option('--firecrawl-key <key>', 'Firecrawl API key (or set FIRECRAWL_API_KEY env var) — enables JS-rendered sidebar scraping')
   cmd.option('--skip-api-reference', 'Drop pages routed to the API Reference / reference dir. Use when uploading the OAS spec separately.')
   // Internal dev-only flag: skip the zip, keep staging, and boot the dev server
@@ -120,9 +120,7 @@ export async function importDocs(options) {
     if (sitemapResult) {
       sitemapUrl = sitemapResult.url
       sitemapKnownUrls = sitemapUrlsToKnownUrls(sitemapResult.urls)
-      styles.ok(
-        `Found sitemap.xml at ${styles.bold(sitemapUrl)} — ${styles.bold(String(sitemapKnownUrls.length))} URL${sitemapKnownUrls.length === 1 ? '' : 's'} in scope.`,
-      )
+      styles.ok(`Found sitemap.xml at ${styles.bold(sitemapUrl)} — ${styles.bold(String(sitemapKnownUrls.length))} URL${sitemapKnownUrls.length === 1 ? '' : 's'} in scope.`)
     } else {
       styles.warning(`No llms.txt or sitemap.xml found — falling back to sidebar discovery via scrape.`)
     }
