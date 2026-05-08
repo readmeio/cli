@@ -5,7 +5,7 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import matter from 'gray-matter';
 import ora from 'ora';
 import { collectFiles } from '../utils/lint.js';
-import { prettifyPagePrompt, stripCodeFences } from '../prompts/index.js';
+import { prettifyPagePrompt, prettifyPageOutputSchema } from '../prompts/index.js';
 import { printHeader, isAgenticCli } from '../utils/eyes.js';
 import * as styles from '../utils/styles.js';
 
@@ -93,39 +93,52 @@ async function fetchImport(url, opts = {}) {
 }
 
 /**
- * Send one page through Claude using the prettify system prompt and parse the
- * JSON response. Returns the parsed object or throws on failure.
+ * Send one page through Claude using the prettify system prompt and the agent
+ * SDK's structured-output mode. The runtime enforces `prettifyPageOutputSchema`
+ * and surfaces the parsed object on the result message's `structured_output`
+ * field — no fence-stripping or manual JSON.parse needed.
+ *
+ * `oasPartialJson` arrives as a string (the schema models it as such to dodge
+ * structured outputs' `additionalProperties: false` rule, which is
+ * incompatible with OpenAPI's free-form path/schema keys). We parse it here
+ * and re-expose it as `oasPartial` so callers see the conventional shape.
  */
 async function prettifyPage({ source, title, relativePath, model }) {
   const { systemPrompt, userPrompt } = prettifyPagePrompt({ source, title, relativePath });
 
-  let text = '';
+  let structured;
   for await (const message of query({
     prompt: userPrompt,
     options: {
       systemPrompt,
       allowedTools: [],
+      outputFormat: { type: 'json_schema', schema: prettifyPageOutputSchema },
       ...(model ? { model } : {}),
     },
   })) {
-    if (message.type === 'assistant' && message.message?.content) {
-      for (const block of message.message.content) {
-        if (block.type === 'text' && block.text) text += block.text;
-      }
-    } else if (message.type === 'result') {
-      if (message.subtype && message.subtype !== 'success') {
+    if (message.type === 'result') {
+      if (message.subtype !== 'success') {
         throw new Error(`${message.subtype}${message.error?.message ? ' — ' + message.error.message : ''}`);
       }
+      structured = message.structured_output;
       break;
     }
   }
 
-  const stripped = stripCodeFences(text);
-  try {
-    return JSON.parse(stripped);
-  } catch (e) {
-    throw new Error(`invalid JSON (${e.message}); first 200 chars: ${stripped.slice(0, 200)}`);
+  if (!structured || typeof structured !== 'object') {
+    throw new Error('agent returned no structured output');
   }
+
+  let oasPartial = null;
+  if (typeof structured.oasPartialJson === 'string' && structured.oasPartialJson.length > 0) {
+    try {
+      oasPartial = JSON.parse(structured.oasPartialJson);
+    } catch (e) {
+      throw new Error(`invalid oasPartialJson (${e.message}); first 200 chars: ${structured.oasPartialJson.slice(0, 200)}`);
+    }
+  }
+
+  return { body: structured.body, isApiRef: structured.isApiRef, oasPartial };
 }
 
 export async function run(file, options, _cmd, ctx) {

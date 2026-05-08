@@ -296,16 +296,44 @@ If the page IS an API reference, extract the endpoints into a partial OpenAPI 3.
 - Use realistic types inferred from the documentation (don't use "object" or "string" for everything)
 - Include the server/base URL if mentioned
 
-## Output Format
-Respond with ONLY a JSON object (no markdown fences, no explanation):
-{
-  "body": "the full MDX-fixed markdown content (no frontmatter)",
-  "isApiRef": true/false,
-  "oasPartial": null OR {"paths": {"/endpoint": {"get": {...}}}, "schemas": {"ModelName": {...}}}
-}
-When isApiRef=false, set oasPartial to null. When isApiRef=true, include the extracted paths and schemas.
-Think deeply about the body and the content and ensure it is human readable with no broken mdx.
+## Output
+The runtime enforces the response shape via a JSON schema, so don't worry about formatting — just populate every field with the right content.
+
+- \`body\`: the full MDX-fixed markdown content with no frontmatter. This is the load-bearing field — get the content right, render it human-readable, and don't leave broken MDX.
+- \`isApiRef\`: true if this page primarily documents API endpoints (per the rules above), false otherwise.
+- \`oasPartialJson\`: when \`isApiRef\` is true, set this to a JSON-stringified partial OpenAPI 3.0 fragment of the form \`{"paths": {"/endpoint": {"get": {...}}}, "schemas": {"ModelName": {...}}}\`. The caller will \`JSON.parse\` it. When \`isApiRef\` is false, set it to \`null\`.
 `;
+
+/**
+ * JSON schema describing the structured output shape returned by the prettify
+ * agent. Pass to the Claude Agent SDK's \`outputFormat\` option so the runtime
+ * enforces the shape and returns parsed data on the result message's
+ * \`structured_output\` field — no manual fence-stripping or JSON.parse needed.
+ *
+ * \`oasPartialJson\` is a stringified OAS fragment rather than a nested object
+ * because Anthropic's structured outputs require \`additionalProperties: false\`
+ * on every object, which is incompatible with OpenAPI's free-form path/schema
+ * keys. The caller parses the string client-side.
+ */
+export const prettifyPageOutputSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['body', 'isApiRef', 'oasPartialJson'],
+  properties: {
+    body: {
+      type: 'string',
+      description: 'The MDX-fixed markdown content for the page (no frontmatter).',
+    },
+    isApiRef: {
+      type: 'boolean',
+      description: 'True if the page primarily documents REST/GraphQL/gRPC endpoints.',
+    },
+    oasPartialJson: {
+      anyOf: [{ type: 'string' }, { type: 'null' }],
+      description: 'JSON-stringified partial OpenAPI 3.0 fragment when isApiRef is true; null otherwise.',
+    },
+  },
+};
 
 /**
  * @param {object} input
