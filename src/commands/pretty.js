@@ -21,7 +21,7 @@ export const description = 'Polish docs into ReadMe-ready MDX with Claude'
 export const beta = true
 
 export function args(cmd) {
-  cmd.addOption(new Option('-m, --model <name>', 'Claude model alias: haiku, sonnet, opus').choices(['haiku', 'sonnet', 'opus']))
+  cmd.addOption(new Option('-m, --model <name>', 'Claude model alias: haiku, sonnet, opus').choices(['haiku', 'sonnet', 'opus']).default('sonnet'))
 
   cmd.option('--dry-run', 'Show what would change without writing files')
   cmd.option(
