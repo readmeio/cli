@@ -12,7 +12,7 @@ import * as styles from '../utils/styles.js';
 const require = createRequire(import.meta.url);
 const pkg = require('../../package.json');
 
-export const command = 'pretty';
+export const command = 'pretty [file]';
 export const order = 2;
 export const description = 'Polish docs into ReadMe-ready MDX with Claude';
 export const beta = true;
@@ -20,6 +20,76 @@ export const beta = true;
 export function args(cmd) {
   cmd.option('--model <name>', 'Claude model alias: haiku, sonnet, opus', 'sonnet');
   cmd.option('--dry-run', 'Show what would change without writing files');
+}
+
+/**
+ * Fetch with exponential backoff for transient (5xx / network) failures.
+ * `retries: 3` does up to 4 attempts with delays of 1s, 2s, 4s before each
+ * retry. 4xx responses are definitive and short-circuit so callers can fall
+ * through to the next strategy.
+ */
+async function fetchWithRetry(url, { headers = {}, retries = 3, baseDelayMs = 1000 } = {}) {
+  const maxAttempts = retries + 1;
+  let lastError;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const res = await fetch(url, {
+        redirect: 'follow',
+        headers: { 'User-Agent': 'readme-cli-pretty', ...headers },
+      });
+      if (!res.ok) {
+        const err = new Error(`HTTP ${res.status} ${res.statusText}`);
+        err.status = res.status;
+        throw err;
+      }
+      return await res.text();
+    } catch (err) {
+      lastError = err;
+      if (err.status && err.status >= 400 && err.status < 500) break;
+      if (attempt < maxAttempts) {
+        const delay = baseDelayMs * Math.pow(2, attempt - 1);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+  }
+  throw lastError;
+}
+
+function withMdExtension(url) {
+  try {
+    const u = new URL(url);
+    if (u.pathname.endsWith('.md')) return null;
+    u.pathname = u.pathname.replace(/\/$/, '') + '.md';
+    return u.toString();
+  } catch {
+    if (url.endsWith('.md')) return null;
+    return url.replace(/\/$/, '') + '.md';
+  }
+}
+
+/**
+ * Fetch a doc URL, preferring markdown. Falls through in order:
+ *   1. <url>.md (when not already .md)
+ *   2. <url> with Accept: text/markdown
+ *   3. <url> directly
+ * Each strategy gets its own retry budget for transient failures.
+ */
+async function fetchImport(url, opts = {}) {
+  const strategies = [];
+  const mdUrl = withMdExtension(url);
+  if (mdUrl) strategies.push({ url: mdUrl });
+  strategies.push({ url, headers: { Accept: 'text/markdown' } });
+  strategies.push({ url });
+
+  let lastError;
+  for (const strategy of strategies) {
+    try {
+      return await fetchWithRetry(strategy.url, { ...opts, headers: strategy.headers });
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw new Error(`failed to fetch ${url}: ${lastError?.message || lastError}`);
 }
 
 /**
@@ -58,7 +128,7 @@ async function prettifyPage({ source, title, relativePath, model }) {
   }
 }
 
-export async function run(options, _cmd, ctx) {
+export async function run(file, options, _cmd, ctx) {
   const { gitRoot } = ctx;
 
   if (!isAgenticCli()) {
@@ -66,7 +136,23 @@ export async function run(options, _cmd, ctx) {
     console.log();
   }
 
-  const files = collectFiles(gitRoot);
+  let files;
+  if (file) {
+    const absFile = path.resolve(file);
+    if (!fs.existsSync(absFile)) {
+      styles.error(`File not found: ${styles.bold(file)}`);
+      process.exit(1);
+    }
+    const relFile = path.relative(gitRoot, absFile);
+    if (relFile.startsWith('..') || path.isAbsolute(relFile)) {
+      styles.error(`File must be inside the repo: ${styles.bold(file)}`);
+      process.exit(1);
+    }
+    files = [relFile];
+  } else {
+    files = collectFiles(gitRoot);
+  }
+
   if (files.length === 0) {
     styles.warning('No docs files found to prettify.');
     return;
@@ -89,8 +175,16 @@ export async function run(options, _cmd, ctx) {
     const parsed = matter(original);
 
     try {
+      let source = parsed.content;
+      const importUrl = parsed.data?.['x-import'];
+      if (importUrl) {
+        spinner.text = `${relativePath} ${styles.dim(`(fetching ${importUrl})`)}`;
+        source = await fetchImport(importUrl);
+        spinner.text = relativePath;
+      }
+
       const result = await prettifyPage({
-        source: parsed.content,
+        source,
         title: parsed.data?.title,
         relativePath,
         model: options.model,
@@ -101,6 +195,8 @@ export async function run(options, _cmd, ctx) {
       }
 
       const newFm = { ...parsed.data };
+      delete newFm.hidden;
+      delete newFm['x-import'];
       if (result.excerpt && !newFm.excerpt) newFm.excerpt = result.excerpt;
       const next = matter.stringify(result.body, newFm);
 

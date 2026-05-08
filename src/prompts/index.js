@@ -299,13 +299,13 @@ If the page IS an API reference, extract the endpoints into a partial OpenAPI 3.
 ## Output Format
 Respond with ONLY a JSON object (no markdown fences, no explanation):
 {
-  "excerpt": "one-line summary of the page",
   "body": "the full MDX-fixed markdown content (no frontmatter)",
   "isApiRef": true/false,
-  "suggestedCategory": "Best Category Name",
   "oasPartial": null OR {"paths": {"/endpoint": {"get": {...}}}, "schemas": {"ModelName": {...}}}
 }
-When isApiRef=false, set oasPartial to null. When isApiRef=true, include the extracted paths and schemas.`;
+When isApiRef=false, set oasPartial to null. When isApiRef=true, include the extracted paths and schemas.
+Think deeply about the body and the content and ensure it is human readable with no broken mdx.
+`;
 
 /**
  * @param {object} input
