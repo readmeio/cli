@@ -114,10 +114,10 @@ export async function validateAll(files, gitRoot, { fix, nonInteractive } = {}) 
     console.log(`  ${styles.warn('Note:')} Renaming changes slugs, which could break existing URLs.`)
     console.log()
 
-    const answer = await prompt(`  Rename ${renames.length} ${renames.length === 1 ? 'path' : 'paths'}? (y/N) `)
+    // assume yes if non-interactive, otherwise prompt for confirmation
+    const answer = nonInteractive ? 'yes' : await prompt(`  Rename ${renames.length} ${renames.length === 1 ? 'path' : 'paths'}? (y/N) `)
 
-    // assume yes if non-interactive
-    if (answer === 'y' || answer === 'yes' || nonInteractive) {
+    if (answer === 'y' || answer === 'yes') {
       // Sort longest path first so nested dirs get renamed before parents.
       renames.sort((a, b) => b.from.length - a.from.length)
       for (const r of renames) {
