@@ -327,6 +327,11 @@ export async function importDocs(options) {
       categories: clustered.map((c) => ({ title: c.title, icon: null, pages: c.pages })),
     }
   }
+  
+  for (const cat of organized.categories || []) {
+    cat.pages = nestByUrlHierarchy(cat.pages)
+  }
+
   styles.ok(`Organized in ${styles.bold(formatDuration(Date.now() - organizeStart))}.`)
   if (debugSnapshots) {
     debugSnapshots['05-organized.json'] = organized
@@ -1612,6 +1617,73 @@ function collectFlat(page, out) {
   if (page.pages && page.pages.length > 0) {
     for (const child of page.pages) collectFlat(child, out)
   }
+}
+
+/**
+ * Re-parent URL-bearing siblings by URL path so a page like `/foo/bar`
+ * becomes a child of `/foo` when both appear in the same list.
+ *
+ * @example
+ *   nestByUrlHierarchy([
+ *     { title: 'CLI',      url: 'https://x.com/getting-started/cli' },
+ *     { title: 'Overview', url: 'https://x.com/getting-started/cli/overview' },
+ *   ])
+ *   // [
+ *   //   { title: 'CLI', url: '…/cli', pages: [
+ *   //     { title: 'Overview', url: '…/cli/overview' },
+ *   //   ]},
+ *   // ]
+ */
+function nestByUrlHierarchy(pages) {
+  if (!pages || pages.length === 0) return pages
+
+  // Recurse first so group-only / already-nested subtrees get re-nested too.
+  for (const p of pages) {
+    if (p.pages && p.pages.length > 0) p.pages = nestByUrlHierarchy(p.pages)
+  }
+
+  // Need at least two URL-bearing siblings to form a parent/child pair.
+  const byPath = new Map()
+  for (const p of pages) {
+    if (!p.url) continue
+    const k = normalizePath(p.url)
+    if (!byPath.has(k)) byPath.set(k, p)
+  }
+  if (byPath.size < 2) return pages
+
+  const result = []
+  for (const p of pages) {
+    if (!p.url) {
+      result.push(p)
+      continue
+    }
+    let segs
+    try {
+      segs = new URL(p.url).pathname.split('/').filter(Boolean)
+    } catch {
+      result.push(p)
+      continue
+    }
+    let parent = null
+    for (let depth = segs.length - 1; depth >= 1; depth--) {
+      const key = ('/' + segs.slice(0, depth).join('/'))
+        .toLowerCase()
+        .replace(/\.(md|mdx|html?)$/i, '')
+        .replace(/\/$/, '')
+      const candidate = byPath.get(key)
+      if (candidate && candidate !== p) {
+        parent = candidate
+        break
+      }
+    }
+    if (parent) {
+      if (!parent.pages) parent.pages = []
+      parent.pages.push(p)
+    } else {
+      result.push(p)
+    }
+  }
+  return result
 }
 
 /**
