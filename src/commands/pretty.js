@@ -2,18 +2,48 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import { query } from '@anthropic-ai/claude-agent-sdk'
-import { InvalidArgumentError } from 'commander'
+import { InvalidArgumentError, Option } from 'commander'
 import matter from 'gray-matter'
 import { collectFiles } from '../utils/lint.js'
 import { prettifyPagePrompt, prettifyPageOutputSchema } from '../prompts/index.js'
 import { printHeader, isAgenticCli } from '../utils/eyes.js'
 import { MultiSpinner } from '../utils/multi-spinner.js'
 import { runPool } from '../utils/promise-pool.js'
+import {
+  listLocalComponents,
+  listMarketplaceComponents,
+  installComponent,
+  readCachedReadme,
+  summarizeReadme,
+} from '../utils/marketplace.js'
 import * as styles from '../utils/styles.js'
-import { Option } from 'commander'
 
 const require = createRequire(import.meta.url)
 const pkg = require('../../package.json')
+
+/**
+ * Native ReadMe MDX tags that don't need a marketplace install — the renderer
+ * supports them out of the box. We exclude these from auto-install detection.
+ */
+const NATIVE_TAGS = new Set([
+  'Tabs', 'Tab',
+  'Accordion',
+  'Cards', 'Card',
+  'Columns', 'Column',
+  'Image',
+])
+
+/**
+ * Pull every PascalCase tag name out of a block of mdx. Matches both
+ * `<Foo ... />` and `<Foo>...</Foo>`. Returns a Set of unique names.
+ */
+function extractUsedTags(mdx) {
+  const tags = new Set()
+  const re = /<([A-Z][A-Za-z0-9]*)\b/g
+  let m
+  while ((m = re.exec(mdx)) !== null) tags.add(m[1])
+  return tags
+}
 
 export const command = 'pretty [file]'
 export const order = 2
@@ -24,6 +54,7 @@ export function args(cmd) {
   cmd.addOption(new Option('-m, --model <name>', 'Claude model alias: haiku, sonnet, opus').choices(['haiku', 'sonnet', 'opus']).default('sonnet'))
 
   cmd.option('--dry-run', 'Show what would change without writing files')
+  cmd.option('--no-auto-install', 'Don\'t auto-install marketplace components used in output')
   cmd.option(
     '-j, --jobs <n>',
     'Number of files to prettify in parallel',
@@ -119,8 +150,10 @@ async function fetchImport(url, opts = {}) {
  * incompatible with OpenAPI's free-form path/schema keys). We parse it here
  * and re-expose it as `oasPartial` so callers see the conventional shape.
  */
-async function prettifyPage({ source, title, relativePath, model }) {
-  const { systemPrompt, userPrompt } = prettifyPagePrompt({ source, title, relativePath })
+async function prettifyPage({ source, title, relativePath, model, localComponents, availableComponents }) {
+  const { systemPrompt, userPrompt } = prettifyPagePrompt({
+    source, title, relativePath, localComponents, availableComponents,
+  })
 
   let structured
   for await (const message of query({
@@ -187,9 +220,54 @@ export async function run(file, options, _cmd, ctx) {
     return
   }
 
+  const localComponents = listLocalComponents(gitRoot)
+  const localNames = new Set(localComponents.map((c) => c.name))
+
+  // Pull the full marketplace catalog so Claude knows what else it can use.
+  // Summaries come from disk cache (populated by `readme components list`);
+  // we don't fetch readmes here to keep the prompt path fast.
+  let marketplace = []
+  if (options.autoInstall !== false) {
+    try {
+      marketplace = await listMarketplaceComponents()
+    } catch (err) {
+      styles.warning(`Could not load marketplace catalog: ${err.message} (continuing without it)`)
+    }
+  }
+  const marketplaceNames = new Set(marketplace.map((c) => c.name))
+  const availableComponents = marketplace
+    .filter((c) => !localNames.has(c.name))
+    .map((c) => ({ name: c.name, summary: summarizeReadme(readCachedReadme(c.name)) }))
+
+  // Concurrent workers may both try to install the same component. Coalesce
+  // duplicate installs through a Map<tag, Promise> — the second caller awaits
+  // the first's install instead of clobbering it.
+  const inFlightInstalls = new Map()
+  const autoInstalled = new Set()
+  function ensureInstalled(tag) {
+    if (inFlightInstalls.has(tag)) return inFlightInstalls.get(tag)
+    const p = (async () => {
+      await installComponent(gitRoot, tag)
+      localNames.add(tag)
+      autoInstalled.add(tag)
+    })()
+    inFlightInstalls.set(tag, p)
+    return p
+  }
+
   styles.info(
     `Prettifying ${styles.bold(String(files.length))} file${files.length === 1 ? '' : 's'} with ${styles.bold(options.model)}${options.jobs > 1 ? ` (${styles.bold('-j ' + options.jobs)})` : ''}${options.dryRun ? styles.dim(' (dry run)') : ''}.`,
   )
+  if (localComponents.length > 0) {
+    styles.info(
+      `Found ${styles.bold(String(localComponents.length))} local component${localComponents.length === 1 ? '' : 's'} in ${styles.bold('./components/')}: ${localComponents.map((c) => c.name).join(', ')}`,
+    )
+  }
+  if (options.autoInstall !== false && availableComponents.length > 0) {
+    styles.info(
+      `${styles.bold(String(availableComponents.length))} additional marketplace component${availableComponents.length === 1 ? '' : 's'} will be auto-installed if used.`,
+    )
+  }
   console.log()
 
   let updated = 0
@@ -221,10 +299,32 @@ export async function run(file, options, _cmd, ctx) {
         title: parsed.data?.title,
         relativePath,
         model: options.model,
+        localComponents,
+        availableComponents: options.autoInstall === false ? [] : availableComponents,
       })
 
       if (typeof result?.body !== 'string') {
         throw new Error('response missing "body" field')
+      }
+
+      // Auto-install marketplace components Claude used in the body. We do
+      // this before writing the file so the docs page and its components land
+      // together — and we share the inFlightInstalls map across workers so a
+      // tag is only fetched once.
+      if (options.autoInstall !== false && !options.dryRun) {
+        const used = extractUsedTags(result.body)
+        for (const tag of used) {
+          if (NATIVE_TAGS.has(tag)) continue
+          if (localNames.has(tag)) continue
+          if (!marketplaceNames.has(tag)) continue
+          try {
+            multi.setLine(workerIdx, `${relativePath} ${styles.dim(`(installing <${tag}>)`)}`)
+            await ensureInstalled(tag)
+          } catch (err) {
+            failures.push({ relativePath, message: `auto-install <${tag}> failed: ${err.message}` })
+          }
+        }
+        multi.setLine(workerIdx, relativePath)
       }
 
       const newFm = { ...parsed.data }
@@ -256,6 +356,9 @@ export async function run(file, options, _cmd, ctx) {
   console.log()
   const verb = options.dryRun ? 'would update' : 'updated'
   styles.ok(`${styles.bold(String(updated))} ${verb} · ${styles.bold(String(unchanged))} unchanged${failures.length ? ` · ${styles.bold(String(failures.length))} failed` : ''}`)
+  if (autoInstalled.size > 0) {
+    styles.ok(`Auto-installed ${styles.bold(String(autoInstalled.size))} component${autoInstalled.size === 1 ? '' : 's'}: ${[...autoInstalled].join(', ')}`)
+  }
 
   if (failures.length > 0) {
     console.log()
