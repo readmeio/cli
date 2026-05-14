@@ -143,11 +143,9 @@ export async function importDocs(options) {
 
     const rawKnownUrls = llms.parsed.sections.flatMap((s) => s.items.map((i) => ({ title: i.text, url: i.url, description: i.description })))
 
-    // Dedupe llms.txt entries by pathname. Some sites (zod.dev, fumadocs) list
-    // every in-page anchor as its own llms.txt row (`/v4?id=wrapping-up`,
-    // `/v4?id=metadata`, …) even though they all live on one rendered page.
-    // We prefer the "cleanest" URL per path — the shortest one, which is
-    // usually the one without a query string or hash.
+    // Dedupe llms.txt entries by pathname. Some sites list every in-page anchor
+    // as its own llms.txt row (`/custom-data#anchor1`, `/custom-data#anchor2`,
+    // even though they all live on one rendered page.
     const byKnownPath = new Map()
     for (const p of rawKnownUrls) {
       const key = normalizePath(p.url)
@@ -158,6 +156,18 @@ export async function importDocs(options) {
     const dropped = rawKnownUrls.length - knownUrls.length
     if (dropped > 0) {
       styles.info(`${styles.dim(`Collapsed ${dropped} anchor/query duplicates → ${knownUrls.length} unique pages.`)}`)
+    }
+
+    const seenSectionPaths = new Set()
+    for (const section of llms.parsed.sections) {
+      section.items = section.items.filter((it) => {
+        const key = normalizePath(it.url)
+        const kept = byKnownPath.get(key)
+        if (!kept || it.url !== kept.url) return false
+        if (seenSectionPaths.has(key)) return false
+        seenSectionPaths.add(key)
+        return true
+      })
     }
   } else if (sitemapKnownUrls.length > 0) {
     knownUrls = sitemapKnownUrls
@@ -1730,6 +1740,7 @@ function slotOrphansByPath(scraped, knownPages) {
       matched.add(norm)
     } else {
       orphans.push(p)
+      matched.add(norm)
     }
   }
   return orphans
@@ -2053,18 +2064,27 @@ function normalizePath(url) {
  * Returns the orphans Claude couldn't slot.
  */
 async function slotOrphansWithClaude(scraped, orphans, model) {
+  const seenPaths = new Set(scraped.categories.flatMap((c) => c.pages.map((p) => normalizePath(p.url))))
+  const dedupedOrphans = []
+  for (const p of orphans) {
+    const norm = normalizePath(p.url)
+    if (seenPaths.has(norm)) continue
+    seenPaths.add(norm)
+    dedupedOrphans.push(p)
+  }
+
   const { systemPrompt, userPrompt } = slotOrphansPrompt({
     categories: scraped.categories,
-    orphans,
+    orphans: dedupedOrphans,
   })
   const raw = await runJsonQuery({ systemPrompt, userPrompt, model })
   if (!Array.isArray(raw)) {
     // If the model didn't cooperate, return all orphans unassigned.
-    return orphans
+    return dedupedOrphans
   }
 
   const leftover = []
-  orphans.forEach((p, i) => {
+  dedupedOrphans.forEach((p, i) => {
     const idx = Number.isInteger(raw[i]) ? raw[i] : -1
     if (idx >= 0 && idx < scraped.categories.length) {
       scraped.categories[idx].pages.push({
