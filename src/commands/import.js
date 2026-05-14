@@ -2523,6 +2523,11 @@ function stageOrganized(organized, stagingDir, opts = {}) {
   // Slug names must be unique
   const slugFor = ensureUniqueSlugs(eligibleCategories)
 
+  const urlWidth = Math.max(...[...slugFor.keys()].map((p) => (p.url || '(group-only)').length))
+  for (const [page, slug] of slugFor) {
+    console.log(`${(page.url || '(group-only)').padEnd(urlWidth)} → ${slug}`)
+  }
+
   /**
    * Write a page (and its descendants) into `dir`. A page with children gets
    * its own subfolder named after its slug; the parent page lives at
