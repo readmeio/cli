@@ -87,9 +87,10 @@ export async function importDocs(options) {
 
   const { llms, llmsUrl } = await timePhase('fetch llms.txt', async () => {
     for (const candidate of llmsCandidates) {
-      const res = await fetchLlmsTxt(candidate)
+      const res = await fetchLlmsTxt(candidate, sourceUrl)
       if (res.ok) return { llms: res, llmsUrl: candidate }
-      styles.info(styles.dim(`  ${candidate} → ${res.status ? `HTTP ${res.status}` : res.error || 'failed'}`))
+      const reason = res.error || (res.status ? `HTTP ${res.status}` : 'failed')
+      styles.info(styles.dim(`  ${candidate} → ${reason}`))
     }
     return { llms: null, llmsUrl: null }
   })
@@ -316,7 +317,7 @@ export async function importDocs(options) {
   } else if (llms) {
     const fastPath = sectionsLookUsable(llms.parsed.sections)
     styles.info(`Organizing with Claude (${styles.bold(options.model)}, ${fastPath ? 'fast path: icons only' : 'full reorg'})...`)
-    organized = await timePhase('claude organize', () => organizeWithClaude(llms.parsed, options.model))
+    organized = await timePhase('claude organize', () => organizeWithClaude(llms.parsed, options.model, sourceUrl))
   } else {
     // Sitemap-only fallback: synthesize categories by clustering the URL
     // paths. clusterByUrlPath returns null when the URLs don't split cleanly,
@@ -2054,11 +2055,11 @@ function sectionsLookUsable(sections) {
   return usableSections(sections).length >= 3
 }
 
-async function organizeWithClaude(parsed, model) {
+async function organizeWithClaude(parsed, model, sourceUrl) {
   if (sectionsLookUsable(parsed.sections)) {
     return organizeFromSections(parsed, model)
   }
-  return organizeFromScratch(parsed, model)
+  return organizeFromScratch(parsed, model, sourceUrl)
 }
 
 /**
@@ -2097,7 +2098,7 @@ async function organizeFromSections(parsed, model) {
   return { title: parsed.title || null, categories }
 }
 
-async function organizeFromScratch(parsed, model) {
+async function organizeFromScratch(parsed, model, sourceUrl) {
   const items = parsed.sections.flatMap((s) =>
     s.items.map((i) => ({
       section: s.title,
@@ -2110,6 +2111,7 @@ async function organizeFromScratch(parsed, model) {
   const { systemPrompt, userPrompt } = organizeFromScratchPrompt({
     siteTitle: parsed.title,
     items,
+    sourceUrl: sourceUrl ? sourceUrl.toString() : undefined,
   })
   const raw = await runJsonQuery({ systemPrompt, userPrompt, model })
 
@@ -2242,10 +2244,10 @@ function buildLlmsCandidates(sourceUrl) {
 }
 
 /**
- * Best-effort fetch of a site's /llms.txt. Returns { ok, status, error, parsed }
- * where parsed is { title, sections: [{ title, items: [{ text, url, description }] }] }.
+ * Fetch and parse a /llms.txt. Rejects text/html responses since SPAs
+ * commonly return their index for unmatched paths.
  */
-async function fetchLlmsTxt(llmsUrl) {
+async function fetchLlmsTxt(llmsUrl, sourceUrl) {
   try {
     const res = await fetch(llmsUrl, {
       redirect: 'follow',
@@ -2253,50 +2255,112 @@ async function fetchLlmsTxt(llmsUrl) {
     })
     if (!res.ok) return { ok: false, status: res.status }
     const text = await res.text()
-    return { ok: true, status: res.status, parsed: parseLlmsTxt(text) }
+    return { ok: true, status: res.status, parsed: parseLlmsTxt(text, { sourceUrl }) }
   } catch (e) {
     return { ok: false, error: e.message }
   }
 }
 
 /**
- * Parse the llms.txt format. `##` headings become sections;
- * `- [text](url): description` bullets become items. Items before any `##`
- * land in an implicit "Resources" section.
+ * Parse the llms.txt format. 
+ *
+ * Two link patterns are recognized:
+ *   - Line-start bullets (`- `, `* `, `+ ` — CommonMark allows all three).
+ *   - Inline `[text](url)` anywhere in prose. Some files (e.g. Shopify) keep
+ *     most refs in paragraphs rather than bullet lists, so the inline pass
+ *     is needed for usable coverage.
+ *
+ * Headings: `##`–`####`. Treating only `##` collapses deeply-nested files
+ * into a single mega-section.
+ *
+ * When `options.sourceUrl` is provided, all items must share its origin.
  */
-function parseLlmsTxt(body) {
+function parseLlmsTxt(body, options = {}) {
   const lines = body.split(/\r?\n/)
   let title = null
   const sections = []
   let current = null
+  let inCodeFence = false
+  const seenUrls = new Set()
 
-  const itemRe = /^\s*-\s*\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)(?:\s*[:—–-]\s*(.+))?/
+  const headingRe = /^#{2,4}\s+(.+)$/
+  const itemRe = /^\s*[-*+]\s*\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)(?:\s*[:—–-]\s*(.+))?/
+  const inlineLinkRe = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g
+
+  let originFilter = null
+  if (options.sourceUrl) {
+    try { originFilter = new URL(options.sourceUrl).origin } catch {}
+  }
+
+  const cleanUrl = (u) => u.replace(/[.,;]+$/, '')
+
+  // Peels paired markdown emphasis (`**x**`, `*x*`, `__x__`, `_x_`, and
+  // combined forms). `\1` backref forces matched wrappers; asymmetric
+  // input is left untouched.
+  const stripEmphasis = (text) => {
+    let t = text.trim()
+    for (let i = 0; i < 3; i++) {
+      const m = t.match(/^(\*{1,3}|_{1,3})([\s\S]+?)\1$/)
+      if (!m) break
+      t = m[2].trim()
+    }
+    return t
+  }
+
+  const passesOriginFilter = (url) => {
+    if (!originFilter) return true
+    try { return new URL(url).origin === originFilter } catch { return false }
+  }
+
+  const pushItem = ({ text, url, description }) => {
+    if (!passesOriginFilter(url)) return
+    if (seenUrls.has(url)) return
+    seenUrls.add(url)
+    if (!current) {
+      current = { title: 'Resources', items: [] }
+      sections.push(current)
+    }
+    current.items.push({
+      text: stripEmphasis(text),
+      url,
+      description: description || null,
+    })
+  }
 
   for (const line of lines) {
+    if (/^\s*```/.test(line)) {
+      inCodeFence = !inCodeFence
+      continue
+    }
+    if (inCodeFence) continue
+
     const h1 = line.match(/^#\s+(.+)$/)
     if (h1 && !title) {
-      title = h1[1].trim()
+      title = stripEmphasis(h1[1])
       continue
     }
 
-    const h2 = line.match(/^##\s+(.+)$/)
-    if (h2) {
-      current = { title: h2[1].trim(), items: [] }
+    const heading = line.match(headingRe)
+    if (heading) {
+      current = { title: stripEmphasis(heading[1]), items: [] }
       sections.push(current)
       continue
     }
 
-    const item = line.match(itemRe)
-    if (item) {
-      if (!current) {
-        current = { title: 'Resources', items: [] }
-        sections.push(current)
-      }
-      current.items.push({
-        text: item[1].trim(),
-        url: item[2].replace(/[.,;]+$/, ''),
-        description: item[3] ? item[3].trim() : null,
+    const bullet = line.match(itemRe)
+    if (bullet) {
+      pushItem({
+        text: bullet[1].trim(),
+        url: cleanUrl(bullet[2]),
+        description: bullet[3] ? bullet[3].trim() : null,
       })
+      // Bullet's first link already captured; further links on this line
+      // belong to its description, not as separate items.
+      continue
+    }
+
+    for (const m of line.matchAll(inlineLinkRe)) {
+      pushItem({ text: m[1].trim(), url: cleanUrl(m[2]), description: null })
     }
   }
 

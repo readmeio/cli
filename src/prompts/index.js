@@ -173,7 +173,7 @@ export const organizeFromScratchSystemPrompt = [
  *        Pre-flattened page list. The id used in the prompt is the array index.
  * @returns {string}
  */
-export function buildOrganizeFromScratchUserPrompt({ siteTitle, items }) {
+export function buildOrganizeFromScratchUserPrompt({ siteTitle, items, sourceUrl }) {
   const compactLines = items.map((it, idx) => {
     let relPath = it.url;
     try { relPath = new URL(it.url).pathname + new URL(it.url).search; } catch {}
@@ -181,7 +181,9 @@ export function buildOrganizeFromScratchUserPrompt({ siteTitle, items }) {
   });
 
   let origin = '(unknown)';
-  if (items.length > 0) {
+  if (sourceUrl) {
+    try { origin = new URL(sourceUrl).origin; } catch {}
+  } else if (items.length > 0) {
     try { origin = new URL(items[0].url).origin; } catch {}
   }
 
