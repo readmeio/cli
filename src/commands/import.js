@@ -328,6 +328,11 @@ export async function importDocs(options) {
       categories: clustered.map((c) => ({ title: c.title, icon: null, pages: c.pages })),
     }
   }
+  
+  for (const cat of organized.categories || []) {
+    cat.pages = nestByUrlHierarchy(cat.pages)
+  }
+
   styles.ok(`Organized in ${styles.bold(formatDuration(Date.now() - organizeStart))}.`)
   if (debugSnapshots) {
     debugSnapshots['05-organized.json'] = organized
@@ -1616,6 +1621,73 @@ function collectFlat(page, out) {
 }
 
 /**
+ * Re-parent URL-bearing siblings by URL path so a page like `/foo/bar`
+ * becomes a child of `/foo` when both appear in the same list.
+ *
+ * @example
+ *   nestByUrlHierarchy([
+ *     { title: 'CLI',      url: 'https://x.com/getting-started/cli' },
+ *     { title: 'Overview', url: 'https://x.com/getting-started/cli/overview' },
+ *   ])
+ *   // [
+ *   //   { title: 'CLI', url: '…/cli', pages: [
+ *   //     { title: 'Overview', url: '…/cli/overview' },
+ *   //   ]},
+ *   // ]
+ */
+function nestByUrlHierarchy(pages) {
+  if (!pages || pages.length === 0) return pages
+
+  // Recurse first so group-only / already-nested subtrees get re-nested too.
+  for (const p of pages) {
+    if (p.pages && p.pages.length > 0) p.pages = nestByUrlHierarchy(p.pages)
+  }
+
+  // Need at least two URL-bearing siblings to form a parent/child pair.
+  const byPath = new Map()
+  for (const p of pages) {
+    if (!p.url) continue
+    const k = normalizePath(p.url)
+    if (!byPath.has(k)) byPath.set(k, p)
+  }
+  if (byPath.size < 2) return pages
+
+  const result = []
+  for (const p of pages) {
+    if (!p.url) {
+      result.push(p)
+      continue
+    }
+    let segs
+    try {
+      segs = new URL(p.url).pathname.split('/').filter(Boolean)
+    } catch {
+      result.push(p)
+      continue
+    }
+    let parent = null
+    for (let depth = segs.length - 1; depth >= 1; depth--) {
+      const key = ('/' + segs.slice(0, depth).join('/'))
+        .toLowerCase()
+        .replace(/\.(md|mdx|html?)$/i, '')
+        .replace(/\/$/, '')
+      const candidate = byPath.get(key)
+      if (candidate && candidate !== p) {
+        parent = candidate
+        break
+      }
+    }
+    if (parent) {
+      if (!parent.pages) parent.pages = []
+      parent.pages.push(p)
+    } else {
+      result.push(p)
+    }
+  }
+  return result
+}
+
+/**
  * The scraped nav only contains top-level items; subcategory pages sit behind
  * `>` chevrons and don't render on a cold fetch. For each llms.txt URL not
  * already in the scrape, find the scraped page whose URL path is the longest
@@ -2571,11 +2643,26 @@ function printPagesTree(pages, indentLevel) {
 
 function stageOrganized(organized, stagingDir, opts = {}) {
   const pickIcon = makeIconPicker()
-  const usedSlugs = new Set() // cross-dir: duplicates validator is global
   const byDir = new Map()
   const subDirsByTopDir = new Map()
   const counts = { fileCount: 0, skippedApiRef: 0 }
   const skipApiReference = !!opts.skipApiReference
+
+  const eligibleCategories = (organized.categories || []).filter((cat) => {
+    if (skipApiReference && routeCategory(cat.title).topDir === 'reference') {
+      counts.skippedApiRef += countPagesDeep(cat.pages || [])
+      return false
+    }
+    return true
+  })
+
+  // Slug names must be unique
+  const slugFor = ensureUniqueSlugs(eligibleCategories)
+
+  const urlWidth = Math.max(...[...slugFor.keys()].map((p) => (p.url || '(group-only)').length))
+  for (const [page, slug] of slugFor) {
+    console.log(`${(page.url || '(group-only)').padEnd(urlWidth)} → ${slug}`)
+  }
 
   /**
    * Write a page (and its descendants) into `dir`. A page with children gets
@@ -2584,8 +2671,7 @@ function stageOrganized(organized, stagingDir, opts = {}) {
    * This matches git-format's on-disk convention for nested sidebars.
    */
   function writePage(page, dir, topDir, isSubPage = false) {
-    const slug = resolveSlug(deriveSlug(page.url, page.title), usedSlugs)
-    usedSlugs.add(slug)
+    const slug = slugFor.get(page)
 
     // Group-only nodes (e.g. a resource sub-group within API Reference) have
     // no backing page on the source site — they're pure sidebar containers.
@@ -2620,12 +2706,8 @@ function stageOrganized(organized, stagingDir, opts = {}) {
     }
   }
 
-  for (const cat of organized.categories || []) {
+  for (const cat of eligibleCategories) {
     const { topDir, subDir } = routeCategory(cat.title)
-    if (skipApiReference && topDir === 'reference') {
-      counts.skippedApiRef += countPagesDeep(cat.pages || [])
-      continue
-    }
     const dir = subDir ? `${topDir}/${subDir}` : topDir
     if (subDir) {
       if (!subDirsByTopDir.has(topDir)) subDirsByTopDir.set(topDir, [])
@@ -2704,30 +2786,104 @@ function buildFrontmatter(topDir, page, slug, pickIcon, opts = {}) {
 }
 
 /**
- * Turn a URL's trailing segment into a filename-safe slug. Strips `.md`, kebabs
- * the result, drops any leading numeric prefix (common in imports).
+ * Extract URL path segments for slug planning. Strips file extensions and
+ * leading numeric prefixes (e.g. `01-intro` → `intro`) the same way the
+ * legacy deriveSlug did, so the depth-1 result is byte-for-byte compatible.
  */
-function deriveSlug(url, fallbackTitle) {
-  let raw = ''
+function extractUrlPathSegments(url) {
+  if (!url) return []
   try {
-    const segs = new URL(url).pathname.split('/').filter(Boolean)
-    raw = segs[segs.length - 1] || ''
-  } catch {}
-  raw = raw.replace(/\.(md|mdx|html?)$/i, '').replace(/^\d+[-_.]/, '')
-  const slug = kebabCase(raw || fallbackTitle || 'page')
-  return slug || 'page'
+    return new URL(url).pathname
+      .split('/')
+      .filter(Boolean)
+      .map((s) => s.replace(/\.(md|mdx|html?)$/i, '').replace(/^\d+[-_.]/, ''))
+      .filter(Boolean)
+  } catch {
+    return []
+  }
 }
 
 /**
- * If `slug` is already in use anywhere in the staging tree, try `slug-2`,
- * `slug-3`, etc. The duplicates validator flags same-slug collisions across
- * directories, not just within a directory, so uniqueness must be global.
+ * Compute a globally-unique slug for every page in the tree.
+ *
+ * Base slug is the last URL segment (kebab-cased). When two or more pages
+ * share a base, we prepend the next-up URL segment to every member of the
+ * colliding group and recheck
+ * 
+ * @example
+ * ensureUniqueSlugs([
+ *   { title: 'Getting Started', pages: [
+ *     { title: 'Overview', url: 'https://acme.dev/getting-started/overview' },
+ *     { title: 'Install',  url: 'https://acme.dev/getting-started/install' },
+ *   ]},
+ *   { title: 'Guides', pages: [
+ *     { title: 'Overview', url: 'https://acme.dev/guides/overview' },
+ *   ]},
+ * ])
+ * // Map {
+ * //   <Overview (Getting Started)> => 'getting-started-overview',  // expanded (collides)
+ * //   <Install>                    => 'install',                   // unique, no expansion
+ * //   <Overview (Guides)>          => 'guides-overview',            // expanded (collides)
+ * // }
  */
-function resolveSlug(slug, usedSlugs) {
-  if (!usedSlugs.has(slug)) return slug
-  let n = 2
-  while (usedSlugs.has(`${slug}-${n}`)) n++
-  return `${slug}-${n}`
+function ensureUniqueSlugs(categories) {
+  const entries = []
+  const walk = (pages) => {
+    for (const p of pages || []) {
+      entries.push({ page: p, segments: extractUrlPathSegments(p.url), fallback: p.title, depth: 1 })
+      if (p.pages) walk(p.pages)
+    }
+  }
+  for (const c of categories || []) walk(c.pages)
+
+  const slugFor = (e) => {
+    if (e.segments.length === 0) return kebabCase(e.fallback || 'page') || 'page'
+    const start = Math.max(0, e.segments.length - e.depth)
+    return kebabCase(e.segments.slice(start).join('-')) || 'page'
+  }
+
+  // Iteratively grow any colliding group by one segment until stable. Each
+  // pass only grows pages that still have headroom (depth < segments.length);
+  // a page stuck at full depth stays put while its peers keep expanding.
+  while (true) {
+    const groups = new Map()
+    for (const e of entries) {
+      const s = slugFor(e)
+      if (!groups.has(s)) groups.set(s, [])
+      groups.get(s).push(e)
+    }
+    let grew = false
+    for (const group of groups.values()) {
+      if (group.length < 2) continue
+      for (const e of group) {
+        if (e.depth < e.segments.length) {
+          e.depth++
+          grew = true
+        }
+      }
+    }
+    if (!grew) break
+  }
+
+  const describe = (x) => `"${x.page.title || '(untitled)'}"${x.page.url ? ` <${x.page.url}>` : ' (group-only)'}`
+  const used = new Set()
+  const result = new Map()
+  for (const e of entries) {
+    const base = slugFor(e)
+    let slug = base
+    if (used.has(slug)) {
+      let n = 2
+      while (used.has(`${slug}-${n}`)) n++
+      slug = `${base}-${n}`
+      styles.error(
+        `Slug collision after segment expansion: ${base} — falling back to ${slug} for ${describe(e)}. ` +
+          `Pages were deduped by path before organize, so this indicates the organize step produced duplicates.`,
+      )
+    }
+    used.add(slug)
+    result.set(e.page, slug)
+  }
+  return result
 }
 
 // Values YAML interprets as non-strings need quoting when used as _order entries.

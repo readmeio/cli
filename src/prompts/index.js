@@ -356,9 +356,56 @@ export function buildPrettifyPageUserPrompt({ source, title, relativePath }) {
   ].join('\n');
 }
 
+/**
+ * Build a short addendum describing the user's locally-installed marketplace
+ * components so Claude can use them in prettified output. We pull the first
+ * usage signature out of each component's mdx (a `<Name ... />` line near the
+ * bottom of the file).
+ *
+ * @param {Array<{ name: string, source: string }>} components
+ * @returns {string} — the addendum, or '' if there are no components.
+ */
+export function buildLocalComponentsSection(components) {
+  if (!components || components.length === 0) return '';
+  const lines = ['', '### Project-specific components (installed in ./components/)'];
+  lines.push(
+    'The following custom components are installed in this project and may be used in prettified output. Prefer them when they fit the content better than plain markdown — same liberal-upgrade bias as the built-in components above. Do NOT invent components that are not listed here or in the built-in set.',
+    '',
+  );
+  for (const c of components) {
+    const sig = (c.source.match(new RegExp(`<${c.name}[\\s\\S]*?(?:/>|</${c.name}>)`, 'm')) || [])[0];
+    lines.push(`- \`<${c.name}>\`${sig ? ` — e.g. \`${sig.replace(/\s+/g, ' ').slice(0, 200)}\`` : ''}`);
+  }
+  return lines.join('\n');
+}
+
+/**
+ * Build a short section listing additional marketplace components that are
+ * NOT yet installed but can be — the CLI will auto-install any of them that
+ * the model uses in its output.
+ *
+ * @param {Array<{ name: string, summary?: string }>} available
+ *        Marketplace components not currently in ./components/.
+ * @returns {string} — the addendum, or '' if there are none.
+ */
+export function buildAvailableComponentsSection(available) {
+  if (!available || available.length === 0) return '';
+  const lines = ['', '### Marketplace components (auto-installed on use)'];
+  lines.push(
+    'These components are NOT yet installed locally, but the CLI will copy them into ./components/ automatically if you use any of them. Use them when they clearly fit the content — same upgrade bias as built-in components. Do NOT invent components outside this list and the built-in set.',
+    '',
+  );
+  for (const c of available) {
+    lines.push(`- \`<${c.name}>\`${c.summary ? ` — ${c.summary}` : ''}`);
+  }
+  return lines.join('\n');
+}
+
 export function prettifyPagePrompt(input) {
+  const localAddendum = buildLocalComponentsSection(input.localComponents);
+  const availableAddendum = buildAvailableComponentsSection(input.availableComponents);
   return {
-    systemPrompt: prettifyPageSystemPrompt,
+    systemPrompt: prettifyPageSystemPrompt + localAddendum + availableAddendum,
     userPrompt: buildPrettifyPageUserPrompt(input),
   };
 }
