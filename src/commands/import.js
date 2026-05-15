@@ -10,6 +10,7 @@ import * as styles from '../utils/styles.js'
 import { syncOas } from './oas-sync.js'
 import OASNormalize from 'oas-normalize'
 import { slotOrphansPrompt, iconizeNavPrompt, organizeFromSectionsPrompt, organizeFromScratchPrompt, stripCodeFences } from '../prompts/index.js'
+import * as shopifySource from '../sources/shopify.js'
 
 export const command = 'import'
 export const order = 7
@@ -77,6 +78,17 @@ export async function importDocs(options) {
   styles.info(`Importing from ${styles.bold(sourceUrl.toString())}`)
   if (!options.test) styles.info(`Output: ${styles.bold(outputZip)}`)
   console.log()
+
+  // Per-host shortcut: skip the generic llms.txt/sitemap/scrape pipeline
+  // when a host has a hardcoded builder (see src/sources/).
+  let organized = null
+  if (shopifySource.matches(sourceUrl)) {
+    styles.info(`Using hardcoded source for ${styles.bold(sourceUrl.hostname)}.`)
+    organized = await timePhase('shopify skeleton', () => shopifySource.buildSkeleton(sourceUrl))
+    console.log()
+  }
+
+  if (!organized) {
 
   // Build the list of llms.txt URLs to probe, walking up the supplied path
   // from most-specific to root. For `https://mintlify.com/docs/quickstart`
@@ -304,7 +316,6 @@ export async function importDocs(options) {
   }
   console.log()
 
-  let organized
   const organizeStart = Date.now()
   if (scraped) {
     // No Claude call — icons deferred. Use a neutral placeholder so the tree
@@ -342,6 +353,7 @@ export async function importDocs(options) {
     }
     styles.info(`${styles.dim(`Debug snapshots → ${debugDir}`)}`)
   }
+  } // end: if (!organized) { ... }  — closes the generic-discovery branch
   console.log()
 
   console.log(`  ${styles.bold(organized.title || '(untitled)')}`)
@@ -2624,7 +2636,7 @@ function stageOrganized(organized, stagingDir, opts = {}) {
       // git-format convention for metadata the schema doesn't know about.
       frontmatter['x-import'] = toBrowsableUrl(page.url)
       // hide pages that need import
-      frontmatter.hidden = 'true'
+      frontmatter.hidden = true
 
       const absPath = path.join(stagingDir, relFilePath)
       fs.mkdirSync(path.dirname(absPath), { recursive: true })
