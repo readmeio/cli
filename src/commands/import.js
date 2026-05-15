@@ -10,6 +10,7 @@ import * as styles from '../utils/styles.js'
 import { syncOas } from './oas-sync.js'
 import OASNormalize from 'oas-normalize'
 import { slotOrphansPrompt, iconizeNavPrompt, organizeFromSectionsPrompt, organizeFromScratchPrompt, stripCodeFences } from '../prompts/index.js'
+import { analyzeLlmsTxt } from '../utils/llms.js'
 
 export const command = 'import'
 export const order = 7
@@ -85,13 +86,19 @@ export async function importDocs(options) {
   const llmsCandidates = buildLlmsCandidates(sourceUrl)
   styles.info(`Checking for llms.txt (${llmsCandidates.length} candidate${llmsCandidates.length === 1 ? '' : 's'})...`)
 
-  const { llms, llmsUrl } = await timePhase('fetch llms.txt', async () => {
+  const { llms, llmsUrl, skippedLlms } = await timePhase('fetch llms.txt', async () => {
+    const skipped = []
     for (const candidate of llmsCandidates) {
       const res = await fetchLlmsTxt(candidate)
-      if (res.ok) return { llms: res, llmsUrl: candidate }
+      if (res.ok) {
+        if (res.structurallyUsable) return { llms: res, llmsUrl: candidate, skippedLlms: skipped }
+        skipped.push({ url: candidate, reason: res.reason })
+        styles.info(styles.dim(`  ${candidate} → skipped (${res.reason})`))
+        continue
+      }
       styles.info(styles.dim(`  ${candidate} → ${res.status ? `HTTP ${res.status}` : res.error || 'failed'}`))
     }
-    return { llms: null, llmsUrl: null }
+    return { llms: null, llmsUrl: null, skippedLlms: skipped }
   })
   console.log()
 
@@ -105,7 +112,7 @@ export async function importDocs(options) {
     const sitemapCandidates = buildSitemapCandidates(sourceUrl)
     const scopePrefix = deriveSitemapScope(sourceUrl)
     styles.info(
-      `No llms.txt — checking for sitemap.xml (${sitemapCandidates.length} candidate${sitemapCandidates.length === 1 ? '' : 's'})${scopePrefix ? `, scoped to ${styles.bold(scopePrefix)}` : ''}...`,
+      `${skippedLlms.length > 0 ? 'No usable llms.txt' : 'No llms.txt'} — checking for sitemap.xml (${sitemapCandidates.length} candidate${sitemapCandidates.length === 1 ? '' : 's'})${scopePrefix ? `, scoped to ${styles.bold(scopePrefix)}` : ''}...`,
     )
     const sitemapResult = await timePhase('fetch sitemap.xml', async () => {
       for (const candidate of sitemapCandidates) {
@@ -129,7 +136,7 @@ export async function importDocs(options) {
   }
 
   if (debugSnapshots) {
-    debugSnapshots['01-llms-parsed.json'] = { llmsUrl, parsed: llms ? llms.parsed : null }
+    debugSnapshots['01-llms-parsed.json'] = { llmsUrl, parsed: llms ? llms.parsed : null, skipped: skippedLlms }
     debugSnapshots['01b-sitemap.json'] = { sitemapUrl, urls: sitemapKnownUrls }
   }
 
@@ -2314,8 +2321,7 @@ function buildLlmsCandidates(sourceUrl) {
 }
 
 /**
- * Best-effort fetch of a site's /llms.txt. Returns { ok, status, error, parsed }
- * where parsed is { title, sections: [{ title, items: [{ text, url, description }] }] }.
+ * Best-effort fetch of a site's /llms.txt plus a simple structural usability check.
  */
 async function fetchLlmsTxt(llmsUrl) {
   try {
@@ -2325,54 +2331,17 @@ async function fetchLlmsTxt(llmsUrl) {
     })
     if (!res.ok) return { ok: false, status: res.status }
     const text = await res.text()
-    return { ok: true, status: res.status, parsed: parseLlmsTxt(text) }
+    const analysis = analyzeLlmsTxt(text, llmsUrl)
+    return {
+      ok: true,
+      status: res.status,
+      parsed: analysis.parsed,
+      structurallyUsable: analysis.structurallyUsable,
+      reason: analysis.reason,
+    }
   } catch (e) {
     return { ok: false, error: e.message }
   }
-}
-
-/**
- * Parse the llms.txt format. `##` headings become sections;
- * `- [text](url): description` bullets become items. Items before any `##`
- * land in an implicit "Resources" section.
- */
-function parseLlmsTxt(body) {
-  const lines = body.split(/\r?\n/)
-  let title = null
-  const sections = []
-  let current = null
-
-  const itemRe = /^\s*-\s*\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)(?:\s*[:—–-]\s*(.+))?/
-
-  for (const line of lines) {
-    const h1 = line.match(/^#\s+(.+)$/)
-    if (h1 && !title) {
-      title = h1[1].trim()
-      continue
-    }
-
-    const h2 = line.match(/^##\s+(.+)$/)
-    if (h2) {
-      current = { title: h2[1].trim(), items: [] }
-      sections.push(current)
-      continue
-    }
-
-    const item = line.match(itemRe)
-    if (item) {
-      if (!current) {
-        current = { title: 'Resources', items: [] }
-        sections.push(current)
-      }
-      current.items.push({
-        text: item[1].trim(),
-        url: item[2].replace(/[.,;]+$/, ''),
-        description: item[3] ? item[3].trim() : null,
-      })
-    }
-  }
-
-  return { title, sections }
 }
 
 // Path segments that mark a docs scope. Used to find the right "base" for
