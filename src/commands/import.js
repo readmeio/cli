@@ -132,7 +132,8 @@ export async function importDocs(options) {
       styles.warning(`No llms.txt or sitemap.xml found — falling back to sidebar discovery via scrape.`)
     }
   } else {
-    styles.info(styles.dim(`Using ${llmsUrl}.`))
+    const s = llms.stats
+    styles.info(styles.dim(`Using ${llmsUrl} (${s.conforming}/${s.total} lines conforming, ratio ${s.ratio.toFixed(2)}).`))
   }
 
   if (debugSnapshots) {
@@ -2106,26 +2107,15 @@ async function iconizeScrapedNav(scraped, _unused, model, siteTitle) {
 }
 
 /**
- * Sections are "usable" when the llms.txt already did the hard grouping work
- * for us — meaningful titles, not too many/few, each populated. When usable we
- * take a fast path that only asks Claude for icons + title polish instead of
- * re-bucketing every page, which is the slow part of a full reorg.
- */
-// Sections named like these are catch-all buckets — even in richly-structured
-// llms.txt files (e.g. Stripe's "Docs" section is where pages go that don't
-// fit into a named product tab), so always drop them rather than promote the
-// grab-bag contents to a top-level sidebar category.
-const GENERIC_SECTION_RE =
-  /^(resources?|english|root url|pages?|docs?|documentation|content|available languages.*|site|sitemap|index|home|optional|instructions?(\s|:).*|miscellaneous|misc|other)$/i
-
-/**
- * Return the subset of llms.txt sections that carry real structural signal —
- * drop catch-all buckets ("Docs", "Resources", "Optional"), empty sections,
- * and oversized ones (site-dumps masquerading as sections).
+ * Return the subset of llms.txt sections worth sending to the fast path —
+ * drop only structurally bad ones (empty, or oversized site-dumps). Heading
+ * names are preserved verbatim: a heading like "Docs" or "Documentation"
+ * might be a catch-all on one site (bad) and a real top-level category on
+ * another (fine), and we can't tell cheaply, so we don't try.
  */
 function usableSections(sections) {
   if (!sections) return []
-  return sections.filter((s) => s.title && !GENERIC_SECTION_RE.test(s.title.trim()) && s.items && s.items.length > 0 && s.items.length <= 200)
+  return sections.filter((s) => s.title && s.items && s.items.length > 0 && s.items.length <= 200)
 }
 
 function sectionsLookUsable(sections) {
@@ -2146,9 +2136,9 @@ async function organizeWithClaude(parsed, model) {
  * is O(sections), not O(pages), so this is usually ~5-15s vs. a full reorg.
  */
 async function organizeFromSections(parsed, model) {
-  // Drop generic/empty/oversized sections so they don't pollute the sidebar
-  // (e.g. Stripe's llms.txt has a "Docs" catch-all and a 0-item "Instructions
-  // for Large Language Model Agents" section — neither is structural signal).
+  // Drop empty/oversized sections (e.g. a 0-item "Instructions for Large
+  // Language Model Agents" preamble, or a 500-row site-dump) — heading
+  // names are preserved as-is.
   const sections = usableSections(parsed.sections)
 
   const { systemPrompt, userPrompt } = organizeFromSectionsPrompt({
@@ -2338,6 +2328,7 @@ async function fetchLlmsTxt(llmsUrl) {
       parsed: analysis.parsed,
       usable: analysis.usable,
       reason: analysis.reason,
+      stats: analysis.stats,
     }
   } catch (e) {
     return { ok: false, error: e.message }
@@ -2524,13 +2515,6 @@ function sitemapUrlsToKnownUrls(urls) {
 }
 
 /**
- * Write the organized hierarchy to disk as git-format markdown stubs — just
- * frontmatter, no body yet. docs/ pages go under docs/<Category>/<slug>.md;
- * reference/recipes/custom_pages/custom_blocks get their own top-level dir
- * without a category subfolder (the git-format schema doesn't nest them).
- * Writes _order.yaml per directory so sidebar order matches input order.
- */
-/**
  * Recursively print the page tree. Sub-pages are indented under their parent
  * with no leading bullet character, to show them as children of the parent.
  */
@@ -2546,6 +2530,13 @@ function printPagesTree(pages, indentLevel) {
   }
 }
 
+/**
+ * Write the organized hierarchy to disk as git-format markdown stubs — just
+ * frontmatter, no body yet. docs/ pages go under docs/<Category>/<slug>.md;
+ * reference/recipes/custom_pages/custom_blocks get their own top-level dir
+ * without a category subfolder (the git-format schema doesn't nest them).
+ * Writes _order.yaml per directory so sidebar order matches input order.
+ */
 function stageOrganized(organized, stagingDir, opts = {}) {
   const pickIcon = makeIconPicker()
   const byDir = new Map()
