@@ -322,9 +322,29 @@ export async function importDocs(options) {
       categories: scraped.categories.map((c) => ({ title: c.title, icon: null, pages: c.pages })),
     }
   } else if (llms) {
-    const fastPath = sectionsLookUsable(llms.parsed.sections)
-    styles.info(`Organizing with Claude (${styles.bold(options.model)}, ${fastPath ? 'fast path: icons only' : 'full reorg'})...`)
-    organized = await timePhase('claude organize', () => organizeWithClaude(llms.parsed, options.model))
+    const usable = usableSections(llms.parsed.sections)
+    const avgPages = usable.length > 0 ? usable.reduce((n, s) => n + s.items.length, 0) / usable.length : 0
+    if (sectionsLookUsable(llms.parsed.sections) && avgPages < 50) {
+      styles.info(
+        `Using llms.txt sections directly — ${styles.bold(String(usable.length))} sections, ${styles.bold(avgPages.toFixed(1))} avg pages/section (≤50). Skipping Claude.`,
+      )
+      organized = {
+        title: llms.parsed.title || null,
+        categories: usable.map((s) => ({
+          title: s.title,
+          icon: null,
+          pages: s.items.map((it) => ({
+            title: it.text,
+            url: it.url,
+            ...(it.description ? { description: it.description } : {}),
+          })),
+        })),
+      }
+    } else {
+      const fastPath = sectionsLookUsable(llms.parsed.sections)
+      styles.info(`Organizing with Claude (${styles.bold(options.model)}, ${fastPath ? 'fast path: icons only' : 'full reorg'})...`)
+      organized = await timePhase('claude organize', () => organizeWithClaude(llms.parsed, options.model))
+    }
   } else {
     // Sitemap-only fallback: synthesize categories by clustering the URL
     // paths. clusterByUrlPath returns null when the URLs don't split cleanly,
