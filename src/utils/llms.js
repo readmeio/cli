@@ -49,7 +49,9 @@ export function parseLlmsTxt(body, llmsUrl) {
 }
 
 function getSkipReason(body, parsed) {
+  if (/^---\r?\n/.test(body)) return 'starts with YAML frontmatter'
   if (/^\s*(?:```|~~~)/m.test(body)) return 'contains fenced code blocks'
+  if (/^!\[/m.test(body)) return 'contains image markdown'
 
   const itemCount = parsed.sections.reduce((sum, section) => sum + section.items.length, 0)
   if (itemCount === 0) return 'contains no standard llms.txt link rows'
