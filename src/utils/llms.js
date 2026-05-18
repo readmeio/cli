@@ -49,7 +49,6 @@ export function parseLlmsTxt(body, llmsUrl) {
 }
 
 function getSkipReason(body, parsed) {
-  if (body.length < 20) return 'empty or too small to be a usable llms.txt index'
   if (/^\s*(?:```|~~~)/m.test(body)) return 'contains fenced code blocks'
 
   const itemCount = parsed.sections.reduce((sum, section) => sum + section.items.length, 0)
