@@ -18,8 +18,6 @@ export function parseLlmsTxt(body, llmsUrl) {
   let title = null
   const sections = []
   let current = null
-  let llmsOrigin = null
-  if (llmsUrl) { try { llmsOrigin = new URL(llmsUrl).origin } catch {} }
 
   for (const line of lines) {
     const h1 = line.match(H1_RE)
@@ -35,7 +33,7 @@ export function parseLlmsTxt(body, llmsUrl) {
       continue
     }
 
-    const item = parseListLink(line, llmsUrl, llmsOrigin)
+    const item = parseListLink(line, llmsUrl)
     if (!item) continue
 
     if (!current) {
@@ -59,11 +57,11 @@ function getSkipReason(body, parsed) {
   return null
 }
 
-function parseListLink(line, llmsUrl, llmsOrigin) {
+function parseListLink(line, llmsUrl) {
   const match = line.match(STANDARD_LIST_LINK_RE)
   if (!match) return null
 
-  const url = normalizeUrl(match[2], llmsUrl, llmsOrigin)
+  const url = normalizeUrl(match[2], llmsUrl)
   if (!url) return null
 
   return {
@@ -73,14 +71,13 @@ function parseListLink(line, llmsUrl, llmsOrigin) {
   }
 }
 
-function normalizeUrl(rawUrl, llmsUrl, llmsOrigin) {
+function normalizeUrl(rawUrl, llmsUrl) {
   const trimmed = String(rawUrl || '').trim().replace(/[.,;]+$/, '')
   if (!trimmed || /^#/.test(trimmed) || /^(mailto|javascript):/i.test(trimmed)) return null
 
   try {
     const url = llmsUrl ? new URL(trimmed, llmsUrl) : new URL(trimmed)
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
-    if (llmsOrigin && url.origin !== llmsOrigin) return null
     return url.toString()
   } catch {
     return null
