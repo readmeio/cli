@@ -91,7 +91,7 @@ export async function importDocs(options) {
     for (const candidate of llmsCandidates) {
       const res = await fetchLlmsTxt(candidate)
       if (res.ok) {
-        if (res.structurallyUsable) return { llms: res, llmsUrl: candidate, skippedLlms: skipped }
+        if (res.usable) return { llms: res, llmsUrl: candidate, skippedLlms: skipped }
         skipped.push({ url: candidate, reason: res.reason })
         styles.info(styles.dim(`  ${candidate} → skipped (${res.reason})`))
         continue
@@ -2336,7 +2336,7 @@ async function fetchLlmsTxt(llmsUrl) {
       ok: true,
       status: res.status,
       parsed: analysis.parsed,
-      structurallyUsable: analysis.structurallyUsable,
+      usable: analysis.usable,
       reason: analysis.reason,
     }
   } catch (e) {

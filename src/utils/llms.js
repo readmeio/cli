@@ -1,25 +1,27 @@
 const H1_RE = /^#\s+(.+)$/
 const H2_RE = /^##\s+(.+)$/
-const CODE_FENCE_RE = /^\s*(?:```|~~~)/
-const STANDARD_LIST_LINK_RE = /^\s*[-*+]\s+\[([^\]]+)\]\(([^)\s]+)\)(?::\s*(.+))?\s*$/
+const STANDARD_LIST_LINK_RE = /^\s*[-*+]\s+\[([^\]]+)\]\(([^)\s]+)\)(?:\s*[:—–-]\s*(.+?))?\s*$/
 
 export function analyzeLlmsTxt(body, llmsUrl) {
   const parsed = parseLlmsTxt(body, llmsUrl)
-  const reason = getSkipReason(body, parsed, llmsUrl)
+  const reason = getSkipReason(body, parsed)
 
   return {
     parsed,
-    structurallyUsable: !reason,
+    usable: !reason,
     reason,
   }
 }
 
 export function parseLlmsTxt(body, llmsUrl) {
+  const lines = body.split(/\r?\n/)
   let title = null
   const sections = []
   let current = null
+  let llmsOrigin = null
+  if (llmsUrl) { try { llmsOrigin = new URL(llmsUrl).origin } catch {} }
 
-  for (const line of body.split(/\r?\n/)) {
+  for (const line of lines) {
     const h1 = line.match(H1_RE)
     if (h1 && !title) {
       title = h1[1].trim()
@@ -33,7 +35,7 @@ export function parseLlmsTxt(body, llmsUrl) {
       continue
     }
 
-    const item = parseListLink(line, llmsUrl)
+    const item = parseListLink(line, llmsUrl, llmsOrigin)
     if (!item) continue
 
     if (!current) {
@@ -46,11 +48,9 @@ export function parseLlmsTxt(body, llmsUrl) {
   return { title, sections }
 }
 
-function getSkipReason(body, parsed, llmsUrl) {
-  const lines = body.split(/\r?\n/)
+function getSkipReason(body, parsed) {
   if (body.length < 20) return 'empty or too small to be a usable llms.txt index'
-  if (lines.some(line => CODE_FENCE_RE.test(line))) return 'contains fenced code blocks'
-  if (!lines.some(line => H2_RE.test(line))) return 'contains no H2 sections'
+  if (/^\s*(?:```|~~~)/m.test(body)) return 'contains fenced code blocks'
 
   const itemCount = parsed.sections.reduce((sum, section) => sum + section.items.length, 0)
   if (itemCount === 0) return 'contains no standard llms.txt link rows'
@@ -58,11 +58,11 @@ function getSkipReason(body, parsed, llmsUrl) {
   return null
 }
 
-function parseListLink(line, llmsUrl) {
+function parseListLink(line, llmsUrl, llmsOrigin) {
   const match = line.match(STANDARD_LIST_LINK_RE)
   if (!match) return null
 
-  const url = normalizeUrl(match[2], llmsUrl)
+  const url = normalizeUrl(match[2], llmsUrl, llmsOrigin)
   if (!url) return null
 
   return {
@@ -72,13 +72,15 @@ function parseListLink(line, llmsUrl) {
   }
 }
 
-function normalizeUrl(rawUrl, llmsUrl) {
+function normalizeUrl(rawUrl, llmsUrl, llmsOrigin) {
   const trimmed = String(rawUrl || '').trim().replace(/[.,;]+$/, '')
   if (!trimmed || /^#/.test(trimmed) || /^(mailto|javascript):/i.test(trimmed)) return null
 
   try {
     const url = llmsUrl ? new URL(trimmed, llmsUrl) : new URL(trimmed)
-    return url.protocol === 'http:' || url.protocol === 'https:' ? url.toString() : null
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
+    if (llmsOrigin && url.origin !== llmsOrigin) return null
+    return url.toString()
   } catch {
     return null
   }
