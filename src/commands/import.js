@@ -244,39 +244,66 @@ export async function importDocs(options) {
       }
 
       if (slotted.length > 0) {
-        // Mintlify-style docs put API endpoints in a separate tab rooted at
-        // /api-reference/* (or /api/*, /reference/*). Collapse remaining such
-        // pages into a single "API Reference" category (absorbing the flat
-        // category the sweep pass just built, if any) and nest it by resource
-        // segment so routeCategory() maps the whole thing to ReadMe's
-        // `reference/` top-level dir.
-        const apiResult = collectApiReferencePages(slotted, scraped)
-        const otherOrphans = apiResult.nonApiOrphans
-        if (apiResult.category) scraped.categories.push(apiResult.category)
+        // When orphans dwarf direct matches, the sidebar scrape was too thin
+        // to trust as the import's spine — keeping it would produce a small
+        // "real" tree plus a soup of bucketed-by-URL-type orphan categories.
+        // Discard the scrape and cluster every page (scrape + orphans) by
+        // its top URL segment instead, so each `/docs/`, `/sdk/`, `/rest-api/`
+        // becomes its own category. `nestByUrlHierarchy` (later) handles the
+        // empty-parent nesting within each category.
 
-        const buckets = bucketOrphansByPathType(otherOrphans, scraped)
-        for (const b of buckets) scraped.categories.push(b)
-        if (debugSnapshots) {
-          debugSnapshots['04-after-orphan-buckets.json'] = {
-            apiReferenceCollected: apiResult.category
-              ? {
-                  pageCount: apiResult.category.pages.length,
-                  mergedFromScraped: apiResult.mergedScrapedTitles,
-                }
-              : null,
-            buckets,
-            scraped: JSON.parse(JSON.stringify(scraped)),
+        // Trip when orphans are at least 2× the direct matches: the scrape
+        // accounts for less than a third of the known pages, so its category
+        // labels aren't a trustworthy spine for the remainder.
+        const orphansDwarfDirect = slotted.length >= directMatches * 2
+        const scrapeAllPages = scraped.categories.flatMap((c) => c.pages)
+        const reclustered = orphansDwarfDirect ? clusterByUrlPath([...scrapeAllPages, ...slotted]) : null
+        if (reclustered) {
+          scraped.categories = reclustered.map((c) => ({ title: c.title, pages: c.pages }))
+          styles.info(
+            `Scrape covered only ${styles.bold(String(directMatches))}/${styles.bold(String(knownUrls.length))} pages — discarded as too thin and re-clustered ${styles.bold(String(scrapeAllPages.length + slotted.length))} pages by URL path into ${styles.bold(String(reclustered.length))} categor${reclustered.length === 1 ? 'y' : 'ies'}: ${reclustered.map((c) => styles.bold(c.title)).join(', ')}.`,
+          )
+          if (debugSnapshots) {
+            debugSnapshots['04-after-orphan-buckets.json'] = {
+              mode: 'reclustered-by-url-path',
+              scraped: JSON.parse(JSON.stringify(scraped)),
+            }
           }
-        }
-        const parts = []
-        if (apiResult.category) {
-          parts.push(`${styles.bold(String(apiResult.category.pages.length))} in ${styles.bold('API Reference')}`)
-        }
-        for (const b of buckets) {
-          parts.push(`${styles.bold(String(b.pages.length))} in ${styles.bold(b.title)}`)
-        }
-        if (parts.length > 0) {
-          styles.info(`${styles.bold(String(slotted.length))} orphan page${slotted.length === 1 ? '' : 's'} bucketed by URL type: ${parts.join(', ')}.`)
+        } else {
+          // Mintlify-style docs put API endpoints in a separate tab rooted at
+          // /api-reference/* (or /api/*, /reference/*). Collapse remaining such
+          // pages into a single "API Reference" category (absorbing the flat
+          // category the sweep pass just built, if any) and nest it by resource
+          // segment so routeCategory() maps the whole thing to ReadMe's
+          // `reference/` top-level dir.
+          const apiResult = collectApiReferencePages(slotted, scraped)
+          const otherOrphans = apiResult.nonApiOrphans
+          if (apiResult.category) scraped.categories.push(apiResult.category)
+
+          const buckets = bucketOrphansByPathType(otherOrphans, scraped)
+          for (const b of buckets) scraped.categories.push(b)
+          if (debugSnapshots) {
+            debugSnapshots['04-after-orphan-buckets.json'] = {
+              apiReferenceCollected: apiResult.category
+                ? {
+                    pageCount: apiResult.category.pages.length,
+                    mergedFromScraped: apiResult.mergedScrapedTitles,
+                  }
+                : null,
+              buckets,
+              scraped: JSON.parse(JSON.stringify(scraped)),
+            }
+          }
+          const parts = []
+          if (apiResult.category) {
+            parts.push(`${styles.bold(String(apiResult.category.pages.length))} in ${styles.bold('API Reference')}`)
+          }
+          for (const b of buckets) {
+            parts.push(`${styles.bold(String(b.pages.length))} in ${styles.bold(b.title)}`)
+          }
+          if (parts.length > 0) {
+            styles.info(`${styles.bold(String(slotted.length))} orphan page${slotted.length === 1 ? '' : 's'} bucketed by URL type: ${parts.join(', ')}.`)
+          }
         }
       }
     } else {
@@ -1648,70 +1675,164 @@ function collectFlat(page, out) {
 }
 
 /**
- * Re-parent URL-bearing siblings by URL path so a page like `/foo/bar`
- * becomes a child of `/foo` when both appear in the same list.
+ * Parse a URL's pathname into segments suitable for trie nesting. Strips file
+ * extensions (`.md`/`.html`/etc.) and drops a trailing `index` segment so
+ * `/foo`, `/foo/`, `/foo/index.html`, and `/foo/index.md` all collapse to the
+ * same logical page — the static-site-generator convention every browser and
+ * web server already follows. Returns null if the URL can't be parsed.
+ */
+function urlTrieSegs(url) {
+  try {
+    const segs = new URL(url).pathname
+      .split('/')
+      .filter(Boolean)
+      .map((s) => s.replace(/\.(md|mdx|html?)$/i, ''))
+      .filter(Boolean)
+    if (segs.length > 0 && segs[segs.length - 1].toLowerCase() === 'index') segs.pop()
+    return segs
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Re-parent URL-bearing siblings by URL path so descendants nest under their
+ * URL prefix even when no page exists at every intermediate segment. We build
+ * a trie from each page's URL path and render it back out as a page tree:
+ *
+ *   - The shared top-level prefix is elided (the category folder is its
+ *     implicit container — e.g. /docs/ai/evals collapses into "Pydantic Evals").
+ *   - Below the elision point, every segment becomes an entry: a real page
+ *     where one exists, otherwise an empty-parent stub (folder-icon, no URL).
+ *
+ * `anchorSegs` is the parent page's URL segments during recursion; when set,
+ * we walk the trie to that exact depth instead of eliding to the natural
+ * branch point, so a missing intermediate like `b` in `/a → /a/b/c, /a/b/d`
+ * still renders as an empty parent under `/a`.
  *
  * @example
  *   nestByUrlHierarchy([
- *     { title: 'CLI',      url: 'https://x.com/getting-started/cli' },
- *     { title: 'Overview', url: 'https://x.com/getting-started/cli/overview' },
+ *     { title: 'Hello',  url: 'https://x.com/main/sub1/sub2/sub3/hello' },
+ *     { title: 'World',  url: 'https://x.com/main/sub1/sub2/sub3/world' },
+ *     { title: 'Sub 1',  url: 'https://x.com/main/sub1' },
  *   ])
  *   // [
- *   //   { title: 'CLI', url: '…/cli', pages: [
- *   //     { title: 'Overview', url: '…/cli/overview' },
+ *   //   { title: 'Sub 1', url: '…/main/sub1', pages: [
+ *   //     { title: 'Sub2', _emptyParent: true, pages: [
+ *   //       { title: 'Sub3', _emptyParent: true, pages: [
+ *   //         { title: 'Hello', url: '…/main/sub1/sub2/sub3/hello' },
+ *   //         { title: 'World', url: '…/main/sub1/sub2/sub3/world' },
+ *   //       ]},
+ *   //     ]},
  *   //   ]},
  *   // ]
  */
-function nestByUrlHierarchy(pages) {
+function nestByUrlHierarchy(pages, anchorSegs = null) {
   if (!pages || pages.length === 0) return pages
 
-  // Recurse first so group-only / already-nested subtrees get re-nested too.
+  // Recurse first so subtrees that came in pre-nested (e.g. from the scraper)
+  // get re-nested against their parent's URL as anchor.
   for (const p of pages) {
-    if (p.pages && p.pages.length > 0) p.pages = nestByUrlHierarchy(p.pages)
+    if (p.pages && p.pages.length > 0) {
+      let nextAnchor = anchorSegs
+      if (p._virtualPathSegs) nextAnchor = p._virtualPathSegs
+      else if (p.url) {
+        const s = urlTrieSegs(p.url)
+        if (s) nextAnchor = s
+      }
+      p.pages = nestByUrlHierarchy(p.pages, nextAnchor)
+    }
   }
 
-  // Need at least two URL-bearing siblings to form a parent/child pair.
-  const byPath = new Map()
-  for (const p of pages) {
-    if (!p.url) continue
-    const k = normalizePath(p.url)
-    if (!byPath.has(k)) byPath.set(k, p)
-  }
-  if (byPath.size < 2) return pages
-
-  const result = []
+  const urlEntries = []
+  const groupOnly = []
   for (const p of pages) {
     if (!p.url) {
-      result.push(p)
+      groupOnly.push(p)
       continue
     }
-    let segs
-    try {
-      segs = new URL(p.url).pathname.split('/').filter(Boolean)
-    } catch {
-      result.push(p)
-      continue
-    }
-    let parent = null
-    for (let depth = segs.length - 1; depth >= 1; depth--) {
-      const key = ('/' + segs.slice(0, depth).join('/'))
-        .toLowerCase()
-        .replace(/\.(md|mdx|html?)$/i, '')
-        .replace(/\/$/, '')
-      const candidate = byPath.get(key)
-      if (candidate && candidate !== p) {
-        parent = candidate
-        break
+    const segs = urlTrieSegs(p.url)
+    if (segs) urlEntries.push({ page: p, segs })
+    else groupOnly.push(p)
+  }
+
+  if (urlEntries.length === 0) return pages
+  if (urlEntries.length === 1 && groupOnly.length === 0) return pages
+
+  // Build the URL trie. Each node tracks its own segment, the page at that
+  // exact path (if any), insertion-ordered children, and the segment path
+  // from root (used as the slug source for empty parents).
+  const root = { segment: '', page: null, children: new Map(), segs: [] }
+  for (const { page, segs } of urlEntries) {
+    let node = root
+    for (let i = 0; i < segs.length; i++) {
+      const segLower = segs[i].toLowerCase()
+      if (!node.children.has(segLower)) {
+        node.children.set(segLower, { segment: segs[i], page: null, children: new Map(), segs: segs.slice(0, i + 1) })
       }
+      node = node.children.get(segLower)
     }
-    if (parent) {
-      if (!parent.pages) parent.pages = []
-      parent.pages.push(p)
-    } else {
-      result.push(p)
+    if (!node.page) node.page = page
+  }
+
+  // Find the trie node that represents the "container" for this level.
+  //   - With an anchor: that's the parent page's exact depth; we don't elide
+  //     past it, so intermediate segments below the anchor become empties.
+  //   - Without: walk down while there's only one no-page child (the shared
+  //     prefix). Stop at the first node that either has a page or branches.
+  let container = root
+  if (anchorSegs && anchorSegs.length > 0) {
+    for (let i = 0; i < anchorSegs.length; i++) {
+      const seg = anchorSegs[i].toLowerCase()
+      if (container.children.has(seg)) container = container.children.get(seg)
+      else break
+    }
+  } else {
+    while (container.children.size === 1 && !container.page) {
+      container = container.children.values().next().value
     }
   }
-  return result
+
+  function nodeToPage(node) {
+    let outPage
+    if (node.page) {
+      outPage = node.page
+    } else {
+      const rawSeg = node.segment
+      const cleanedSeg = rawSeg.replace(/\.(md|mdx|html?)$/i, '').replace(/^\d+[-_.]/, '') || rawSeg
+      outPage = {
+        title: titleCase(cleanedSeg),
+        _emptyParent: true,
+        _virtualPathSegs: node.segs,
+        pages: [],
+      }
+    }
+    if (node.children.size > 0) {
+      const childPages = []
+      for (const c of node.children.values()) childPages.push(nodeToPage(c))
+      // Preserve any pre-existing nested children whose URLs aren't already
+      // represented in the trie (group-only containers from the scraper, etc.).
+      const existing = outPage.pages || []
+      const trieUrls = new Set()
+      const collect = (p) => {
+        if (p.url) trieUrls.add(normalizePath(p.url))
+        for (const c of p.pages || []) collect(c)
+      }
+      for (const cp of childPages) collect(cp)
+      const preservedExisting = existing.filter((e) => !e.url || !trieUrls.has(normalizePath(e.url)))
+      outPage.pages = [...childPages, ...preservedExisting]
+    }
+    return outPage
+  }
+
+  const trieResult = []
+  if (container.page) {
+    trieResult.push(nodeToPage(container))
+  } else {
+    for (const c of container.children.values()) trieResult.push(nodeToPage(c))
+  }
+
+  return [...trieResult, ...groupOnly]
 }
 
 /**
@@ -2575,9 +2696,14 @@ function stageOrganized(organized, stagingDir, opts = {}) {
   // Slug names must be unique
   const slugFor = ensureUniqueSlugs(eligibleCategories)
 
-  const urlWidth = Math.max(...[...slugFor.keys()].map((p) => (p.url || '(group-only)').length))
+  const labelFor = (p) => {
+    if (p.url) return p.url
+    if (p._emptyParent && p._virtualPathSegs) return `(empty) /${p._virtualPathSegs.join('/')}`
+    return '(group-only)'
+  }
+  const urlWidth = Math.max(...[...slugFor.keys()].map((p) => labelFor(p).length))
   for (const [page, slug] of slugFor) {
-    console.log(`${(page.url || '(group-only)').padEnd(urlWidth)} → ${slug}`)
+    console.log(`${labelFor(page).padEnd(urlWidth)} → ${slug}`)
   }
 
   /**
@@ -2593,18 +2719,27 @@ function stageOrganized(organized, stagingDir, opts = {}) {
     // no backing page on the source site — they're pure sidebar containers.
     // Skip the stub write but still recurse so their children land in the
     // right subdirectory.
-    const isGroupOnly = !page.url
+    const isEmptyParent = !!page._emptyParent
+    const isGroupOnly = !page.url && !isEmptyParent
 
     if (!isGroupOnly) {
       const relFilePath = `${dir}/${slug}.md`
-      // Sub-pages don't get icons per design decision.
-      const frontmatter = buildFrontmatter(topDir, page, slug, pickIcon, { skipIcon: isSubPage })
-      // x-import points at the source URL for this stub. The content-import
-      // step reads it to fetch the page body. x-prefixed custom field is the
-      // git-format convention for metadata the schema doesn't know about.
-      frontmatter['x-import'] = toBrowsableUrl(page.url)
-      // hide pages that need import
-      frontmatter.hidden = 'true'
+      let frontmatter
+      if (isEmptyParent) {
+        // Synthetic folder page: covers a missing URL segment so descendants
+        // nest at the right depth. No source URL to import, and we want it
+        // visible so the folder shows up in the sidebar.
+        frontmatter = { title: page.title, icon: 'fa-solid fa-folder' }
+      } else {
+        // Sub-pages don't get icons per design decision.
+        frontmatter = buildFrontmatter(topDir, page, slug, pickIcon, { skipIcon: isSubPage })
+        // x-import points at the source URL for this stub. The content-import
+        // step reads it to fetch the page body. x-prefixed custom field is the
+        // git-format convention for metadata the schema doesn't know about.
+        frontmatter['x-import'] = toBrowsableUrl(page.url)
+        // hide pages that need import
+        frontmatter.hidden = 'true'
+      }
 
       const absPath = path.join(stagingDir, relFilePath)
       fs.mkdirSync(path.dirname(absPath), { recursive: true })
@@ -2705,15 +2840,20 @@ function buildFrontmatter(topDir, page, slug, pickIcon, opts = {}) {
  * Extract URL path segments for slug planning. Strips file extensions and
  * leading numeric prefixes (e.g. `01-intro` → `intro`) the same way the
  * legacy deriveSlug did, so the depth-1 result is byte-for-byte compatible.
+ * Also drops a trailing `index` segment — many SSGs render `/foo/` as
+ * `/foo/index.html` and emit either form in their URL lists; we don't want
+ * every page collapsing to the same `index` base slug.
  */
 function extractUrlPathSegments(url) {
   if (!url) return []
   try {
-    return new URL(url).pathname
+    const segs = new URL(url).pathname
       .split('/')
       .filter(Boolean)
       .map((s) => s.replace(/\.(md|mdx|html?)$/i, '').replace(/^\d+[-_.]/, ''))
       .filter(Boolean)
+    if (segs.length > 0 && segs[segs.length - 1].toLowerCase() === 'index') segs.pop()
+    return segs
   } catch {
     return []
   }
@@ -2744,9 +2884,17 @@ function extractUrlPathSegments(url) {
  */
 function ensureUniqueSlugs(categories) {
   const entries = []
+  const segmentsFor = (p) => {
+    if (p._virtualPathSegs && p._virtualPathSegs.length > 0) {
+      return p._virtualPathSegs
+        .map((s) => s.replace(/\.(md|mdx|html?)$/i, '').replace(/^\d+[-_.]/, ''))
+        .filter(Boolean)
+    }
+    return extractUrlPathSegments(p.url)
+  }
   const walk = (pages) => {
     for (const p of pages || []) {
-      entries.push({ page: p, segments: extractUrlPathSegments(p.url), fallback: p.title, depth: 1 })
+      entries.push({ page: p, segments: segmentsFor(p), fallback: p.title, depth: 1 })
       if (p.pages) walk(p.pages)
     }
   }
