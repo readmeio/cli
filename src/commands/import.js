@@ -150,19 +150,32 @@ export async function importDocs(options) {
 
     const rawKnownUrls = llms.parsed.sections.flatMap((s) => s.items.map((i) => ({ title: i.text, url: i.url, description: i.description })))
 
+    // Drop asset URLs (openapi.json, package.json, .yaml specs, etc.) — they
+    // show up in some llms.txt files alongside real pages but aren't docs and
+    // shouldn't be staged as page stubs.
+    const ASSET_EXT_RE = /\.(json|ya?ml|xml|toml)$/i
+    const isAssetUrl = (url) => {
+      try { return ASSET_EXT_RE.test(new URL(url).pathname) } catch { return false }
+    }
+    const assetsDropped = rawKnownUrls.filter((p) => isAssetUrl(p.url)).length
+    const filtered = rawKnownUrls.filter((p) => !isAssetUrl(p.url))
+
     // Dedupe llms.txt entries by pathname. Some sites (zod.dev, fumadocs) list
     // every in-page anchor as its own llms.txt row (`/v4?id=wrapping-up`,
     // `/v4?id=metadata`, …) even though they all live on one rendered page.
     // We prefer the "cleanest" URL per path — the shortest one, which is
     // usually the one without a query string or hash.
     const byKnownPath = new Map()
-    for (const p of rawKnownUrls) {
+    for (const p of filtered) {
       const key = normalizePath(p.url)
       const prev = byKnownPath.get(key)
       if (!prev || p.url.length < prev.url.length) byKnownPath.set(key, p)
     }
     knownUrls = Array.from(byKnownPath.values())
-    const dropped = rawKnownUrls.length - knownUrls.length
+    const dropped = filtered.length - knownUrls.length
+    if (assetsDropped > 0) {
+      styles.info(`${styles.dim(`Dropped ${assetsDropped} asset URL${assetsDropped === 1 ? '' : 's'} (.json/.yaml/.xml/.toml).`)}`)
+    }
     if (dropped > 0) {
       styles.info(`${styles.dim(`Collapsed ${dropped} anchor/query duplicates → ${knownUrls.length} unique pages.`)}`)
     }
@@ -1760,7 +1773,12 @@ function nestByUrlHierarchy(pages, anchorSegs = null) {
       continue
     }
     const segs = urlTrieSegs(p.url)
-    if (segs) urlEntries.push({ page: p, segs })
+    // Zero-segment URLs (origin-only links like `https://build.example.com/`)
+    // have no path to nest by — if we inserted them into the trie they'd land
+    // at the root node and the container walk would render them as the
+    // top-level entry with every other page nested beneath them. Treat them
+    // like group-only pages so they just sit alongside the real tree.
+    if (segs && segs.length > 0) urlEntries.push({ page: p, segs })
     else groupOnly.push(p)
   }
 
@@ -2120,32 +2138,41 @@ function clusterByUrlPath(pages) {
     pages: byKey.get(key),
   }))
 
-  // A cluster with exactly one top-level page is NOT a real category — it's
-  // a parent page with children wrapped in a pseudo-category label. Categories
-  // are grouping labels with no content of their own; parent pages have
-  // content AND children. Collect those singletons into a shared
-  // "Other Documentation" bucket at the bottom of the sidebar so they're
-  // siblings at the top level, each with their own sub-tree intact, without
-  // crowding the real categories above.
-  const multipageClusters = rawClusters.filter((c) => c.pages.length >= 2)
-  const singletonPages = rawClusters.filter((c) => c.pages.length === 1).flatMap((c) => c.pages)
+  // Classify each cluster as either a real category or an "Other
+  // Documentation" misfit. A cluster is a real category when:
+  //   - it has 2+ pages, OR
+  //   - its single page has at least one URL segment BEYOND the cluster key
+  //     (so the key represents a folder-with-one-page, not a standalone page).
+  // A cluster with exactly one page whose path IS just the cluster key (e.g.
+  // `/help` alone in a "Help" cluster) is a standalone page with no folder
+  // semantic — that goes into the "Other Documentation" misfit bucket.
+  const realCategories = []
+  const misfitPages = []
+  for (const cluster of rawClusters) {
+    if (cluster.pages.length >= 2) {
+      realCategories.push(cluster)
+      continue
+    }
+    const onlyPage = cluster.pages[0]
+    let pageSegs = []
+    try { pageSegs = new URL(onlyPage.url).pathname.split('/').filter(Boolean) } catch {}
+    if (pageSegs.length > keyIdx + 1) realCategories.push(cluster)
+    else misfitPages.push(onlyPage)
+  }
 
-  // If we didn't actually produce any multi-page cluster, clustering added no
-  // value — every page was a singleton and we'd just have renamed Overview.
-  // Tell the caller to stick with the original flat shape.
-  if (multipageClusters.length === 0) return null
+  // If clustering produced no real categories, it added no value — tell the
+  // caller to fall back rather than hand back a lone misfit bucket.
+  if (realCategories.length === 0) return null
 
-  const out = [...multipageClusters]
-
-  // Park any zero-segment pages on the first real cluster. They don't fit
-  // segment-based clustering but the >20% guard above already proved they're
-  // a minority, so dropping them onto whatever lands first is a reasonable
-  // home rather than their own misfit category.
-  if (noSegPages.length > 0) out[0].pages.push(...noSegPages)
+  const out = [...realCategories]
 
   // "Other Documentation" goes last so it never displaces a real category.
-  if (singletonPages.length > 0) {
-    out.push({ title: 'Other Documentation', pages: singletonPages })
+  // It absorbs both standalone-page singletons and zero-segment URLs (those
+  // can't participate in segment-based clustering at all but the >20% guard
+  // above already proved they're a minority).
+  const otherDocs = [...misfitPages, ...noSegPages]
+  if (otherDocs.length > 0) {
+    out.push({ title: 'Other Documentation', pages: otherDocs })
   }
   return out
 }
