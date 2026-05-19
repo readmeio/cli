@@ -79,27 +79,69 @@ export async function importDocs(options) {
   if (!options.test) styles.info(`Output: ${styles.bold(outputZip)}`)
   console.log()
 
-  // Build the list of llms.txt URLs to probe, walking up the supplied path
-  // from most-specific to root. For `https://mintlify.com/docs/quickstart`
-  // we try `/docs/quickstart/llms.txt`, then `/docs/llms.txt`, then root.
-  // This catches sites that scope llms.txt to a docs subpath.
-  const llmsCandidates = buildLlmsCandidates(sourceUrl)
-  styles.info(`Checking for llms.txt (${llmsCandidates.length} candidate${llmsCandidates.length === 1 ? '' : 's'})...`)
+  // Discover llms.txt files by BFS walking parents AND children. Seed the
+  // frontier with the walk-up paths (source → root). Any "hit" (file exists
+  // with at least one link row) expands the frontier: parent path + distinct
+  // first-child segments extracted from its URL list. Invalid hits (fail the
+  // usability ratio) still expand — they're stepping stones — only valid
+  // hits contribute content to the merged result. See
+  // mydocs.com/section1/section2 → also tries /section1/, /, and every
+  // sibling section2 we discover along the way.
+  styles.info(`Discovering llms.txt (walking up and down from ${styles.bold(sourceUrl.toString())})...`)
 
-  const { llms, llmsUrl, skippedLlms } = await timePhase('fetch llms.txt', async () => {
-    const skipped = []
-    for (const candidate of llmsCandidates) {
-      const res = await fetchLlmsTxt(candidate)
-      if (res.ok) {
-        if (res.usable) return { llms: res, llmsUrl: candidate, skippedLlms: skipped }
-        skipped.push({ url: candidate, reason: res.reason })
-        styles.info(styles.dim(`  ${candidate} → skipped (${res.reason})`))
-        continue
-      }
-      styles.info(styles.dim(`  ${candidate} → ${res.status ? `HTTP ${res.status}` : res.error || 'failed'}`))
+  const discovery = await timePhase('discover llms.txt', () => discoverLlmsTxt(sourceUrl))
+  for (const hit of discovery.hits) {
+    if (hit.usable) {
+      styles.info(styles.dim(`  ${hit.llmsUrl} → valid (${hit.stats.linkItems} links)`))
+    } else {
+      styles.info(styles.dim(`  ${hit.llmsUrl} → invalid: ${hit.reason} (kept as stepping stone)`))
     }
-    return { llms: null, llmsUrl: null, skippedLlms: skipped }
-  })
+  }
+  for (const miss of discovery.misses) {
+    styles.info(styles.dim(`  ${miss.url} → ${miss.status ? `HTTP ${miss.status}` : miss.error || 'no llms.txt'}`))
+  }
+  let llms = mergeValidHits(discovery.hits)
+  let llmsUrl = llms?.llmsUrl || null
+  const skippedLlms = discovery.skipped
+
+  // Drop asset/meta items (llms-full.txt, openapi.json, …) from the merged
+  // parsed result up-front, so every downstream consumer — knownUrls AND the
+  // "use llms.txt sections directly" organize path — sees a clean URL list.
+  if (llms) {
+    const dropped = dropAssetItemsFromParsed(llms.parsed)
+    if (dropped > 0) {
+      styles.info(styles.dim(`Dropped ${dropped} asset/meta URL${dropped === 1 ? '' : 's'} (.json/.yaml/.xml/.toml, llms*.txt) from llms.txt items.`))
+    }
+  }
+
+  if (llms) {
+    const narrowed = narrowToDocsSubtreeIfNeeded(llms, sourceUrl, discovery.hits)
+    if (narrowed) {
+      styles.info(
+        styles.dim(
+          `Narrowed merged result to /${narrowed.segment}/ subtree (kept ${narrowed.kept}, dropped ${narrowed.dropped} out-of-scope page${narrowed.dropped === 1 ? '' : 's'}).`,
+        ),
+      )
+    }
+  }
+
+  // Fall back to scrape if the merged llms.txt covers too few endpoints to
+  // be useful as a structural backbone. Replaces the old per-file
+  // MIN_LINK_ROWS=10 check (now relaxed in utils/llms.js) with a global
+  // post-merge floor — many tiny per-product llms.txt files can still pass
+  // as long as their union clears the bar.
+  const MIN_MERGED_LINK_COUNT = 10
+  if (llms) {
+    const mergedLinkCount = llms.parsed.sections.reduce((n, s) => n + s.items.length, 0)
+    if (mergedLinkCount < MIN_MERGED_LINK_COUNT) {
+      styles.warning(
+        `Merged llms.txt has only ${styles.bold(String(mergedLinkCount))} endpoint${mergedLinkCount === 1 ? '' : 's'} (< ${MIN_MERGED_LINK_COUNT}) — falling back to scrape.`,
+      )
+      skippedLlms.push({ url: llmsUrl, reason: `merged total only ${mergedLinkCount} link${mergedLinkCount === 1 ? '' : 's'}` })
+      llms = null
+      llmsUrl = null
+    }
+  }
   console.log()
 
   let sitemapUrl = null
@@ -133,7 +175,11 @@ export async function importDocs(options) {
     }
   } else {
     const s = llms.stats
-    styles.info(styles.dim(`Using ${llmsUrl} (${s.conforming}/${s.total} lines conforming, ratio ${s.ratio.toFixed(2)}).`))
+    if (llms.sourceFiles.length === 1) {
+      styles.info(styles.dim(`Using ${llmsUrl} (${s.conforming}/${s.total} lines conforming, ratio ${s.ratio.toFixed(2)}).`))
+    } else {
+      styles.info(styles.dim(`Merged ${llms.sourceFiles.length} llms.txt files (root: ${llmsUrl}; aggregate ratio ${s.ratio.toFixed(2)}).`))
+    }
   }
 
   if (debugSnapshots) {
@@ -144,38 +190,28 @@ export async function importDocs(options) {
   let knownUrls = []
   if (llms) {
     const totalItems = llms.parsed.sections.reduce((n, s) => n + s.items.length, 0)
+    const srcCount = llms.sourceFiles.length
+    const srcLabel = srcCount === 1 ? 'llms.txt' : `${srcCount} llms.txt files (merged)`
     styles.ok(
-      `Found llms.txt — ${styles.bold(String(totalItems))} page${totalItems === 1 ? '' : 's'} across ${styles.bold(String(llms.parsed.sections.length))} section${llms.parsed.sections.length === 1 ? '' : 's'}${llms.parsed.title ? ` (${llms.parsed.title})` : ''}.`,
+      `Found ${srcLabel} — ${styles.bold(String(totalItems))} page${totalItems === 1 ? '' : 's'} across ${styles.bold(String(llms.parsed.sections.length))} section${llms.parsed.sections.length === 1 ? '' : 's'}${llms.parsed.title ? ` (${llms.parsed.title})` : ''}.`,
     )
 
     const rawKnownUrls = llms.parsed.sections.flatMap((s) => s.items.map((i) => ({ title: i.text, url: i.url, description: i.description })))
-
-    // Drop asset URLs (openapi.json, package.json, .yaml specs, etc.) — they
-    // show up in some llms.txt files alongside real pages but aren't docs and
-    // shouldn't be staged as page stubs.
-    const ASSET_EXT_RE = /\.(json|ya?ml|xml|toml)$/i
-    const isAssetUrl = (url) => {
-      try { return ASSET_EXT_RE.test(new URL(url).pathname) } catch { return false }
-    }
-    const assetsDropped = rawKnownUrls.filter((p) => isAssetUrl(p.url)).length
-    const filtered = rawKnownUrls.filter((p) => !isAssetUrl(p.url))
 
     // Dedupe llms.txt entries by pathname. Some sites (zod.dev, fumadocs) list
     // every in-page anchor as its own llms.txt row (`/v4?id=wrapping-up`,
     // `/v4?id=metadata`, …) even though they all live on one rendered page.
     // We prefer the "cleanest" URL per path — the shortest one, which is
-    // usually the one without a query string or hash.
+    // usually the one without a query string or hash. Asset/meta filtering
+    // already happened upstream on llms.parsed.sections.
     const byKnownPath = new Map()
-    for (const p of filtered) {
+    for (const p of rawKnownUrls) {
       const key = normalizePath(p.url)
       const prev = byKnownPath.get(key)
       if (!prev || p.url.length < prev.url.length) byKnownPath.set(key, p)
     }
     knownUrls = Array.from(byKnownPath.values())
-    const dropped = filtered.length - knownUrls.length
-    if (assetsDropped > 0) {
-      styles.info(`${styles.dim(`Dropped ${assetsDropped} asset URL${assetsDropped === 1 ? '' : 's'} (.json/.yaml/.xml/.toml).`)}`)
-    }
+    const dropped = rawKnownUrls.length - knownUrls.length
     if (dropped > 0) {
       styles.info(`${styles.dim(`Collapsed ${dropped} anchor/query duplicates → ${knownUrls.length} unique pages.`)}`)
     }
@@ -215,18 +251,21 @@ export async function importDocs(options) {
   if (debugSnapshots) {
     debugSnapshots['02-scraped-raw.json'] = scraped ? JSON.parse(JSON.stringify(scraped)) : null
   }
-  // Prefer llms.txt when it has strong multi-section structure and the
-  // scrape was a thin snapshot (common on big multi-tab docs — Stripe, AWS,
-  // Twilio — where each page only renders its own tab's sidebar). Without
-  // this override the 4-category scrape wins over a 25-section llms.txt and
-  // hundreds of real pages end up smeared into orphan buckets.
+  // If the sidebar scrape covers less than 75% of the llms.txt URLs, the
+  // scrape is too thin to trust as the import's spine. Common on multi-tab
+  // docs (Stripe, AWS, Twilio, Xata) where each page only renders its own
+  // tab's sidebar — the visible categories would otherwise absorb hundreds
+  // of orphan URLs via prefix-matching and produce a misleading tree (e.g.
+  // every /docs/* URL dumped under a single "Overview > Xata Documentation"
+  // node because that's the one /docs page the scrape saw). Discard the
+  // scrape and fall through to the llms.txt path, which uses URL-based
+  // clustering when multiple files were merged.
   if (scraped && llms && knownUrls.length > 0) {
     const scrapedPages = scraped.categories.reduce((n, c) => n + c.pages.length, 0)
     const coverage = scrapedPages / knownUrls.length
-    const llmsUsable = usableSections(llms.parsed.sections)
-    if (llmsUsable.length >= 5 && coverage < 0.5) {
+    if (coverage < 0.75) {
       styles.info(
-        `Scrape covered ${styles.bold(Math.round(coverage * 100) + '%')} of llms.txt pages; preferring llms.txt's ${styles.bold(String(llmsUsable.length))} sections for structure.`,
+        `Scrape covered ${styles.bold(Math.round(coverage * 100) + '%')} of llms.txt pages (need ≥75%) — discarding scrape and organizing from llms.txt.`,
       )
       scraped = null
     }
@@ -370,28 +409,55 @@ export async function importDocs(options) {
       categories: scraped.categories.map((c) => ({ title: c.title, icon: null, pages: c.pages })),
     }
   } else if (llms) {
-    const usable = usableSections(llms.parsed.sections)
-    const avgPages = usable.length > 0 ? usable.reduce((n, s) => n + s.items.length, 0) / usable.length : 0
-    if (sectionsLookUsable(llms.parsed.sections) && avgPages < 50) {
+    if (llms.sourceFiles.length > 1) {
+      // Multi-file merge: H2 section headings across the merged files are
+      // heterogeneous and don't form a coherent spine (e.g. elevenlabs.io's
+      // root file uses `Docs`/`Products` while /docs/llms.txt uses
+      // `API Docs` — concatenating them produces meaningless top-level
+      // categories like `docs/Docs`, `docs/Products`, `docs/API Docs`).
+      // Throw away the section grouping and re-cluster by URL path instead.
+      // Per-page metadata (title, url, description) is still carried over.
+      const flatPages = llms.parsed.sections.flatMap((s) =>
+        s.items.map((it) => ({
+          title: it.text,
+          url: it.url,
+          ...(it.description ? { description: it.description } : {}),
+        })),
+      )
+      const clustered = clusterByUrlPath(flatPages) || [{ title: 'Documentation', pages: flatPages }]
       styles.info(
-        `Using llms.txt sections directly — ${styles.bold(String(usable.length))} sections, ${styles.bold(avgPages.toFixed(1))} avg pages/section (≤50). Skipping Claude.`,
+        `Multi-file llms.txt merge — clustered ${styles.bold(String(flatPages.length))} pages by URL path into ${styles.bold(String(clustered.length))} categor${clustered.length === 1 ? 'y' : 'ies'} (H2 sections discarded).`,
       )
       organized = {
         title: llms.parsed.title || null,
-        categories: usable.map((s) => ({
-          title: s.title,
-          icon: null,
-          pages: s.items.map((it) => ({
-            title: it.text,
-            url: it.url,
-            ...(it.description ? { description: it.description } : {}),
-          })),
-        })),
+        categories: clustered.map((c) => ({ title: c.title, icon: null, pages: c.pages })),
       }
     } else {
-      const fastPath = sectionsLookUsable(llms.parsed.sections)
-      styles.info(`Organizing with Claude (${styles.bold(options.model)}, ${fastPath ? 'fast path: icons only' : 'full reorg'})...`)
-      organized = await timePhase('claude organize', () => organizeWithClaude(llms.parsed, options.model))
+      // Single-file mode: H2 structure IS the author's intended organization,
+      // so trust it. Use sections directly when usable; otherwise run Claude.
+      const usable = usableSections(llms.parsed.sections)
+      const avgPages = usable.length > 0 ? usable.reduce((n, s) => n + s.items.length, 0) / usable.length : 0
+      if (sectionsLookUsable(llms.parsed.sections) && avgPages < 50) {
+        styles.info(
+          `Using llms.txt sections directly — ${styles.bold(String(usable.length))} sections, ${styles.bold(avgPages.toFixed(1))} avg pages/section (≤50). Skipping Claude.`,
+        )
+        organized = {
+          title: llms.parsed.title || null,
+          categories: usable.map((s) => ({
+            title: s.title,
+            icon: null,
+            pages: s.items.map((it) => ({
+              title: it.text,
+              url: it.url,
+              ...(it.description ? { description: it.description } : {}),
+            })),
+          })),
+        }
+      } else {
+        const fastPath = sectionsLookUsable(llms.parsed.sections)
+        styles.info(`Organizing with Claude (${styles.bold(options.model)}, ${fastPath ? 'fast path: icons only' : 'full reorg'})...`)
+        organized = await timePhase('claude organize', () => organizeWithClaude(llms.parsed, options.model))
+      }
     }
   } else {
     // Sitemap-only fallback: synthesize categories by clustering the URL
@@ -2139,13 +2205,12 @@ function clusterByUrlPath(pages) {
   }))
 
   // Classify each cluster as either a real category or an "Other
-  // Documentation" misfit. A cluster is a real category when:
-  //   - it has 2+ pages, OR
-  //   - its single page has at least one URL segment BEYOND the cluster key
-  //     (so the key represents a folder-with-one-page, not a standalone page).
-  // A cluster with exactly one page whose path IS just the cluster key (e.g.
-  // `/help` alone in a "Help" cluster) is a standalone page with no folder
-  // semantic — that goes into the "Other Documentation" misfit bucket.
+  // Documentation" misfit. A real category needs at least 2 pages — a
+  // "category" with a single file in it just adds a level of nesting
+  // without adding structure. Pydantic's `/docs/logfire/get-started` is
+  // the motivating example: as the only `/docs/logfire/*` URL it
+  // shouldn't get its own top-level "Logfire" folder. Lone pages land in
+  // Other Documentation where they sit alongside other low-volume material.
   const realCategories = []
   const misfitPages = []
   for (const cluster of rawClusters) {
@@ -2153,11 +2218,7 @@ function clusterByUrlPath(pages) {
       realCategories.push(cluster)
       continue
     }
-    const onlyPage = cluster.pages[0]
-    let pageSegs = []
-    try { pageSegs = new URL(onlyPage.url).pathname.split('/').filter(Boolean) } catch {}
-    if (pageSegs.length > keyIdx + 1) realCategories.push(cluster)
-    else misfitPages.push(onlyPage)
+    misfitPages.push(cluster.pages[0])
   }
 
   // If clustering produced no real categories, it added no value — tell the
@@ -2490,6 +2551,143 @@ async function runJsonQuery({ systemPrompt, userPrompt, model }) {
  *
  * Returns deduped URLs in probe order.
  */
+// URL patterns we strip from llms.txt items — they show up alongside real
+// pages but shouldn't be staged as docs:
+//   - openapi.json, package.json, .yaml specs, etc. (machine-readable specs)
+//   - llms.txt, llms-full.txt, llms-ctx.txt, … (other llms.txt variants
+//     that point back at the same index/dump, not real pages)
+const ASSET_EXT_RE = /\.(json|ya?ml|xml|toml)$/i
+const LLMS_TXT_RE = /(?:^|\/)llms[^/]*\.txt$/i
+function isAssetOrMetaUrl(url) {
+  try {
+    const pn = new URL(url).pathname
+    return ASSET_EXT_RE.test(pn) || LLMS_TXT_RE.test(pn)
+  } catch {
+    return false
+  }
+}
+
+// Immediate-child segments of root that signal a docs subtree on a
+// non-docs hostname. We deliberately keep the set tiny — over-matching
+// here (e.g. including `api`, `learn`) would over-filter sites whose
+// "docs" subtree lives at the apex.
+const DOCS_LIKE_ROOT_SEGMENTS = new Set(['docs', 'doc', 'documentation', 'document'])
+
+/**
+ * Narrow a merged llms.txt result to a docs subtree when a root-level
+ * llms.txt pulled non-doc URLs (marketing, pricing, blog, etc.) into the
+ * union.
+ *
+ * Sites that publish a root llms.txt alongside per-product subtree files
+ * often mix marketing/pricing/blog links into the root file. The BFS merge
+ * happily unions all of it, and without this pass we'd stage stubs for
+ * those pages too.
+ *
+ * elevenlabs.io is the canonical example: its root `elevenlabs.io/llms.txt`
+ * lists marketing pages alongside docs, and per-product files live at
+ * `elevenlabs.io/docs/<product>/llms.txt`. After the BFS we have docs URLs
+ * + pricing/blog URLs in the same merged result. With this pass we keep
+ * only URLs under `/docs/`.
+ *
+ * Conditions (all must hold), chosen so we only narrow when the risk is
+ * real and there's a clear scope to narrow to:
+ *   - Hostname doesn't itself contain "docs" — `docs.example.com` is
+ *     already a docs-only host; nothing to narrow.
+ *   - A root-level llms.txt was actually probed and hit (valid OR
+ *     invalid). Either way it's what dragged in the wider URL space via
+ *     the BFS expansion, so it's the trigger we care about.
+ *   - Multiple llms.txt files contributed to the merge. A single-file
+ *     merge is by definition scoped to that one file's intent.
+ *   - The merged URL set has a docs-shaped first-segment child of root
+ *     (`/docs/`, `/documentation/`, …). That child is our scope target.
+ *
+ * Mutates `llms.parsed.sections` in place. Returns `{ segment, kept,
+ * dropped }` when narrowing happened, or `null` when conditions weren't
+ * met.
+ */
+function narrowToDocsSubtreeIfNeeded(llms, sourceUrl, hits) {
+  if (!llms || llms.sourceFiles.length < 2) return null
+  if (sourceUrl.hostname.toLowerCase().includes('docs')) return null
+  const rootHit = hits.some((h) => h.path === '/' || h.path === '')
+  if (!rootHit) return null
+
+  // Identify docs-shaped first segments of root that actually appear in
+  // the merged URLs. Walking just the first path segment matches the
+  // user's spec ("we only look at immediate children in this case").
+  const firstSegs = new Set()
+  for (const section of llms.parsed.sections) {
+    for (const item of section.items) {
+      try {
+        const seg = new URL(item.url).pathname.split('/').filter(Boolean)[0]
+        if (seg) firstSegs.add(seg.toLowerCase())
+      } catch {
+        // ignore unparseable URLs
+      }
+    }
+  }
+  let docsSegment = null
+  for (const seg of firstSegs) {
+    if (DOCS_LIKE_ROOT_SEGMENTS.has(seg)) {
+      docsSegment = seg
+      break
+    }
+  }
+  if (!docsSegment) return null
+
+  const prefix = '/' + docsSegment
+  let kept = 0
+  let dropped = 0
+  const keptSections = []
+  for (const section of llms.parsed.sections) {
+    const items = []
+    for (const item of section.items) {
+      try {
+        const pn = new URL(item.url).pathname.toLowerCase()
+        if (pn === prefix || pn.startsWith(prefix + '/')) {
+          items.push(item)
+          kept++
+        } else {
+          dropped++
+        }
+      } catch {
+        dropped++
+      }
+    }
+    if (items.length > 0) {
+      section.items = items
+      keptSections.push(section)
+    }
+  }
+  llms.parsed.sections = keptSections
+  return { segment: docsSegment, kept, dropped }
+}
+
+/**
+ * Drop asset/meta items in place from a parsed llms.txt structure. Sections
+ * that end up empty after the drop are removed too. Returns the count of
+ * items dropped.
+ */
+function dropAssetItemsFromParsed(parsed) {
+  let dropped = 0
+  const keptSections = []
+  for (const section of parsed.sections) {
+    const keptItems = []
+    for (const item of section.items) {
+      if (isAssetOrMetaUrl(item.url)) {
+        dropped++
+        continue
+      }
+      keptItems.push(item)
+    }
+    if (keptItems.length > 0) {
+      section.items = keptItems
+      keptSections.push(section)
+    }
+  }
+  parsed.sections = keptSections
+  return dropped
+}
+
 function buildLlmsCandidates(sourceUrl) {
   const out = []
   const seen = new Set()
@@ -2507,6 +2705,182 @@ function buildLlmsCandidates(sourceUrl) {
     add(`${origin}${prefix ? '/' + prefix : ''}/llms.txt`)
   }
   return out
+}
+
+// Hard cap on total probes during BFS discovery — protects against
+// pathological sites where every URL returns a "200 + a few link rows"
+// response and the frontier would otherwise blow up.
+const LLMS_PROBE_CAP = 30
+// Per-node cap on child segments to expand. Root-level llms.txt files can
+// list hundreds of URLs; without this a single root hit could schedule
+// dozens of unrelated probes (`/blog`, `/pricing`, …).
+const LLMS_CHILDREN_PER_NODE = 12
+
+/**
+ * Convert a path like `/docs/quickstart` into its llms.txt URL.
+ */
+function pathToLlmsUrl(origin, path) {
+  if (!path || path === '/') return `${origin}/llms.txt`
+  return `${origin}${path}/llms.txt`
+}
+
+/**
+ * Given a current path + a parsed llms.txt, return the next paths to probe:
+ * the parent directory (UP) and distinct first-segment-children extracted
+ * from the URL list (DOWN). Children are scoped to URLs whose pathname
+ * actually starts with the current path's prefix — out-of-scope URLs (e.g.
+ * a `/docs/llms.txt` listing `/blog/foo`) are ignored.
+ */
+function expandLlmsFrontier(currentPath, parsed) {
+  const next = []
+  const prefix = currentPath === '/' || currentPath === '' ? '/' : currentPath + '/'
+
+  if (currentPath && currentPath !== '/') {
+    const parent = currentPath.replace(/\/[^/]+$/, '') || '/'
+    next.push(parent)
+  }
+
+  const childSegs = new Set()
+  for (const section of parsed.sections) {
+    for (const item of section.items) {
+      try {
+        const u = new URL(item.url)
+        const pn = u.pathname.toLowerCase()
+        if (!pn.startsWith(prefix.toLowerCase())) continue
+        const rest = pn.slice(prefix.length).split('/').filter(Boolean)
+        if (rest.length > 0) childSegs.add(rest[0])
+      } catch {
+        // ignore unparseable URLs
+      }
+      if (childSegs.size >= LLMS_CHILDREN_PER_NODE) break
+    }
+    if (childSegs.size >= LLMS_CHILDREN_PER_NODE) break
+  }
+  for (const seg of childSegs) {
+    next.push(currentPath === '/' || !currentPath ? `/${seg}` : `${currentPath}/${seg}`)
+  }
+  return next
+}
+
+/**
+ * BFS-discover all llms.txt files reachable from sourceUrl by walking UP
+ * the path and DOWN into child segments. Invalid hits (file exists but
+ * fails the usability ratio) are kept as "stepping stones" — they still
+ * expand the frontier so we can find their valid siblings/children — but
+ * don't contribute content to the merged result. Returns:
+ *   { hits, misses, skipped }
+ * where `hits` includes both valid (usable: true) and invalid hits.
+ */
+async function discoverLlmsTxt(sourceUrl) {
+  const tried = new Set()
+  const hits = []
+  const misses = []
+  const skipped = []
+
+  const startSegs = sourceUrl.pathname.split('/').filter(Boolean)
+  const initial = []
+  for (let i = startSegs.length; i >= 0; i--) {
+    initial.push('/' + startSegs.slice(0, i).join('/'))
+  }
+
+  let frontier = initial
+  while (frontier.length > 0 && tried.size < LLMS_PROBE_CAP) {
+    const ring = []
+    for (const p of frontier) {
+      const norm = p === '' ? '/' : p
+      if (tried.has(norm)) continue
+      tried.add(norm)
+      ring.push(norm)
+      if (tried.size >= LLMS_PROBE_CAP) break
+    }
+    if (ring.length === 0) break
+
+    const results = await Promise.all(
+      ring.map(async (path) => {
+        const llmsUrl = pathToLlmsUrl(sourceUrl.origin, path)
+        const res = await fetchLlmsTxt(llmsUrl)
+        return { path, llmsUrl, res }
+      }),
+    )
+
+    const next = []
+    for (const { path, llmsUrl, res } of results) {
+      if (!res.ok) {
+        misses.push({ url: llmsUrl, status: res.status, error: res.error })
+        continue
+      }
+      // Treat as a "hit" only if there's at least one link row — that's the
+      // minimum signal that this is an llms.txt-shaped file (and not just a
+      // 200 response serving the site's HTML or a stray text file). Hits
+      // expand the frontier regardless of whether they pass usability.
+      const linkItems = res.stats?.linkItems ?? 0
+      if (linkItems === 0) {
+        misses.push({ url: llmsUrl, status: 'no link items' })
+        continue
+      }
+      hits.push({ ...res, llmsUrl, path })
+      if (!res.usable) skipped.push({ url: llmsUrl, reason: res.reason })
+      for (const np of expandLlmsFrontier(path, res.parsed)) {
+        if (!tried.has(np)) next.push(np)
+      }
+    }
+    frontier = next
+  }
+
+  return { hits, misses, skipped }
+}
+
+/**
+ * Merge content from all VALID hits into one llms-result-shaped object that
+ * downstream code can consume the same as a single-file result. Pages are
+ * deduped by normalized pathname, with the deepest-path hit winning — the
+ * `/docs/conversational-ai/` file's section assignment beats `/docs/`'s for
+ * any URL under that subtree. Returns null when there are no valid hits.
+ */
+function mergeValidHits(hits) {
+  const valid = hits.filter((h) => h.usable)
+  if (valid.length === 0) return null
+
+  const deepestFirst = [...valid].sort((a, b) => b.path.length - a.path.length)
+  const shallowestFirst = [...valid].sort((a, b) => a.path.length - b.path.length)
+
+  const claimed = new Set()
+  const sections = []
+  for (const hit of deepestFirst) {
+    for (const section of hit.parsed.sections) {
+      const items = []
+      for (const item of section.items) {
+        const key = normalizePath(item.url)
+        if (claimed.has(key)) continue
+        claimed.add(key)
+        items.push(item)
+      }
+      if (items.length > 0) sections.push({ title: section.title, items })
+    }
+  }
+
+  // Prefer the root-most file's H1 title — usually the canonical site name.
+  const title = shallowestFirst.find((h) => h.parsed.title)?.parsed.title || null
+
+  const stats = valid.reduce(
+    (acc, h) => ({
+      conforming: acc.conforming + (h.stats?.conforming || 0),
+      nonConforming: acc.nonConforming + (h.stats?.nonConforming || 0),
+      total: acc.total + (h.stats?.total || 0),
+      linkItems: acc.linkItems + (h.stats?.linkItems || 0),
+    }),
+    { conforming: 0, nonConforming: 0, total: 0, linkItems: 0 },
+  )
+  stats.ratio = stats.total === 0 ? 0 : stats.conforming / stats.total
+
+  return {
+    parsed: { title, sections },
+    usable: true,
+    reason: null,
+    stats,
+    llmsUrl: shallowestFirst[0].llmsUrl,
+    sourceFiles: shallowestFirst.map((h) => h.llmsUrl),
+  }
 }
 
 /**

@@ -1,17 +1,24 @@
 const H1_RE = /^#\s+(.+)$/
 const H2_RE = /^##\s+(.+)$/
-const STANDARD_LIST_LINK_RE = /^\s*[-*+]\s+\[([^\]]+)\]\(([^)\s]+)\)(?:\s*[:—–-]\s*(.+?))?\s*$/
+// Any line whose meaningful content is a markdown link. Accepts:
+//   - Standard list rows:           `- [text](url)`, `* [text](url) — desc`
+//   - Bare link lines:              `[text](url)`
+//   - Breadcrumb-prefixed rows used by Fern/Mintlify-style indices:
+//       `ElevenAgents [Agent WebSockets](url)`
+//       `API Reference > Agents > Branches [List branches](url)`
+// Captures: [prefix, text, url, description] (prefix and description may be empty).
+const LINK_LINE_RE = /^\s*(?:[-*+]\s+)?([^\[\n]*?)\s*\[([^\]]+)\]\(([^)\s]+)\)(?:\s*[:—–-]\s*(.+?))?\s*$/
 const BLOCKQUOTE_RE = /^\s*>/
 const FENCE_RE = /^\s*(?:```|~~~)/
 
-// A llms.txt is considered usable when at least MIN_LINK_ROWS link items
-// parse cleanly AND the share of "spec-shaped" lines (H1/H2/blockquote/link
-// row/blank) over total lines is at least MIN_CONFORMING_RATIO. Fenced code
-// blocks (including the fence delimiters) and anything else (prose
-// paragraphs, image markdown, HTML, etc.) count against the ratio. Tuned to
-// accept real-world files that include a short prose preamble/epilogue while
-// still rejecting prose-heavy or llms-full.txt-shaped documents.
-const MIN_LINK_ROWS = 10
+// A llms.txt is considered usable as long as it has at least one link row.
+// Beyond that we enforce a structural ratio (share of "spec-shaped" lines —
+// H1/H2/blockquote/link row/blank — over total lines), but only once the
+// file has enough links for the ratio to be statistically meaningful. A
+// 3-link file with one prose sentence would compute a misleading ratio; we
+// can't tell signal from noise at that size, so we trust it and let the
+// BFS-merge dedupe handle any junk that slips through.
+const RATIO_CHECK_MIN_LINKS = 10
 const MIN_CONFORMING_RATIO = 0.7
 
 export function analyzeLlmsTxt(body, llmsUrl) {
@@ -63,10 +70,8 @@ export function parseLlmsTxt(body, llmsUrl) {
 
 function getSkipReason(body, linkItems, lineStats) {
   if (/^---\r?\n/.test(body)) return 'starts with YAML frontmatter'
-  if (linkItems < MIN_LINK_ROWS) {
-    return `only ${linkItems} link item${linkItems === 1 ? '' : 's'} (need at least ${MIN_LINK_ROWS})`
-  }
-  if (lineStats.ratio < MIN_CONFORMING_RATIO) {
+  if (linkItems === 0) return 'no link items'
+  if (linkItems >= RATIO_CHECK_MIN_LINKS && lineStats.ratio < MIN_CONFORMING_RATIO) {
     return `conforming-line ratio ${lineStats.ratio.toFixed(2)} below ${MIN_CONFORMING_RATIO} (${lineStats.conforming}/${lineStats.total} lines)`
   }
   return null
@@ -99,7 +104,7 @@ function classifyLines(body) {
       conforming++
       continue
     }
-    if (H1_RE.test(line) || H2_RE.test(line) || STANDARD_LIST_LINK_RE.test(line) || BLOCKQUOTE_RE.test(line)) {
+    if (H1_RE.test(line) || H2_RE.test(line) || LINK_LINE_RE.test(line) || BLOCKQUOTE_RE.test(line)) {
       conforming++
       continue
     }
@@ -112,16 +117,22 @@ function classifyLines(body) {
 }
 
 function parseListLink(line, llmsUrl) {
-  const match = line.match(STANDARD_LIST_LINK_RE)
+  const match = line.match(LINK_LINE_RE)
   if (!match) return null
 
-  const url = normalizeUrl(match[2], llmsUrl)
+  const [, prefix, text, rawUrl, trailingDesc] = match
+  const url = normalizeUrl(rawUrl, llmsUrl)
   if (!url) return null
 
+  // Prefer an explicit trailing description (`[text](url) — desc`); fall back
+  // to the breadcrumb prefix (`API Reference > Agents [text](url)`) when no
+  // explicit description is present. Either gives downstream extra context.
+  const description = trailingDesc?.trim() || prefix?.trim() || null
+
   return {
-    text: match[1].trim(),
+    text: text.trim(),
     url,
-    description: match[3] ? match[3].trim() : null,
+    description: description || null,
   }
 }
 
