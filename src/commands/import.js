@@ -257,7 +257,15 @@ export async function importDocs(options) {
         // labels aren't a trustworthy spine for the remainder.
         const orphansDwarfDirect = slotted.length >= directMatches * 2
         const scrapeAllPages = scraped.categories.flatMap((c) => c.pages)
-        const reclustered = orphansDwarfDirect ? clusterByUrlPath([...scrapeAllPages, ...slotted]) : null
+        let reclustered = null
+        if (orphansDwarfDirect) {
+          reclustered = clusterByUrlPath([...scrapeAllPages, ...slotted])
+        }
+        styles.info(
+          styles.dim(
+            `  orphan triage: ${slotted.length} orphan${slotted.length === 1 ? '' : 's'} vs ${directMatches} direct match${directMatches === 1 ? '' : 'es'} (ratio ${directMatches === 0 ? '∞' : (slotted.length / directMatches).toFixed(2)}) — gate ${orphansDwarfDirect ? 'tripped' : 'NOT tripped'} (need ≥2.00); URL re-cluster ${reclustered ? `→ ${reclustered.length} categor${reclustered.length === 1 ? 'y' : 'ies'}` : 'skipped'}`,
+          ),
+        )
         if (reclustered) {
           scraped.categories = reclustered.map((c) => ({ title: c.title, pages: c.pages }))
           styles.info(
@@ -2049,14 +2057,29 @@ function urlNamespace(url) {
 function clusterByUrlPath(pages) {
   if (!pages || pages.length < 3) return null
 
-  const parts = pages.map((p) => {
+  // Pages with no path segments (e.g. an origin-only URL like
+  // `https://build.example.com/`) can't participate in segment-based
+  // clustering. A handful are fine — we'll fold them into the first cluster
+  // as a place to land — but if more than 20% of the input is rootless,
+  // the source isn't really a hierarchical doc set and clustering won't
+  // produce a meaningful tree. Bail in that case so the caller falls back.
+  const noSegPages = []
+  const clusterable = []
+  const parts = []
+  for (const p of pages) {
+    let segs = []
     try {
-      return new URL(p.url).pathname.split('/').filter(Boolean)
-    } catch {
-      return []
+      segs = new URL(p.url).pathname.split('/').filter(Boolean)
+    } catch {}
+    if (segs.length === 0) {
+      noSegPages.push(p)
+    } else {
+      clusterable.push(p)
+      parts.push(segs)
     }
-  })
-  if (parts.some((pp) => pp.length === 0)) return null
+  }
+  if (noSegPages.length / pages.length > 0.2) return null
+  if (clusterable.length < 3) return null
 
   // Longest common prefix depth.
   let commonDepth = 0
@@ -2069,13 +2092,13 @@ function clusterByUrlPath(pages) {
   // The segment right after the common base is the category key.
   const keyIdx = commonDepth
   const byKey = new Map()
-  for (let i = 0; i < pages.length; i++) {
+  for (let i = 0; i < clusterable.length; i++) {
     const key = parts[i][keyIdx]
     // Skip pages that have no segment at the cluster index (they're AT the
     // common base — those would become their own "index"-like category).
     if (!key) continue
     if (!byKey.has(key)) byKey.set(key, [])
-    byKey.get(key).push(pages[i])
+    byKey.get(key).push(clusterable[i])
   }
 
   // Reject weak clusterings: need at least 2 groups AND at least one group
@@ -2086,7 +2109,7 @@ function clusterByUrlPath(pages) {
 
   // Preserve first-appearance order so the sidebar reflects source order.
   const firstSeen = new Map()
-  pages.forEach((p, i) => {
+  clusterable.forEach((p, i) => {
     const key = parts[i][keyIdx]
     if (key && !firstSeen.has(key)) firstSeen.set(key, i)
   })
@@ -2101,21 +2124,29 @@ function clusterByUrlPath(pages) {
   // a parent page with children wrapped in a pseudo-category label. Categories
   // are grouping labels with no content of their own; parent pages have
   // content AND children. Collect those singletons into a shared
-  // "Documentation" bucket so they're siblings at the top level, each with
-  // their own sub-tree intact.
+  // "Other Documentation" bucket at the bottom of the sidebar so they're
+  // siblings at the top level, each with their own sub-tree intact, without
+  // crowding the real categories above.
   const multipageClusters = rawClusters.filter((c) => c.pages.length >= 2)
   const singletonPages = rawClusters.filter((c) => c.pages.length === 1).flatMap((c) => c.pages)
-
-  const out = []
-  if (singletonPages.length > 0) {
-    out.push({ title: 'Documentation', pages: singletonPages })
-  }
-  out.push(...multipageClusters)
 
   // If we didn't actually produce any multi-page cluster, clustering added no
   // value — every page was a singleton and we'd just have renamed Overview.
   // Tell the caller to stick with the original flat shape.
   if (multipageClusters.length === 0) return null
+
+  const out = [...multipageClusters]
+
+  // Park any zero-segment pages on the first real cluster. They don't fit
+  // segment-based clustering but the >20% guard above already proved they're
+  // a minority, so dropping them onto whatever lands first is a reasonable
+  // home rather than their own misfit category.
+  if (noSegPages.length > 0) out[0].pages.push(...noSegPages)
+
+  // "Other Documentation" goes last so it never displaces a real category.
+  if (singletonPages.length > 0) {
+    out.push({ title: 'Other Documentation', pages: singletonPages })
+  }
   return out
 }
 
