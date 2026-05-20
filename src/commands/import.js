@@ -19,7 +19,10 @@ export const hidden = true
 export const skipBootstrap = true
 
 export function args(cmd) {
-  cmd.requiredOption('--source <url-or-file>', 'URL to import from, or path to a local OpenAPI spec (.json/.yaml/.yml)')
+  cmd.requiredOption(
+    '--source <url-or-file...>',
+    'One or more URLs to import from (space-separated or repeated), or a single local OpenAPI spec (.json/.yaml/.yml)',
+  )
   cmd.option('-o, --output <path>', 'Output zip path (defaults to <basename>-readme.zip in cwd)')
   cmd.addOption(new Option('-m, --model <name>', 'Claude model alias: haiku, sonnet, opus').choices(['haiku', 'sonnet', 'opus']).default('sonnet'))
   cmd.option('--firecrawl-key <key>', 'Firecrawl API key (or set FIRECRAWL_API_KEY env var) — enables JS-rendered sidebar scraping')
@@ -39,7 +42,8 @@ export function args(cmd) {
  * on success.
  *
  * @param {object} options
- * @param {string} options.source             URL to import from, or path to a local OAS spec.
+ * @param {string | string[]} options.source  One or more URLs to import from, or a single path to a local OAS spec.
+ *                                            Multiple URLs are merged into one zip; same-titled categories merge their pages.
  * @param {string} [options.output]           Output zip path. Defaults to `<basename>-readme.zip` in cwd.
  * @param {string} [options.model]            Claude model alias: 'haiku' | 'sonnet' | 'opus'. Defaults to 'sonnet'.
  * @param {string} [options.firecrawlKey]     Firecrawl API key (falls back to FIRECRAWL_API_KEY env var).
@@ -60,25 +64,130 @@ export async function importDocs(options) {
 
   const debugSnapshots = options.debug ? {} : null
 
-  // Dispatch: http(s) URL → docs-site scrape flow; anything else → local OAS.
-  if (!/^https?:\/\//i.test(options.source)) {
-    return runOasImport(options.source, options, startedAt, phases, timePhase)
+  // Normalize source → array; preserve back-compat with single-string callers.
+  const rawSources = Array.isArray(options.source) ? options.source : [options.source]
+  if (rawSources.length === 0) throw new Error('At least one --source is required')
+
+  // Dispatch: any non-URL entry triggers the local-OAS path, which is
+  // strictly single-source.
+  const hasNonUrl = rawSources.some((s) => !/^https?:\/\//i.test(s))
+  if (hasNonUrl) {
+    if (rawSources.length > 1) {
+      throw new Error('OAS imports accept a single --source; URL imports can accept multiple.')
+    }
+    return runOasImport(rawSources[0], options, startedAt, phases, timePhase)
   }
 
-  let sourceUrl
-  try {
-    sourceUrl = new URL(options.source)
-  } catch {
-    throw new Error(`Invalid --source URL: ${options.source}`)
-  }
+  const sourceUrls = rawSources.map((s) => {
+    try {
+      return new URL(s)
+    } catch {
+      throw new Error(`Invalid --source URL: ${s}`)
+    }
+  })
 
-  const outputZip = path.resolve(options.output || path.join(process.cwd(), `${sourceUrl.hostname}-readme.zip`))
+  const hostnameJoined = sourceUrls.map((u) => u.hostname).join('-')
+  const outputZip = path.resolve(options.output || path.join(process.cwd(), `${hostnameJoined}-readme.zip`))
 
   console.log()
-  styles.info(`Importing from ${styles.bold(sourceUrl.toString())}`)
+  if (sourceUrls.length === 1) {
+    styles.info(`Importing from ${styles.bold(sourceUrls[0].toString())}`)
+  } else {
+    styles.info(`Importing from ${styles.bold(String(sourceUrls.length))} sources:`)
+    for (const u of sourceUrls) styles.info(styles.dim(`  · ${u.toString()}`))
+  }
   if (!options.test) styles.info(`Output: ${styles.bold(outputZip)}`)
   console.log()
 
+  // Per-source pipeline: discovery + scrape + organize, in parallel.
+  // Each call returns an `organized` object with the standard shape
+  // `{ title, categories: [...] }`; we merge them before staging.
+  const perSourceOrganized = await Promise.all(
+    sourceUrls.map((sourceUrl) => produceOrganizedForSource(sourceUrl, options, timePhase, debugSnapshots)),
+  )
+
+  const organized = sourceUrls.length === 1 ? perSourceOrganized[0] : mergeOrganized(perSourceOrganized)
+
+  if (debugSnapshots) {
+    debugSnapshots['05-organized.json'] = organized
+    const debugDir = path.join(os.tmpdir(), `readme-import-debug-${hostnameJoined}-${Date.now()}`)
+    fs.mkdirSync(debugDir, { recursive: true })
+    for (const [name, data] of Object.entries(debugSnapshots)) {
+      fs.writeFileSync(path.join(debugDir, name), JSON.stringify(data, null, 2))
+    }
+    styles.info(`${styles.dim(`Debug snapshots → ${debugDir}`)}`)
+  }
+  console.log()
+
+  console.log(`  ${styles.bold(organized.title || '(untitled)')}`)
+  for (const cat of organized.categories || []) {
+    console.log()
+    const iconLabel = cat.icon ? `${styles.brand(`[${cat.icon}]`)} ` : ''
+    console.log(`  ${iconLabel}${styles.bold(cat.title)}`)
+    printPagesTree(cat.pages || [], 2)
+  }
+
+  const stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'readme-import-'))
+
+  let result
+  try {
+    styles.info(`Staging frontmatter stubs in ${styles.bold(stagingDir)}...`)
+    const stageStart = Date.now()
+    const staged = await timePhase('stage stubs', async () =>
+      stageOrganized(organized, stagingDir, { skipApiReference: !!options.skipApiReference }),
+    )
+    const landingTitle =
+      organized.title ||
+      (sourceUrls.length === 1 ? sourceUrls[0].hostname : sourceUrls.map((u) => u.hostname).join(' + '))
+    ensureDocsLandingPage(stagingDir, landingTitle)
+    styles.ok(
+      `Staged ${styles.bold(String(staged.fileCount))} stub${staged.fileCount === 1 ? '' : 's'} across ${styles.bold(String(staged.dirCount))} director${staged.dirCount === 1 ? 'y' : 'ies'} in ${styles.bold(formatDuration(Date.now() - stageStart))}.`,
+    )
+    if (staged.skippedApiRef > 0) {
+      styles.info(`Skipped ${styles.bold(String(staged.skippedApiRef))} API reference page${staged.skippedApiRef === 1 ? '' : 's'} (--skip-api-reference)`)
+    }
+    console.log()
+
+    if (options.test) {
+      styles.ok(`Done in ${styles.bold(formatDuration(Date.now() - startedAt))}! Staged ${styles.bold(String(staged.fileCount))} files at ${styles.bold(stagingDir)}`)
+      console.log()
+      styles.info('Starting the dev server for preview...')
+      console.log()
+      await runDevPreview(stagingDir)
+      return { source: 'url', stagingDir, fileCount: staged.fileCount, duration: Date.now() - startedAt, phases }
+    }
+
+    if (staged.fileCount === 0) {
+      styles.warning('Staging directory is empty — skipping zip.')
+      return { source: 'url', fileCount: 0, duration: Date.now() - startedAt, phases }
+    }
+
+    styles.info(`Packaging ${styles.bold(String(staged.fileCount))} files into ${styles.bold(outputZip)}...`)
+    await timePhase('zip', () => createZip(stagingDir, outputZip))
+
+    console.log()
+    styles.ok(`Done in ${styles.bold(formatDuration(Date.now() - startedAt))}! Your ReadMe import is ready at ${styles.bold(outputZip)}`)
+    console.log(styles.dim(`  ⏱  ${phases.map((p) => `${p.label} ${formatDuration(p.ms)}`).join(' · ')}`))
+    result = { source: 'url', outputZip, fileCount: staged.fileCount, duration: Date.now() - startedAt, phases }
+  } finally {
+    if (!options.test) {
+      fs.rmSync(stagingDir, { recursive: true, force: true })
+    }
+  }
+
+  return result
+}
+
+/**
+ * Run the discovery + scrape + organize pipeline for ONE source URL and
+ * return its `organized` object (`{ title, categories: [...] }`). Pure
+ * per-source work — no staging, no zipping. `importDocs` runs this in
+ * parallel across multiple sources and merges the results.
+ *
+ * `debugSnapshots`, when provided, gets per-source keys suffixed with
+ * the hostname so parallel runs don't clobber each other.
+ */
+async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSnapshots) {
   // Discover llms.txt files by BFS walking parents AND children. Seed the
   // frontier with the walk-up paths (source → root). Any "hit" (file exists
   // with at least one link row) expands the frontier: parent path + distinct
@@ -182,9 +291,10 @@ export async function importDocs(options) {
     }
   }
 
+  const dbgSuffix = `-${sourceUrl.hostname}`
   if (debugSnapshots) {
-    debugSnapshots['01-llms-parsed.json'] = { llmsUrl, parsed: llms ? llms.parsed : null, skipped: skippedLlms }
-    debugSnapshots['01b-sitemap.json'] = { sitemapUrl, urls: sitemapKnownUrls }
+    debugSnapshots[`01-llms-parsed${dbgSuffix}.json`] = { llmsUrl, parsed: llms ? llms.parsed : null, skipped: skippedLlms }
+    debugSnapshots[`01b-sitemap${dbgSuffix}.json`] = { sitemapUrl, urls: sitemapKnownUrls }
   }
 
   let knownUrls = []
@@ -229,7 +339,7 @@ export async function importDocs(options) {
   const mintlifyStart = Date.now()
   const mintlifyNav = await timePhase('mintlify probe', () => tryMintlifyNav(sourceUrl.toString(), knownUrls, firecrawlKey))
   if (debugSnapshots) {
-    debugSnapshots['02a-mintlify-nav.json'] = mintlifyNav ? JSON.parse(JSON.stringify(mintlifyNav)) : null
+    debugSnapshots[`02a-mintlify-nav${dbgSuffix}.json`] = mintlifyNav ? JSON.parse(JSON.stringify(mintlifyNav)) : null
   }
   if (mintlifyNav) {
     const pageCount = mintlifyNav.categories.reduce((n, c) => n + c.pages.length, 0)
@@ -249,7 +359,7 @@ export async function importDocs(options) {
     scraped = await timePhase('scrape nav', () => scrapeNavFromSite(sourceUrl.toString(), knownUrls, firecrawlKey))
   }
   if (debugSnapshots) {
-    debugSnapshots['02-scraped-raw.json'] = scraped ? JSON.parse(JSON.stringify(scraped)) : null
+    debugSnapshots[`02-scraped-raw${dbgSuffix}.json`] = scraped ? JSON.parse(JSON.stringify(scraped)) : null
   }
   // If the sidebar scrape covers less than 75% of the llms.txt URLs, the
   // scrape is too thin to trust as the import's spine. Common on multi-tab
@@ -276,7 +386,7 @@ export async function importDocs(options) {
     if (knownUrls.length > 0) {
       const slotted = slotOrphansByPath(scraped, knownUrls)
       if (debugSnapshots) {
-        debugSnapshots['03-after-slot-by-path.json'] = {
+        debugSnapshots[`03-after-slot-by-path${dbgSuffix}.json`] = {
           scraped: JSON.parse(JSON.stringify(scraped)),
           unslottedOrphans: slotted,
         }
@@ -324,7 +434,7 @@ export async function importDocs(options) {
             `Scrape covered only ${styles.bold(String(directMatches))}/${styles.bold(String(knownUrls.length))} pages — discarded as too thin and re-clustered ${styles.bold(String(scrapeAllPages.length + slotted.length))} pages by URL path into ${styles.bold(String(reclustered.length))} categor${reclustered.length === 1 ? 'y' : 'ies'}: ${reclustered.map((c) => styles.bold(c.title)).join(', ')}.`,
           )
           if (debugSnapshots) {
-            debugSnapshots['04-after-orphan-buckets.json'] = {
+            debugSnapshots[`04-after-orphan-buckets${dbgSuffix}.json`] = {
               mode: 'reclustered-by-url-path',
               scraped: JSON.parse(JSON.stringify(scraped)),
             }
@@ -343,7 +453,7 @@ export async function importDocs(options) {
           const buckets = bucketOrphansByPathType(otherOrphans, scraped)
           for (const b of buckets) scraped.categories.push(b)
           if (debugSnapshots) {
-            debugSnapshots['04-after-orphan-buckets.json'] = {
+            debugSnapshots[`04-after-orphan-buckets${dbgSuffix}.json`] = {
               apiReferenceCollected: apiResult.category
                 ? {
                     pageCount: apiResult.category.pages.length,
@@ -475,69 +585,38 @@ export async function importDocs(options) {
   }
 
   styles.ok(`Organized in ${styles.bold(formatDuration(Date.now() - organizeStart))}.`)
-  if (debugSnapshots) {
-    debugSnapshots['05-organized.json'] = organized
-    const debugDir = path.join(os.tmpdir(), `readme-import-debug-${sourceUrl.hostname}-${Date.now()}`)
-    fs.mkdirSync(debugDir, { recursive: true })
-    for (const [name, data] of Object.entries(debugSnapshots)) {
-      fs.writeFileSync(path.join(debugDir, name), JSON.stringify(data, null, 2))
-    }
-    styles.info(`${styles.dim(`Debug snapshots → ${debugDir}`)}`)
-  }
-  console.log()
+  return organized
+}
 
-  console.log(`  ${styles.bold(organized.title || '(untitled)')}`)
-  for (const cat of organized.categories || []) {
-    console.log()
-    const iconLabel = cat.icon ? `${styles.brand(`[${cat.icon}]`)} ` : ''
-    console.log(`  ${iconLabel}${styles.bold(cat.title)}`)
-    printPagesTree(cat.pages || [], 2)
-  }
+/**
+ * Merge per-source `organized` results into one. Same-titled categories MERGE
+ * their page lists (intentional — when a user bundles related sources into
+ * one project, they probably want a coherent sidebar; `ensureUniqueSlugs` later
+ * dedupes any slug collisions globally). First non-null title wins; first
+ * non-null icon per merged category wins. Page order within a merged category
+ * is the concatenation of input sources in argument order.
+ */
+function mergeOrganized(perSource) {
+  const title = perSource.map((o) => o.title).find(Boolean) || null
 
-  const stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'readme-import-'))
-
-  let result
-  try {
-    styles.info(`Staging frontmatter stubs in ${styles.bold(stagingDir)}...`)
-    const stageStart = Date.now()
-    const staged = await timePhase('stage stubs', async () => stageOrganized(organized, stagingDir, { skipApiReference: !!options.skipApiReference }))
-    ensureDocsLandingPage(stagingDir, organized.title || sourceUrl.hostname)
-    styles.ok(
-      `Staged ${styles.bold(String(staged.fileCount))} stub${staged.fileCount === 1 ? '' : 's'} across ${styles.bold(String(staged.dirCount))} director${staged.dirCount === 1 ? 'y' : 'ies'} in ${styles.bold(formatDuration(Date.now() - stageStart))}.`,
-    )
-    if (staged.skippedApiRef > 0) {
-      styles.info(`Skipped ${styles.bold(String(staged.skippedApiRef))} API reference page${staged.skippedApiRef === 1 ? '' : 's'} (--skip-api-reference)`)
-    }
-    console.log()
-
-    if (options.test) {
-      styles.ok(`Done in ${styles.bold(formatDuration(Date.now() - startedAt))}! Staged ${styles.bold(String(staged.fileCount))} files at ${styles.bold(stagingDir)}`)
-      console.log()
-      styles.info('Starting the dev server for preview...')
-      console.log()
-      await runDevPreview(stagingDir)
-      return { source: 'url', stagingDir, fileCount: staged.fileCount, duration: Date.now() - startedAt, phases }
-    }
-
-    if (staged.fileCount === 0) {
-      styles.warning('Staging directory is empty — skipping zip.')
-      return { source: 'url', fileCount: 0, duration: Date.now() - startedAt, phases }
-    }
-
-    styles.info(`Packaging ${styles.bold(String(staged.fileCount))} files into ${styles.bold(outputZip)}...`)
-    await timePhase('zip', () => createZip(stagingDir, outputZip))
-
-    console.log()
-    styles.ok(`Done in ${styles.bold(formatDuration(Date.now() - startedAt))}! Your ReadMe import is ready at ${styles.bold(outputZip)}`)
-    console.log(styles.dim(`  ⏱  ${phases.map((p) => `${p.label} ${formatDuration(p.ms)}`).join(' · ')}`))
-    result = { source: 'url', outputZip, fileCount: staged.fileCount, duration: Date.now() - startedAt, phases }
-  } finally {
-    if (!options.test) {
-      fs.rmSync(stagingDir, { recursive: true, force: true })
+  const byTitle = new Map()
+  const order = []
+  for (const o of perSource) {
+    for (const cat of o.categories || []) {
+      const key = cat.title
+      const existing = byTitle.get(key)
+      if (existing) {
+        existing.pages.push(...(cat.pages || []))
+        if (!existing.icon && cat.icon) existing.icon = cat.icon
+      } else {
+        const copy = { ...cat, pages: [...(cat.pages || [])] }
+        byTitle.set(key, copy)
+        order.push(copy)
+      }
     }
   }
 
-  return result
+  return { title, categories: order }
 }
 
 /**
