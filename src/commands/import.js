@@ -342,17 +342,36 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
     debugSnapshots[`02a-mintlify-nav${dbgSuffix}.json`] = mintlifyNav ? JSON.parse(JSON.stringify(mintlifyNav)) : null
   }
   if (mintlifyNav) {
-    const pageCount = mintlifyNav.categories.reduce((n, c) => n + c.pages.length, 0)
+    const pageCount = mintlifyNav.categories.reduce((n, c) => n + countUrlPagesDeep(c.pages), 0)
     styles.ok(
       `Found Mintlify config at ${styles.bold(mintlifyNav.source)} in ${styles.bold(formatDuration(Date.now() - mintlifyStart))} — ${styles.bold(String(mintlifyNav.categories.length))} categor${mintlifyNav.categories.length === 1 ? 'y' : 'ies'}, ${styles.bold(String(pageCount))} pages.`,
     )
   }
   console.log()
 
+  // Archbee sites embed the canonical document tree in Next.js page data.
+  // Their llms.txt export can be a flat, shuffled list, so prefer the tree
+  // when present.
+  let archbeeNav = null
+  if (!mintlifyNav) {
+    styles.info(`Probing for Archbee document tree...`)
+    const archbeeStart = Date.now()
+    archbeeNav = await timePhase('archbee probe', () => tryArchbeeNav(sourceUrl.toString(), knownUrls, firecrawlKey))
+    if (archbeeNav) {
+      const pageCount = archbeeNav.categories.reduce((n, c) => n + countUrlPagesDeep(c.pages), 0)
+      styles.ok(
+        `Found Archbee document tree in ${styles.bold(formatDuration(Date.now() - archbeeStart))} — ${styles.bold(String(pageCount))} page${pageCount === 1 ? '' : 's'}.`,
+      )
+    }
+    console.log()
+  }
+
   let scraped
   let scrapeStart = Date.now()
   if (mintlifyNav) {
     scraped = { title: mintlifyNav.title, categories: mintlifyNav.categories }
+  } else if (archbeeNav) {
+    scraped = { title: archbeeNav.title, categories: archbeeNav.categories }
   } else {
     styles.info(`Scraping sidebar nav from ${styles.bold(sourceUrl.toString())}${firecrawlKey ? ' ' + styles.dim('(via Firecrawl)') : ''}...`)
     scrapeStart = Date.now()
@@ -371,7 +390,7 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
   // scrape and fall through to the llms.txt path, which uses URL-based
   // clustering when multiple files were merged.
   if (scraped && llms && knownUrls.length > 0) {
-    const scrapedPages = scraped.categories.reduce((n, c) => n + c.pages.length, 0)
+    const scrapedPages = scraped.categories.reduce((n, c) => n + countUrlPagesDeep(c.pages), 0)
     const coverage = scrapedPages / knownUrls.length
     if (coverage < 0.75) {
       styles.info(
@@ -382,7 +401,7 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
   }
 
   if (scraped) {
-    const directMatches = scraped.categories.reduce((n, c) => n + c.pages.length, 0)
+    const directMatches = scraped.categories.reduce((n, c) => n + countUrlPagesDeep(c.pages), 0)
     if (knownUrls.length > 0) {
       const slotted = slotOrphansByPath(scraped, knownUrls)
       if (debugSnapshots) {
@@ -391,7 +410,7 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
           unslottedOrphans: slotted,
         }
       }
-      const totalMatched = scraped.categories.reduce((n, c) => n + c.pages.length, 0)
+      const totalMatched = scraped.categories.reduce((n, c) => n + countUrlPagesDeep(c.pages), 0)
       styles.ok(
         `Scraped nav in ${styles.bold(formatDuration(Date.now() - scrapeStart))} — ${styles.bold(String(scraped.categories.length))} categor${scraped.categories.length === 1 ? 'y' : 'ies'}, ${styles.bold(String(directMatches))} direct matches + ${styles.bold(String(totalMatched - directMatches))} slotted by path = ${styles.bold(String(totalMatched))}/${knownUrls.length}.`,
       )
@@ -418,7 +437,7 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
         // accounts for less than a third of the known pages, so its category
         // labels aren't a trustworthy spine for the remainder.
         const orphansDwarfDirect = slotted.length >= directMatches * 2
-        const scrapeAllPages = scraped.categories.flatMap((c) => c.pages)
+        const scrapeAllPages = scraped.categories.flatMap((c) => collectUrlPagesDeep(c.pages))
         let reclustered = null
         if (orphansDwarfDirect) {
           reclustered = clusterByUrlPath([...scrapeAllPages, ...slotted])
@@ -1149,6 +1168,81 @@ function parseMintlifyConfig(config, origin, byPath) {
 }
 
 /**
+ * Archbee exposes its canonical docs tree in Next.js page data as
+ * `_docSpace.publicDocsTree`. That tree preserves author order and nesting,
+ * while Archbee's llms.txt export may be flat and shuffled.
+ *
+ * Returns { title, categories } or null if the page is not Archbee or the
+ * embedded tree is unavailable.
+ */
+async function tryArchbeeNav(sourceUrl, knownPages, firecrawlKey) {
+  const origin = new URL(sourceUrl).origin
+  const fetchHtml = firecrawlKey ? makeFirecrawlFetcher(firecrawlKey) : fetchHtmlDirect
+  const html = await fetchHtml(toBrowsableUrl(sourceUrl))
+  if (!html || !/publicDocsTree|Archbee/i.test(html)) return null
+
+  const nextData = extractNextData(html)
+  const docSpace = nextData?.props?.pageProps?._docSpace
+  const tree = docSpace?.publicDocsTree
+  if (!Array.isArray(tree) || tree.length === 0) return null
+
+  const byPath = new Map()
+  for (const p of knownPages) byPath.set(normalizePath(p.url), p)
+
+  const pageFromNode = (node) => {
+    if (!node || typeof node !== 'object') return null
+    if (node.isHidden === true) return null
+
+    const title = String(node.name || node.title || node.urlKey || '').trim()
+    const children = Array.isArray(node.children) ? node.children.map(pageFromNode).filter(Boolean) : []
+    if (!title && children.length === 0) return null
+
+    const url = archbeeNodeUrl(origin, node.urlKey)
+    const known = url ? byPath.get(normalizePath(url)) : null
+    const page = {
+      title: known?.title || title || 'Untitled',
+      url,
+      ...(known?.description ? { description: known.description } : {}),
+      ...(children.length > 0 ? { pages: children } : {}),
+    }
+
+    // Root docs pages have no URL path segments, but should stay in their
+    // authored position when the later URL-trie nesting pass runs.
+    if (url && extractUrlPathSegments(url).length === 0) {
+      page._virtualPathSegs = [kebabCase(page.title || 'home') || 'home']
+    }
+
+    return page
+  }
+
+  const pages = tree.map(pageFromNode).filter(Boolean)
+  if (pages.length === 0) return null
+
+  return {
+    title: docSpace.hostingTitle || docSpace.name || null,
+    categories: [{ title: 'Documentation', pages }],
+  }
+}
+
+function extractNextData(html) {
+  const m = String(html).match(/<script\b(?=[^>]*\bid=["']__NEXT_DATA__["'])[^>]*>([\s\S]*?)<\/script>/i)
+  if (!m) return null
+  try {
+    return JSON.parse(m[1])
+  } catch {
+    return null
+  }
+}
+
+function archbeeNodeUrl(origin, urlKey) {
+  if (urlKey === undefined || urlKey === null) return null
+  const key = String(urlKey || '').trim()
+  if (!key || key === '/') return `${origin}/`
+  if (/^https?:\/\//i.test(key)) return key
+  return `${origin}/${key.replace(/^\/+/, '')}`
+}
+
+/**
  * Score a parsed nav tree for "sidebar-likeness". A real docs sidebar has
  * multiple section headers (hierarchy) and tens of links; secondary navs
  * (sitemaps, footers, search-index result lists) tend to be flat single-
@@ -1838,6 +1932,23 @@ function collectFlat(page, out) {
   if (page.pages && page.pages.length > 0) {
     for (const child of page.pages) collectFlat(child, out)
   }
+}
+
+function countUrlPagesDeep(pages) {
+  let n = 0
+  for (const p of pages || []) {
+    if (p.url) n++
+    if (p.pages && p.pages.length > 0) n += countUrlPagesDeep(p.pages)
+  }
+  return n
+}
+
+function collectUrlPagesDeep(pages, out = []) {
+  for (const p of pages || []) {
+    if (p.url) out.push(p)
+    if (p.pages && p.pages.length > 0) collectUrlPagesDeep(p.pages, out)
+  }
+  return out
 }
 
 /**
