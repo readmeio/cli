@@ -3486,8 +3486,12 @@ function extractUrlPathSegments(url) {
  *
  * Base slug is the last URL segment (kebab-cased). When two or more pages
  * share a base, we prepend the next-up URL segment to every member of the
- * colliding group and recheck
- * 
+ * colliding group and recheck. The category title is treated as the
+ * outermost segment, so when URL segments alone aren't enough (e.g. a
+ * group-only `/v1` parent that appears in multiple categories), expansion
+ * can still reach for the category to disambiguate before falling back to
+ * a numeric `-N` suffix.
+ *
  * @example
  * ensureUniqueSlugs([
  *   { title: 'Getting Started', pages: [
@@ -3514,13 +3518,19 @@ function ensureUniqueSlugs(categories) {
     }
     return extractUrlPathSegments(p.url)
   }
-  const walk = (pages) => {
+  const walk = (pages, categorySeg) => {
     for (const p of pages || []) {
-      entries.push({ page: p, segments: segmentsFor(p), fallback: p.title, depth: 1 })
-      if (p.pages) walk(p.pages)
+      const urlSegs = segmentsFor(p)
+      const segments = categorySeg ? [categorySeg, ...urlSegs] : urlSegs
+      entries.push({ page: p, segments, fallback: p.title, depth: 1 })
+      if (p.pages) walk(p.pages, categorySeg)
     }
   }
-  for (const c of categories || []) walk(c.pages)
+  for (const c of categories || []) {
+    const rawTitle = (c?.title || '').trim()
+    const categorySeg = rawTitle ? kebabCase(rawTitle) : ''
+    walk(c.pages, categorySeg)
+  }
 
   const slugFor = (e) => {
     if (e.segments.length === 0) return kebabCase(e.fallback || 'page') || 'page'
@@ -3563,7 +3573,8 @@ function ensureUniqueSlugs(categories) {
       slug = `${base}-${n}`
       styles.error(
         `Slug collision after segment expansion: ${base} — falling back to ${slug} for ${describe(e)}. ` +
-          `Pages were deduped by path before organize, so this indicates the organize step produced duplicates.`,
+          `Pages were deduped by path before organize and category title is already part of the slug, ` +
+          `so this indicates the organize step produced duplicates within a single category.`,
       )
     }
     used.add(slug)
