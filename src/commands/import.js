@@ -3487,19 +3487,48 @@ function relocateChangelogDir(stagingDir) {
   const srcDir = path.join(stagingDir, 'docs', 'Changelog')
   if (!fs.existsSync(srcDir) || !fs.statSync(srcDir).isDirectory()) return 0
 
-  // Count changelog pages (recursively, _order.yaml excluded) for reporting.
-  let pageCount = 0
-  const countMd = (dir) => {
+  const dstDir = path.join(stagingDir, 'changelog')
+  fs.renameSync(srcDir, dstDir)
+
+  // Collect every real x-import page from the (possibly nested) tree.
+  // Synthetic group-only stubs (no x-import — they exist only to render an
+  // empty parent in the sidebar) are dropped: the flat layout has no concept
+  // of containers, so they'd just be dead frontmatter.
+  const pages = []
+  const walk = (dir, ancestors) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (entry.isDirectory()) countMd(path.join(dir, entry.name))
-      else if (entry.name.endsWith('.md')) pageCount++
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        walk(full, [...ancestors, entry.name])
+        continue
+      }
+      if (!entry.name.endsWith('.md')) continue
+      const parsed = matter(fs.readFileSync(full, 'utf-8'))
+      if (!parsed.data || !parsed.data['x-import']) continue
+      const slug = entry.name.replace(/\.md$/, '')
+      pages.push({ ancestors, slug, content: parsed.content, data: parsed.data })
     }
   }
-  countMd(srcDir)
+  walk(dstDir, [])
 
-  // changelog/ is a fresh top-level dir — move the whole folder across in one
-  // step. Its own _order.yaml travels with it and stays valid.
-  fs.renameSync(srcDir, path.join(stagingDir, 'changelog'))
+  // Wipe the nested tree and rewrite it flat. Filename concatenates the
+  // ancestor folder slugs with the leaf slug so siblings share a prefix —
+  // alphabetical order then naturally matches authored reading order, and
+  // names are unique across the (formerly nested) tree.
+  fs.rmSync(dstDir, { recursive: true, force: true })
+  fs.mkdirSync(dstDir, { recursive: true })
+
+  const flatSlugs = []
+  for (const p of pages) {
+    const flatSlug = [...p.ancestors, p.slug].join('-')
+    const frontmatter = { ...p.data }
+    delete frontmatter.icon
+    fs.writeFileSync(path.join(dstDir, `${flatSlug}.md`), matter.stringify(p.content, frontmatter))
+    flatSlugs.push(flatSlug)
+  }
+
+  flatSlugs.sort()
+  fs.writeFileSync(path.join(dstDir, '_order.yaml'), flatSlugs.map((s) => `- ${yamlSafeSlug(s)}`).join('\n') + '\n')
 
   // docs/_order.yaml lists the docs category subfolders — drop the moved one
   // so the docs sidebar doesn't point at a folder that's no longer there.
@@ -3514,7 +3543,7 @@ function relocateChangelogDir(stagingDir) {
     }
   }
 
-  return pageCount
+  return pages.length
 }
 
 /**
