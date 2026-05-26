@@ -3348,10 +3348,12 @@ function stageOrganized(organized, stagingDir, opts = {}) {
       const relFilePath = `${dir}/${slug}.md`
       let frontmatter
       if (isEmptyParent) {
-        // Synthetic folder page: covers a missing URL segment so descendants
-        // nest at the right depth. No source URL to import, and we want it
-        // visible so the folder shows up in the sidebar.
-        frontmatter = { title: page.title, icon: 'fa-solid fa-folder' }
+        // Synthetic parent page: covers a missing URL segment so descendants
+        // nest at the right depth. No source URL to import. Reuse the same
+        // pickIcon heuristic leaf pages use so the parent gets a topical
+        // icon — the sidebar already renders an expand chevron, so a
+        // hardcoded `fa-folder` would just look like a placeholder.
+        frontmatter = { title: page.title, icon: formatIconClass(pickIcon(slug, page.title)) }
       } else {
         // Sub-pages don't get icons per design decision.
         frontmatter = buildFrontmatter(topDir, page, slug, pickIcon, { skipIcon: isSubPage })
