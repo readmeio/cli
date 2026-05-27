@@ -1972,8 +1972,8 @@ function reclassifyReferencePages(scraped) {
  */
 function reclassifyChangelogPages(scraped) {
   return reclassifyPagesByUrlSegment(scraped, {
-    segmentRe: /^(changelog|change[-_]?log|release[-_]?notes?|releases|whats?[-_]?new)$/i,
-    categoryRe: /^(changelog|change ?log|release ?notes?|releases|what'?s ?new)$/i,
+    segmentRe: /^(changelog|change[-_]?log|release[-_]?notes?|releases?|release[-_]?v?\d[\w.-]*|whats?[-_]?new)$/i,
+    categoryRe: /^(changelog|change ?log|release ?notes?|releases?|what'?s ?new)$/i,
     defaultTitle: 'Changelog',
   })
 }
@@ -3555,7 +3555,7 @@ function routeCategory(title) {
   if (/^(api[ -]?reference|reference|api|endpoints?)$/i.test(t)) return { topDir: 'reference', subDir: null }
   // Changelog-ish categories normalize to one docs/Changelog/ folder so the
   // --separate-changelog relocation has a single, predictable source dir.
-  if (/^(changelog|change[ -]?log|release[ -]?notes?|releases|what'?s[ -]?new)$/i.test(t)) return { topDir: 'docs', subDir: 'Changelog' }
+  if (/^(changelog|change[ -]?log|release[ -]?notes?|releases?|what'?s[ -]?new)$/i.test(t)) return { topDir: 'docs', subDir: 'Changelog' }
   if (/^(recipes?|cookbook|tutorials?|how[ -]?tos?)$/i.test(t)) return { topDir: 'recipes', subDir: null }
   if (/^(custom[ -]?pages?|landing( page)?s?)$/i.test(t)) return { topDir: 'custom_pages', subDir: null }
   if (/^(custom[ -]?blocks?|snippets?|reusable( content)?)$/i.test(t)) return { topDir: 'custom_blocks', subDir: null }
