@@ -27,6 +27,10 @@ export function args(cmd) {
   cmd.addOption(new Option('-m, --model <name>', 'Claude model alias: haiku, sonnet, opus').choices(['haiku', 'sonnet', 'opus']).default('sonnet'))
   cmd.option('--firecrawl-key <key>', 'Firecrawl API key (or set FIRECRAWL_API_KEY env var) — enables JS-rendered sidebar scraping')
   cmd.option('--skip-api-reference', 'Drop pages routed to the API Reference / reference dir. Use when uploading the OAS spec separately.')
+  cmd.option(
+    '--separate-changelog',
+    'Move changelog / release-notes pages into a top-level changelog/ directory instead of docs/Changelog/. Note: changelog/ is outside the git-format schema, so it will not lint or sync to ReadMe.',
+  )
   // Internal dev-only flag: skip the zip, keep staging, and boot the dev server
   // against it for quick visual previews. Hidden from --help.
   cmd.addOption(new Option('--test').hideHelp())
@@ -48,6 +52,7 @@ export function args(cmd) {
  * @param {string} [options.model]            Claude model alias: 'haiku' | 'sonnet' | 'opus'. Defaults to 'sonnet'.
  * @param {string} [options.firecrawlKey]     Firecrawl API key (falls back to FIRECRAWL_API_KEY env var).
  * @param {boolean} [options.skipApiReference] Drop pages routed to the API Reference dir.
+ * @param {boolean} [options.separateChangelog] Move changelog pages into a top-level `changelog/` dir instead of `docs/Changelog/`.
  * @param {boolean} [options.test]            Skip the zip, keep staging, and boot the dev server.
  * @param {boolean} [options.debug]           Dump intermediate pipeline artifacts to a tmp dir.
  * @returns {Promise<{ source: 'url' | 'oas', outputZip?: string, stagingDir?: string, fileCount: number, duration: number, phases: Array<{ label: string, ms: number }> }>}
@@ -136,6 +141,20 @@ export async function importDocs(options) {
     const staged = await timePhase('stage stubs', async () =>
       stageOrganized(organized, stagingDir, { skipApiReference: !!options.skipApiReference }),
     )
+
+    // Changelog pages stage into docs/Changelog/ (a schema-valid docs
+    // category). With --separate-changelog, relocate them afterwards into a
+    // top-level changelog/ dir — done as a post-staging move so the staged
+    // tree is a valid git-format layout up to this point.
+    if (options.separateChangelog) {
+      const movedChangelog = relocateChangelogDir(stagingDir)
+      if (movedChangelog > 0) {
+        styles.info(
+          `Moved ${styles.bold(String(movedChangelog))} changelog page${movedChangelog === 1 ? '' : 's'} into ${styles.bold('changelog/')} (--separate-changelog).`,
+        )
+      }
+    }
+
     const landingTitle =
       organized.title ||
       (sourceUrls.length === 1 ? sourceUrls[0].hostname : sourceUrls.map((u) => u.hostname).join(' + '))
@@ -291,10 +310,34 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
     }
   }
 
+  // Pre-extract changelog pages so AI / URL clustering / section-direct paths
+  // never see them as candidates for organization. We re-attach them as a
+  // dedicated Changelog category once `organized` is finalized below — that
+  // guarantees they route to docs/Changelog/ (or to changelog/ with
+  // --separate-changelog) regardless of which organize path ran. Done here,
+  // before knownUrls is derived, so every downstream consumer operates on the
+  // already-changelog-free view.
+  let extractedChangelog = []
+  if (llms) {
+    extractedChangelog = extractChangelogFromSections(llms.parsed.sections)
+  } else if (sitemapKnownUrls.length > 0) {
+    const { extracted, kept } = partitionChangelogFromKnownUrls(sitemapKnownUrls)
+    extractedChangelog = extracted
+    sitemapKnownUrls = kept
+  }
+  if (extractedChangelog.length > 0) {
+    styles.info(
+      styles.dim(
+        `Pre-extracted ${extractedChangelog.length} changelog page${extractedChangelog.length === 1 ? '' : 's'} — bypassing organization, attaching as Changelog category at the end.`,
+      ),
+    )
+  }
+
   const dbgSuffix = `-${sourceUrl.hostname}`
   if (debugSnapshots) {
     debugSnapshots[`01-llms-parsed${dbgSuffix}.json`] = { llmsUrl, parsed: llms ? llms.parsed : null, skipped: skippedLlms }
     debugSnapshots[`01b-sitemap${dbgSuffix}.json`] = { sitemapUrl, urls: sitemapKnownUrls }
+    debugSnapshots[`01c-extracted-changelog${dbgSuffix}.json`] = extractedChangelog
   }
 
   let knownUrls = []
@@ -422,6 +465,14 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
       const moved = reclassifyReferencePages(scraped)
       if (moved > 0) {
         styles.info(`Moved ${styles.bold(String(moved))} page${moved === 1 ? '' : 's'} into ${styles.bold('API Reference')} based on URL path.`)
+      }
+
+      // Same idea for changelog / release-notes pages — pull any whose URL
+      // carries a changelog-style segment into one "Changelog" category. It
+      // routes to docs/Changelog/ unless --separate-changelog relocates it.
+      const movedChangelog = reclassifyChangelogPages(scraped)
+      if (movedChangelog > 0) {
+        styles.info(`Moved ${styles.bold(String(movedChangelog))} page${movedChangelog === 1 ? '' : 's'} into ${styles.bold('Changelog')} based on URL path.`)
       }
 
       if (slotted.length > 0) {
@@ -598,7 +649,13 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
       categories: clustered.map((c) => ({ title: c.title, icon: null, pages: c.pages })),
     }
   }
-  
+
+  // Re-attach the pre-extracted changelog pages as their own Changelog
+  // category. Done before nestByUrlHierarchy so the injected pages get nested
+  // alongside the rest of the tree for consistency. Merges into a pre-existing
+  // Changelog category (scrape path's reclassifier may have already built one).
+  injectChangelogCategory(organized, extractedChangelog)
+
   for (const cat of organized.categories || []) {
     cat.pages = nestByUrlHierarchy(cat.pages)
   }
@@ -1754,9 +1811,9 @@ function bucketOrphansByPathType(orphans, scraped) {
     endpoints: 'API Reference',
     endpoint: 'API Reference',
     changelog: 'Changelog',
-    release: 'Release Notes',
-    releases: 'Release Notes',
-    'release-notes': 'Release Notes',
+    release: 'Changelog',
+    releases: 'Changelog',
+    'release-notes': 'Changelog',
     recipes: 'Recipes',
     recipe: 'Recipes',
     guides: 'Guides',
@@ -1849,43 +1906,42 @@ function titleCase(s) {
 
 /**
  * Walk all scraped pages (including nested sub-pages) and move any whose URL
- * contains a strong reference segment (`/api-reference/`, `/endpoints/`, etc.)
- * into a single "API Reference" category. Some docs sites (e.g. greenflash.ai)
- * spotlight a handful of endpoints under "Developers" in the sidebar while the
- * bulk of endpoints live under a separate API Reference section — we favor
- * the URL-path signal over the sidebar placement so all reference pages land
- * together in `reference/` after staging.
+ * carries one of `segmentRe`'s path segments into a single category,
+ * flattening sub-pages as it goes. Shared backbone for the API Reference and
+ * Changelog sweeps: both favor the URL-path signal over sidebar placement, so
+ * e.g. `/api-reference/*` or `/changelog/*` pages land together in their own
+ * category even when a site's sidebar spotlights a few of them elsewhere.
  *
- * Returns the number of pages relocated.
+ * `categoryRe` matches an existing category title to merge into (so we don't
+ * create a duplicate); when none matches, a fresh `{ title: defaultTitle }`
+ * category is appended. Returns the number of pages relocated.
  */
-function reclassifyReferencePages(scraped) {
-  const REFERENCE_SEGMENT = /^(api[-_]?reference|endpoints?)$/i
+function reclassifyPagesByUrlSegment(scraped, { segmentRe, categoryRe, defaultTitle }) {
   const normTitle = (t) =>
     String(t || '')
       .replace(INVISIBLE_CHARS, '')
       .trim()
       .toLowerCase()
 
-  const looksLikeRefUrl = (url) => {
+  const urlHasSegment = (url) => {
     try {
       const segs = new URL(url).pathname.split('/').filter(Boolean)
-      return segs.some((s) => REFERENCE_SEGMENT.test(s))
+      return segs.some((s) => segmentRe.test(s))
     } catch {
       return false
     }
   }
 
-  // Find (or create) the canonical API Reference category. Prefer an existing
-  // one with a reference-shaped title so we don't end up with duplicates.
-  let refCat = scraped.categories.find((c) => /^(api[ -]?reference|reference|api|endpoints?)$/i.test(normTitle(c.title).replace(/\s+/g, ' ')))
-  const existedBefore = Boolean(refCat)
+  // Find (or create) the canonical destination category. Prefer an existing
+  // one with a matching title so we don't end up with duplicates.
+  let destCat = scraped.categories.find((c) => categoryRe.test(normTitle(c.title).replace(/\s+/g, ' ')))
 
   const collected = []
   const filterPages = (pages) => {
     const kept = []
     for (const p of pages || []) {
-      if (looksLikeRefUrl(p.url)) {
-        // Flatten sub-pages when relocating — API Reference is a flat list.
+      if (urlHasSegment(p.url)) {
+        // Flatten sub-pages when relocating — these sections are flat lists.
         collectFlat(p, collected)
         continue
       }
@@ -1895,32 +1951,145 @@ function reclassifyReferencePages(scraped) {
     return kept
   }
 
-  // Never pull pages out of the reference category itself.
+  // Never pull pages out of the destination category itself.
   for (const cat of scraped.categories) {
-    if (cat === refCat) continue
+    if (cat === destCat) continue
     cat.pages = filterPages(cat.pages)
   }
 
   if (collected.length === 0) return 0
 
-  if (!refCat) {
-    refCat = { title: 'API Reference', pages: [] }
-    scraped.categories.push(refCat)
+  if (!destCat) {
+    destCat = { title: defaultTitle, pages: [] }
+    scraped.categories.push(destCat)
   }
-  // Dedupe against anything already in the reference category.
-  const seen = new Set(refCat.pages.map((p) => normalizePath(p.url)))
+  // Dedupe against anything already in the destination category.
+  const seen = new Set(destCat.pages.map((p) => normalizePath(p.url)))
   for (const p of collected) {
     const key = normalizePath(p.url)
     if (seen.has(key)) continue
     seen.add(key)
-    refCat.pages.push(p)
+    destCat.pages.push(p)
   }
 
-  // Drop now-empty categories (other than the reference one we may have just created).
-  scraped.categories = scraped.categories.filter((c) => c === refCat || (c.pages && c.pages.length > 0))
+  // Drop now-empty categories (other than the one we may have just created).
+  scraped.categories = scraped.categories.filter((c) => c === destCat || (c.pages && c.pages.length > 0))
 
-  // If the category existed before but the relocation was a no-op, surface 0.
-  return existedBefore ? collected.length : collected.length
+  return collected.length
+}
+
+/**
+ * Sweep `/api-reference/*` and `/endpoints/*` pages into one "API Reference"
+ * category. Some docs sites (e.g. greenflash.ai) spotlight a handful of
+ * endpoints under "Developers" in the sidebar while the bulk of endpoints
+ * live under a separate API Reference section — this lands them all in
+ * `reference/` after staging. Returns the number of pages relocated.
+ */
+function reclassifyReferencePages(scraped) {
+  return reclassifyPagesByUrlSegment(scraped, {
+    segmentRe: /^(api[-_]?reference|endpoints?)$/i,
+    categoryRe: /^(api[ -]?reference|reference|api|endpoints?)$/i,
+    defaultTitle: 'API Reference',
+  })
+}
+
+// Anchored half covers ambiguous bare keywords (release, releases, versioned
+// release-2026-2) — those need to be the whole segment so we don't sweep
+// `/release-pipeline/` etc. Unanchored half covers the unambiguous keywords
+// (changelog, release-notes, whats-new), which we catch as substrings so
+// slugs like `/docs/changelog-javascript-agent` and `/docs/ios-sdk-changelog`
+// get pulled in too.
+const CHANGELOG_URL_SEGMENT_RE = /(?:^(?:releases?|release[-_]?v?\d[\w.-]*)$)|(?:changelog|change[-_]?log|release[-_]?notes?|whats?[-_]?new)/i
+const CHANGELOG_CATEGORY_TITLE_RE = /^(changelog|change ?log|release ?notes?|releases?|what'?s ?new)$/i
+
+function urlIsChangelog(url) {
+  try {
+    const segs = new URL(url).pathname.split('/').filter(Boolean)
+    return segs.some((s) => CHANGELOG_URL_SEGMENT_RE.test(s))
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Pull changelog items OUT of llms.parsed.sections in place. Done before the
+ * organize pipeline runs so AI / clustering never sees them — they get
+ * re-attached as a dedicated Changelog category at the end via
+ * injectChangelogCategory. Sections that go empty afterwards are filtered out
+ * naturally by `usableSections` downstream.
+ *
+ * Returns the extracted items in `{ title, url, description? }` shape.
+ */
+function extractChangelogFromSections(sections) {
+  const extracted = []
+  for (const section of sections || []) {
+    const kept = []
+    for (const item of section.items || []) {
+      if (urlIsChangelog(item.url)) {
+        extracted.push({
+          title: item.text,
+          url: item.url,
+          ...(item.description ? { description: item.description } : {}),
+        })
+      } else {
+        kept.push(item)
+      }
+    }
+    section.items = kept
+  }
+  return extracted
+}
+
+/**
+ * Split a flat known-URL list into changelog vs. the rest. Used for the
+ * sitemap-only fallback, where there's no llms.txt section structure to mutate.
+ */
+function partitionChangelogFromKnownUrls(knownUrls) {
+  const extracted = []
+  const kept = []
+  for (const p of knownUrls || []) {
+    if (urlIsChangelog(p.url)) extracted.push(p)
+    else kept.push(p)
+  }
+  return { extracted, kept }
+}
+
+/**
+ * Attach pre-extracted changelog items as a dedicated Changelog category on
+ * the final organized tree. Merges into an existing Changelog-titled category
+ * if one is already present (e.g. the scrape path's reclassifier already built
+ * one); otherwise creates a fresh one. Dedupe is by normalized URL path.
+ */
+function injectChangelogCategory(organized, items) {
+  if (!items || items.length === 0) return
+  organized.categories = organized.categories || []
+  let dest = organized.categories.find((c) => CHANGELOG_CATEGORY_TITLE_RE.test(String(c.title || '').trim()))
+  if (!dest) {
+    dest = { title: 'Changelog', icon: null, pages: [] }
+    organized.categories.push(dest)
+  }
+  const seen = new Set((dest.pages || []).map((p) => normalizePath(p.url)))
+  for (const item of items) {
+    const key = normalizePath(item.url)
+    if (seen.has(key)) continue
+    seen.add(key)
+    dest.pages.push(item)
+  }
+}
+
+/**
+ * Sweep `/changelog/*`, `/release-notes/*` and `/releases/*` pages into one
+ * "Changelog" category, wherever the site's sidebar happened to place them.
+ * That category routes to `docs/Changelog/`; `--separate-changelog` later
+ * relocates it to a top-level `changelog/` dir. Returns the number of pages
+ * relocated.
+ */
+function reclassifyChangelogPages(scraped) {
+  return reclassifyPagesByUrlSegment(scraped, {
+    segmentRe: CHANGELOG_URL_SEGMENT_RE,
+    categoryRe: CHANGELOG_CATEGORY_TITLE_RE,
+    defaultTitle: 'Changelog',
+  })
 }
 
 function collectFlat(page, out) {
@@ -3419,12 +3588,90 @@ function countPagesDeep(pages) {
 }
 
 /**
+ * Post-staging relocation for `--separate-changelog`: move the staged
+ * `docs/Changelog/` category up to a top-level `changelog/` directory.
+ *
+ * Done as a filesystem move *after* staging (rather than routing there
+ * directly) so the staged tree is a valid git-format layout up to this point,
+ * and the one schema-divergent step lives in a single, clearly-named place.
+ * Note `changelog/` is not part of the git-format schema — it won't lint or
+ * sync to ReadMe until git-format adds first-class changelog support.
+ *
+ * Returns the number of changelog pages moved (0 if there were none).
+ */
+function relocateChangelogDir(stagingDir) {
+  const srcDir = path.join(stagingDir, 'docs', 'Changelog')
+  if (!fs.existsSync(srcDir) || !fs.statSync(srcDir).isDirectory()) return 0
+
+  const dstDir = path.join(stagingDir, 'changelog')
+  fs.renameSync(srcDir, dstDir)
+
+  // Collect every real x-import page from the (possibly nested) tree.
+  // Synthetic group-only stubs (no x-import — they exist only to render an
+  // empty parent in the sidebar) are dropped: the flat layout has no concept
+  // of containers, so they'd just be dead frontmatter.
+  const pages = []
+  const walk = (dir, ancestors) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        walk(full, [...ancestors, entry.name])
+        continue
+      }
+      if (!entry.name.endsWith('.md')) continue
+      const parsed = matter(fs.readFileSync(full, 'utf-8'))
+      if (!parsed.data || !parsed.data['x-import']) continue
+      const slug = entry.name.replace(/\.md$/, '')
+      pages.push({ ancestors, slug, content: parsed.content, data: parsed.data })
+    }
+  }
+  walk(dstDir, [])
+
+  // Wipe the nested tree and rewrite it flat. Filename concatenates the
+  // ancestor folder slugs with the leaf slug so siblings share a prefix —
+  // alphabetical order then naturally matches authored reading order, and
+  // names are unique across the (formerly nested) tree.
+  fs.rmSync(dstDir, { recursive: true, force: true })
+  fs.mkdirSync(dstDir, { recursive: true })
+
+  const flatSlugs = []
+  for (const p of pages) {
+    const flatSlug = [...p.ancestors, p.slug].join('-')
+    const frontmatter = { ...p.data }
+    delete frontmatter.icon
+    fs.writeFileSync(path.join(dstDir, `${flatSlug}.md`), matter.stringify(p.content, frontmatter))
+    flatSlugs.push(flatSlug)
+  }
+
+  flatSlugs.sort()
+  fs.writeFileSync(path.join(dstDir, '_order.yaml'), flatSlugs.map((s) => `- ${yamlSafeSlug(s)}`).join('\n') + '\n')
+
+  // docs/_order.yaml lists the docs category subfolders — drop the moved one
+  // so the docs sidebar doesn't point at a folder that's no longer there.
+  const docsOrderPath = path.join(stagingDir, 'docs', '_order.yaml')
+  if (fs.existsSync(docsOrderPath)) {
+    const entries = yamlRequire().load(fs.readFileSync(docsOrderPath, 'utf-8'))
+    const filtered = Array.isArray(entries) ? entries.filter((e) => e !== 'Changelog') : []
+    if (filtered.length > 0) {
+      fs.writeFileSync(docsOrderPath, filtered.map((s) => `- ${yamlSafeSlug(s)}`).join('\n') + '\n')
+    } else {
+      fs.rmSync(docsOrderPath)
+    }
+  }
+
+  return pages.length
+}
+
+/**
  * Map a category title to the git-format top-level directory + optional
  * category subdir. docs/ is the only top dir that takes a subfolder.
  */
 function routeCategory(title) {
   const t = (title || '').trim()
   if (/^(api[ -]?reference|reference|api|endpoints?)$/i.test(t)) return { topDir: 'reference', subDir: null }
+  // Changelog-ish categories normalize to one docs/Changelog/ folder so the
+  // --separate-changelog relocation has a single, predictable source dir.
+  if (/^(changelog|change[ -]?log|release[ -]?notes?|releases?|what'?s[ -]?new)$/i.test(t)) return { topDir: 'docs', subDir: 'Changelog' }
   if (/^(recipes?|cookbook|tutorials?|how[ -]?tos?)$/i.test(t)) return { topDir: 'recipes', subDir: null }
   if (/^(custom[ -]?pages?|landing( page)?s?)$/i.test(t)) return { topDir: 'custom_pages', subDir: null }
   if (/^(custom[ -]?blocks?|snippets?|reusable( content)?)$/i.test(t)) return { topDir: 'custom_blocks', subDir: null }
