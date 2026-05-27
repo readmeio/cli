@@ -1972,7 +1972,13 @@ function reclassifyReferencePages(scraped) {
  */
 function reclassifyChangelogPages(scraped) {
   return reclassifyPagesByUrlSegment(scraped, {
-    segmentRe: /^(changelog|change[-_]?log|release[-_]?notes?|releases?|release[-_]?v?\d[\w.-]*|whats?[-_]?new)$/i,
+    // Anchored half covers ambiguous bare keywords (release, releases, versioned
+    // release-2026-2) — those need to be the whole segment so we don't sweep
+    // `/release-pipeline/` etc. Unanchored half covers the unambiguous keywords
+    // (changelog, release-notes, whats-new), which we catch as substrings so
+    // slugs like `/docs/changelog-javascript-agent` and `/docs/ios-sdk-changelog`
+    // get pulled in too.
+    segmentRe: /(?:^(?:releases?|release[-_]?v?\d[\w.-]*)$)|(?:changelog|change[-_]?log|release[-_]?notes?|whats?[-_]?new)/i,
     categoryRe: /^(changelog|change ?log|release ?notes?|releases?|what'?s ?new)$/i,
     defaultTitle: 'Changelog',
   })
