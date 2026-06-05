@@ -3074,6 +3074,16 @@ const LLMS_PROBE_CAP = 30
 // list hundreds of URLs; without this a single root hit could schedule
 // dozens of unrelated probes (`/blog`, `/pricing`, …).
 const LLMS_CHILDREN_PER_NODE = 12
+// Budget for the explicit-link phase of discovery (phase 2 in discoverLlmsTxt).
+// Separate from LLMS_PROBE_CAP so following authored `llms.txt` links — a
+// strong, deliberate signal, e.g. docs.snowflake.com's root index listing ~40
+// per-section files — isn't starved by the speculative slug-walk's budget.
+const EXPLICIT_LLMS_PROBE_CAP = 200
+
+// Matches ONLY the canonical index filename, not sibling dumps like
+// `llms-full.txt` (concatenated page content, not a link index) — those would
+// add no link rows and just waste a fetch.
+const LLMS_INDEX_RE = /\/llms\.txt$/i
 
 /**
  * Convert a path like `/docs/quickstart` into its llms.txt URL.
@@ -3081,6 +3091,39 @@ const LLMS_CHILDREN_PER_NODE = 12
 function pathToLlmsUrl(origin, path) {
   if (!path || path === '/') return `${origin}/llms.txt`
   return `${origin}${path}/llms.txt`
+}
+
+/**
+ * Derive the path a fetched llms.txt "lives at" (its pathname minus the
+ * trailing `/llms.txt`), so explicit-link hits carry the same `path` shape
+ * the slug-walk hits do — mergeValidHits sorts by it (deepest wins) and
+ * narrowToDocsSubtreeIfNeeded reads it.
+ */
+function llmsPathFromUrl(llmsUrl) {
+  const pn = new URL(llmsUrl).pathname.replace(/\/llms\.txt$/i, '')
+  return pn || '/'
+}
+
+/**
+ * Pull explicit child-index links out of a parsed llms.txt — item rows whose
+ * URL literally points at another `llms.txt` (e.g. Snowflake's root file
+ * listing `…/data-integration/llms.txt`). Restricted to the same origin as the
+ * source: cross-origin llms.txt would drag in unrelated third-party docs, and
+ * the slug-walk's path math assumes one origin. Returns deduped URL strings.
+ */
+function extractNestedLlmsUrls(parsed, originScope) {
+  const out = new Set()
+  for (const section of parsed.sections) {
+    for (const item of section.items) {
+      try {
+        const u = new URL(item.url)
+        if (u.origin === originScope && LLMS_INDEX_RE.test(u.pathname)) out.add(u.toString())
+      } catch {
+        // ignore unparseable URLs
+      }
+    }
+  }
+  return [...out]
 }
 
 /**
@@ -3184,6 +3227,55 @@ async function discoverLlmsTxt(sourceUrl) {
       }
     }
     frontier = next
+  }
+
+  // Phase 2 — follow EXPLICIT llms.txt links authored inside the files phase 1
+  // discovered, recursively. No slug-guessing here: we only fetch URLs that
+  // literally point at an llms.txt (a root index listing per-section files,
+  // like docs.snowflake.com). Each new file's own explicit links are followed
+  // in turn until none remain. Dedupes against every URL phase 1 touched
+  // (hits + misses) and against itself; phase 1's `tried` set is keyed by path,
+  // so we track full llms.txt URLs separately here and leave phase 1 untouched.
+  const triedUrls = new Set([...hits.map((h) => h.llmsUrl), ...misses.map((m) => m.url)])
+  let explicitFrontier = []
+  for (const hit of hits) {
+    for (const u of extractNestedLlmsUrls(hit.parsed, sourceUrl.origin)) {
+      if (!triedUrls.has(u)) explicitFrontier.push(u)
+    }
+  }
+
+  let explicitProbes = 0
+  while (explicitFrontier.length > 0 && explicitProbes < EXPLICIT_LLMS_PROBE_CAP) {
+    const ring = []
+    for (const u of explicitFrontier) {
+      if (triedUrls.has(u)) continue
+      triedUrls.add(u)
+      ring.push(u)
+      explicitProbes++
+      if (explicitProbes >= EXPLICIT_LLMS_PROBE_CAP) break
+    }
+    if (ring.length === 0) break
+
+    const results = await Promise.all(ring.map(async (llmsUrl) => ({ llmsUrl, res: await fetchLlmsTxt(llmsUrl) })))
+
+    const next = []
+    for (const { llmsUrl, res } of results) {
+      if (!res.ok) {
+        misses.push({ url: llmsUrl, status: res.status, error: res.error })
+        continue
+      }
+      const linkItems = res.stats?.linkItems ?? 0
+      if (linkItems === 0) {
+        misses.push({ url: llmsUrl, status: 'no link items' })
+        continue
+      }
+      hits.push({ ...res, llmsUrl, path: llmsPathFromUrl(llmsUrl) })
+      if (!res.usable) skipped.push({ url: llmsUrl, reason: res.reason })
+      for (const nested of extractNestedLlmsUrls(res.parsed, sourceUrl.origin)) {
+        if (!triedUrls.has(nested)) next.push(nested)
+      }
+    }
+    explicitFrontier = next
   }
 
   return { hits, misses, skipped }
