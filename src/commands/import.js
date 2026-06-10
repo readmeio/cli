@@ -113,6 +113,19 @@ export async function importDocs(options) {
 
   const organized = sourceUrls.length === 1 ? perSourceOrganized[0] : mergeOrganized(perSourceOrganized)
 
+  // Union the candidate OpenAPI-spec URLs across all sources, deduped by URL
+  // (mergeOrganized intentionally drops non-category fields, so collect from
+  // the per-source results directly).
+  const oasJsonUrls = []
+  const seenOasUrls = new Set()
+  for (const o of perSourceOrganized) {
+    for (const item of o.oasJsonUrls || []) {
+      if (seenOasUrls.has(item.url)) continue
+      seenOasUrls.add(item.url)
+      oasJsonUrls.push(item)
+    }
+  }
+
   if (debugSnapshots) {
     debugSnapshots['05-organized.json'] = organized
     const debugDir = path.join(os.tmpdir(), `readme-import-debug-${hostnameJoined}-${Date.now()}`)
@@ -164,6 +177,17 @@ export async function importDocs(options) {
     )
     if (staged.skippedApiRef > 0) {
       styles.info(`Skipped ${styles.bold(String(staged.skippedApiRef))} API reference page${staged.skippedApiRef === 1 ? '' : 's'} (--skip-api-reference)`)
+    }
+
+    // Download captured `.json` specs into <stagingDir>/oas/. Raw bytes only —
+    // validation + OpenAPI detection + upload all happen in the runner. Staged
+    // here (not in docs/ or reference/) so it rides the zip but is invisible to
+    // the docs build. Non-fatal: a failed download is logged and skipped.
+    if (oasJsonUrls.length > 0) {
+      const oasCount = await timePhase('download oas specs', () => downloadOasSpecs(oasJsonUrls, stagingDir))
+      if (oasCount > 0) {
+        styles.ok(`Downloaded ${styles.bold(String(oasCount))} candidate OpenAPI spec${oasCount === 1 ? '' : 's'} into ${styles.bold('oas/')}.`)
+      }
     }
     console.log()
 
@@ -232,13 +256,26 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
   let llmsUrl = llms?.llmsUrl || null
   const skippedLlms = discovery.skipped
 
-  // Drop asset/meta items (llms-full.txt, openapi.json, …) from the merged
-  // parsed result up-front, so every downstream consumer — knownUrls AND the
-  // "use llms.txt sections directly" organize path — sees a clean URL list.
+  // Capture `.json` links (candidate OpenAPI specs) BEFORE anything else sees
+  // the parsed tree. They're removed in place here, downloaded into the staged
+  // `oas/` dir by importDocs, and validated + uploaded by the runner. Stub
+  // generation never sees them.
+  let oasJsonUrls = []
+  if (llms) {
+    oasJsonUrls = extractOasJsonUrlsFromParsed(llms.parsed)
+    if (oasJsonUrls.length > 0) {
+      styles.info(styles.dim(`Captured ${oasJsonUrls.length} .json link${oasJsonUrls.length === 1 ? '' : 's'} as candidate OpenAPI spec${oasJsonUrls.length === 1 ? '' : 's'} → oas/.`))
+    }
+  }
+
+  // Drop the remaining asset/meta items (llms-full.txt, .yaml specs, …) from
+  // the merged parsed result up-front, so every downstream consumer — knownUrls
+  // AND the "use llms.txt sections directly" organize path — sees a clean URL
+  // list. `.json` items were already pulled out above.
   if (llms) {
     const dropped = dropAssetItemsFromParsed(llms.parsed)
     if (dropped > 0) {
-      styles.info(styles.dim(`Dropped ${dropped} asset/meta URL${dropped === 1 ? '' : 's'} (.json/.yaml/.xml/.toml, llms*.txt) from llms.txt items.`))
+      styles.info(styles.dim(`Dropped ${dropped} asset/meta URL${dropped === 1 ? '' : 's'} (.yaml/.xml/.toml, llms*.txt) from llms.txt items.`))
     }
   }
 
@@ -661,6 +698,7 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
   }
 
   styles.ok(`Organized in ${styles.bold(formatDuration(Date.now() - organizeStart))}.`)
+  organized.oasJsonUrls = oasJsonUrls
   return organized
 }
 
@@ -2401,6 +2439,62 @@ async function fetchHtmlDirect(url) {
 }
 
 /**
+ * Download a `.json` URL as raw bytes. Returns a Buffer, or null on non-OK /
+ * network error. No parsing or validation — the runner is the OAS gate.
+ */
+async function fetchJsonSpec(url) {
+  try {
+    const res = await fetch(url, {
+      redirect: 'follow',
+      headers: { 'User-Agent': 'readme-cli-import', Accept: 'application/json' },
+    })
+    if (!res.ok) return null
+    return Buffer.from(await res.arrayBuffer())
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Download the captured candidate-spec URLs into `<stagingDir>/oas/<name>.json`.
+ * Filenames come from the URL basename (collisions get a numeric suffix); the
+ * runner de-dups by content, so identical bytes under different names are
+ * handled there. Returns the count of files written.
+ */
+async function downloadOasSpecs(oasJsonUrls, stagingDir) {
+  const oasDir = path.join(stagingDir, 'oas')
+  fs.mkdirSync(oasDir, { recursive: true })
+  const usedNames = new Set()
+  let written = 0
+  for (const { url } of oasJsonUrls) {
+    const buf = await fetchJsonSpec(url)
+    if (!buf) {
+      styles.info(styles.dim(`  oas: skipped ${url} (download failed)`))
+      continue
+    }
+    // Derive a safe, unique *.json filename from the URL basename.
+    let base
+    try {
+      base = path.basename(new URL(url).pathname) || 'openapi.json'
+    } catch {
+      base = 'openapi.json'
+    }
+    base = base.replace(/[^a-zA-Z0-9._-]/g, '-')
+    if (!/\.json$/i.test(base)) base += '.json'
+    let name = base
+    let n = 2
+    while (usedNames.has(name)) {
+      name = base.replace(/\.json$/i, `-${n}.json`)
+      n++
+    }
+    usedNames.add(name)
+    fs.writeFileSync(path.join(oasDir, name), buf)
+    written++
+  }
+  return written
+}
+
+/**
  * Firecrawl-backed HTML loader. Firecrawl runs a real browser, waits for
  * hydration, and returns the rendered DOM — which is what we need for sites
  * that render their sidebar nav client-side (zod.dev, most Next.js docs).
@@ -2912,15 +3006,33 @@ async function runJsonQuery({ systemPrompt, userPrompt, model }) {
  */
 // URL patterns we strip from llms.txt items — they show up alongside real
 // pages but shouldn't be staged as docs:
-//   - openapi.json, package.json, .yaml specs, etc. (machine-readable specs)
+//   - .yaml specs, package.json-ish assets, sitemaps, etc. (machine-readable)
 //   - llms.txt, llms-full.txt, llms-ctx.txt, … (other llms.txt variants
 //     that point back at the same index/dump, not real pages)
-const ASSET_EXT_RE = /\.(json|ya?ml|xml|toml)$/i
+//
+// `.json` is deliberately NOT in this list: those links are captured up-front
+// by extractOasJsonUrlsFromParsed (they may be OpenAPI specs we want to
+// download into oas/ and upload separately) and removed from the parsed tree
+// before this drop runs, so a `.json` item never reaches here.
+const ASSET_EXT_RE = /\.(ya?ml|xml|toml)$/i
 const LLMS_TXT_RE = /(?:^|\/)llms[^/]*\.txt$/i
 function isAssetOrMetaUrl(url) {
   try {
     const pn = new URL(url).pathname
     return ASSET_EXT_RE.test(pn) || LLMS_TXT_RE.test(pn)
+  } catch {
+    return false
+  }
+}
+
+// A llms.txt item whose URL points at a `.json` file. These are pulled out of
+// the parsed tree before organization (so stub generation never sees them) and
+// downloaded into the staged `oas/` dir; the runner validates each as OpenAPI
+// and uploads the valid ones. NOTE: only `.json` is captured — `.yaml`/`.yml`
+// specs are intentionally left to the asset drop above.
+function isOasJsonUrl(url) {
+  try {
+    return /\.json$/i.test(new URL(url).pathname)
   } catch {
     return false
   }
@@ -3019,6 +3131,35 @@ function narrowToDocsSubtreeIfNeeded(llms, sourceUrl, hits) {
   }
   llms.parsed.sections = keptSections
   return { segment: docsSegment, kept, dropped }
+}
+
+/**
+ * Pull `.json` items out of a parsed llms.txt structure IN PLACE, returning the
+ * removed items as `[{ url, text }]`. Sections emptied by the removal are
+ * pruned too — same shape as dropAssetItemsFromParsed. Run BEFORE
+ * dropAssetItemsFromParsed / knownUrls / organize so the captured specs never
+ * enter the stub tree (skeleton has zero visibility of OAS files). The caller
+ * downloads the returned URLs into the staged `oas/` dir.
+ */
+function extractOasJsonUrlsFromParsed(parsed) {
+  const captured = []
+  const keptSections = []
+  for (const section of parsed.sections) {
+    const keptItems = []
+    for (const item of section.items) {
+      if (isOasJsonUrl(item.url)) {
+        captured.push({ url: item.url, text: item.text || null })
+        continue
+      }
+      keptItems.push(item)
+    }
+    if (keptItems.length > 0) {
+      section.items = keptItems
+      keptSections.push(section)
+    }
+  }
+  parsed.sections = keptSections
+  return captured
 }
 
 /**
