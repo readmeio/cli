@@ -3696,6 +3696,25 @@ function printPagesTree(pages, indentLevel) {
 }
 
 /**
+ * Collapse redundant single-folder layers in a category/page subtree, in place.
+ *
+ * When a container (category or page) has exactly one child and that child is a
+ * pure folder node — no `x-import-url` gitto/readme has an issue with unique slug
+ * generation.
+ * This is a temporary workaround.
+ * TODO: Remove after fixing on the Gitto/ReadMe side.
+ */
+function collapseRedundantLayers(container) {
+  for (const child of container.pages || []) collapseRedundantLayers(child)
+  while ((container.pages || []).length === 1) {
+    const only = container.pages[0]
+    if (only.url) break // real page (gets x-import), just has children
+    if (!only.pages || only.pages.length === 0) break // nothing to lift up
+    container.pages = only.pages
+  }
+}
+
+/**
  * Write the organized hierarchy to disk as git-format markdown stubs — just
  * frontmatter, no body yet. docs/ pages go under docs/<Category>/<slug>.md;
  * reference/recipes/custom_pages/custom_blocks get their own top-level dir
@@ -3716,6 +3735,9 @@ function stageOrganized(organized, stagingDir, opts = {}) {
     }
     return true
   })
+
+  // TODO: Remove after readme/gitto handles better
+  for (const cat of eligibleCategories) collapseRedundantLayers(cat)
 
   // Slug names must be unique
   const slugFor = ensureUniqueSlugs(eligibleCategories)
