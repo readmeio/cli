@@ -14,12 +14,6 @@ export const description = 'Sync reference pages with OpenAPI specs';
 
 const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'options', 'head', 'trace']);
 
-/**
- * Check if this is a ReadMeConfig spec (internal ReadMe pages — skip title/excerpt updates).
- */
-function isReadMeConfig(spec) {
-  return spec.info?.title === 'ReadMeConfig';
-}
 
 /**
  * Find OAS files at the root of reference/ (JSON or YAML).
@@ -168,18 +162,13 @@ function removeFromOrder(orderPath, slug) {
   }
 }
 
-function buildPageContent({ oasFilename, operationId, summary, description }) {
+function buildPageContent({ oasFilename, operationId }) {
   const frontmatter = {
-    title: summary || operationId,
     api: {
       file: oasFilename,
       operationId,
     },
   };
-
-  if (description) {
-    frontmatter.excerpt = description;
-  }
 
   return matter.stringify('', frontmatter);
 }
@@ -190,7 +179,6 @@ function buildPageContent({ oasFilename, operationId, summary, description }) {
 function syncOneOas(refDir, oasFilename, spec) {
   const specOps = extractOperations(spec);
   const infoTitle = spec.info?.title || path.basename(oasFilename, path.extname(oasFilename));
-  const skipUpdates = isReadMeConfig(spec);
 
   const existingPages = collectExistingPages(refDir).filter(
     (p) => p.data.api.file === oasFilename,
@@ -216,61 +204,23 @@ function syncOneOas(refDir, oasFilename, spec) {
     }
   }
 
-  // Adds + Updates.
+  // Adds: operations with no page yet. Title/excerpt are owned by the OAS spec
+  // at render time, so generated pages carry only the api reference.
   for (const [opId, op] of specOps) {
-    const existing = pagesByOpId.get(opId);
+    if (pagesByOpId.has(opId)) continue;
+
     const tag = op.tag || 'Other';
+    const pageDir = path.join(refDir, infoTitle, tag);
+    fs.mkdirSync(pageDir, { recursive: true });
 
-    if (!existing) {
-      const pageDir = path.join(refDir, infoTitle, tag);
-      fs.mkdirSync(pageDir, { recursive: true });
+    const pagePath = path.join(pageDir, `${opId}.md`);
+    const content = buildPageContent({ oasFilename, operationId: opId });
+    fs.writeFileSync(pagePath, content);
 
-      const pagePath = path.join(pageDir, `${opId}.md`);
-      const content = buildPageContent({
-        oasFilename,
-        operationId: opId,
-        summary: op.summary,
-        description: op.description,
-      });
-      fs.writeFileSync(pagePath, content);
+    addToOrder(path.join(pageDir, '_order.yaml'), opId);
+    addToOrder(path.join(refDir, infoTitle, '_order.yaml'), tag);
 
-      addToOrder(path.join(pageDir, '_order.yaml'), opId);
-      addToOrder(path.join(refDir, infoTitle, '_order.yaml'), tag);
-
-      changes.added.push(path.relative(refDir, pagePath));
-    } else if (!skipUpdates) {
-      const expectedTitle = op.summary || opId;
-      const expectedExcerpt = op.description || null;
-      const currentTitle = existing.data.title;
-      const currentExcerpt = existing.data.excerpt || null;
-
-      const titleChanged = currentTitle !== expectedTitle;
-      const excerptChanged = currentExcerpt !== expectedExcerpt;
-
-      if (titleChanged || excerptChanged) {
-        const updated = { ...existing.data };
-        const updateDetails = [];
-
-        if (titleChanged) {
-          updated.title = expectedTitle;
-          updateDetails.push('title');
-        }
-        if (excerptChanged) {
-          if (expectedExcerpt) {
-            updated.excerpt = expectedExcerpt;
-          } else {
-            delete updated.excerpt;
-          }
-          updateDetails.push('excerpt');
-        }
-
-        const body = matter(existing.content).content;
-        const newContent = matter.stringify(body, updated);
-        fs.writeFileSync(existing.filePath, newContent);
-
-        changes.updated.push(`${existing.relativePath} (${updateDetails.join(', ')})`);
-      }
-    }
+    changes.added.push(path.relative(refDir, pagePath));
   }
 
   return changes;
