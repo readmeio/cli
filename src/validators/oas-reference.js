@@ -60,37 +60,7 @@ export function validateAll(files, gitRoot, { fix } = {}) {
       continue;
     }
 
-    // Skip title/excerpt sync checks for ReadMeConfig (internal ReadMe pages).
-    // Check both the spec title and the page's directory path.
-    const isReadMeConfig = oas.spec.info?.title === 'ReadMeConfig'
-      || relPath.startsWith('reference/ReadMeConfig/');
-    if (isReadMeConfig) continue;
-
-    // Check: title or excerpt out of sync.
-    const op = oas.ops.get(operationId);
-    const expectedTitle = op.summary || operationId;
-    const expectedExcerpt = op.description || null;
-
-    if (data.title !== expectedTitle) {
-      results.push({
-        file: relPath,
-        rule: name,
-        severity: 'warning',
-        message: `Out of sync: title is "${data.title}" but spec summary is "${expectedTitle}"`,
-        fixable: true,
-      });
-    }
-
-    const currentExcerpt = data.excerpt || null;
-    if (currentExcerpt !== expectedExcerpt) {
-      results.push({
-        file: relPath,
-        rule: name,
-        severity: 'warning',
-        message: `Out of sync: excerpt does not match spec description for "${operationId}"`,
-        fixable: true,
-      });
-    }
+    // Title/excerpt are owned by the OAS spec at render time — no sync check here.
   }
 
   // Check for missing pages: operations in the spec with no corresponding page.
