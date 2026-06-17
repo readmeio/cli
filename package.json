@@ -25,7 +25,7 @@
   ],
   "scripts": {
     "start": "node bin/readme.js",
-    "test": "echo \"No tests yet\""
+    "test": "node --test"
   },
   "engines": {
     "node": ">=18"
