@@ -220,6 +220,7 @@ export function validateAll(files, gitRoot) {
         results.push({
           file: relPath,
           rule: name,
+          severity: 'warning',
           message: `Unknown component: <${comp}> is not a built-in or custom block`,
         });
       }
