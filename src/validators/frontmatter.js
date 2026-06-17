@@ -113,6 +113,17 @@ export function validate({ content, filePath, relativePath, fix }) {
     const valid = validateFn(data);
     if (!valid) {
       for (const err of validateFn.errors) {
+        // Reference pages are OAS-backed: title/excerpt come from the spec, so a
+        // missing title is not an error for pages that declare an api.file.
+        if (
+          dir === 'reference' &&
+          data?.api?.file &&
+          err.keyword === 'required' &&
+          err.params?.missingProperty === 'title'
+        ) {
+          continue;
+        }
+
         if (err.keyword === 'not' && err.schema?.properties) {
           const target = err.instancePath ? getNestedValue(data, err.instancePath) : data;
           if (!target || !Object.keys(err.schema.properties).some((k) => k in target)) continue;
