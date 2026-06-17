@@ -144,8 +144,8 @@ ReadMe app, not in the repo. These should not fail CI.
 Add a minimal test harness using Node's built-in test runner (zero new dependencies):
 
 - `package.json`: `"test": "node --test"`.
-- Fixture-based tests under `test/` (or `src/validators/__tests__/`) covering the five
-  changed validators, each with a small temp-dir fixture:
+- Fixture-based tests under `test/` covering the five changed validators, each with a
+  small temp-dir fixture:
   - reference page with only `api` frontmatter → no missing-title / out-of-sync errors.
   - same slug in `docs/` and `reference/` → no duplicate error; same-section dup → error.
   - unknown component → warning (not error).
