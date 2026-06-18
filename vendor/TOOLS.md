@@ -4,7 +4,7 @@ The ReadMe CLI (`npx @readme/cli`) has several commands that can help fix issues
 
 ## `npx @readme/cli lint --fix`
 
-Automatically fixes common linting issues: ordering problems, frontmatter cleanup, numbering suffixes, etc. Always try this first.
+Automatically fixes common linting issues: ordering problems, frontmatter cleanup, etc. Always try this first.
 
 ## `npx @readme/cli oas:sync`
 

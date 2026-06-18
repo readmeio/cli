@@ -17,7 +17,7 @@ npx @readme/cli lint --fix    # Automatically fix common issues
 npx @readme/cli lint --json   # Machine-readable output (good for CI)
 ```
 
-Validates: frontmatter, ordering, numbering, duplicates, OAS references, OAS schema, MDX components, and recipes.
+Validates: frontmatter, ordering, duplicates, OAS references, OAS schema, MDX components, and recipes.
 
 Always try `lint --fix` before attempting manual fixes.
 
