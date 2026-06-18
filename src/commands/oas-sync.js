@@ -189,7 +189,7 @@ function syncOneOas(refDir, oasFilename, spec) {
     pagesByOpId.set(page.data.api.operationId, page);
   }
 
-  const changes = { added: [], deleted: [], updated: [] };
+  const changes = { added: [], deleted: [] };
 
   // Deletes: pages referencing operations that no longer exist.
   for (const [opId, page] of pagesByOpId) {
@@ -235,7 +235,7 @@ function syncOneOas(refDir, oasFilename, spec) {
  *
  * @param {string | { cwd?: string }} input  Repo root path, or `{ cwd }` object.
  * @returns {null | Array<{ filename: string, spec: object, opCount: number,
- *   changes: { added: string[], deleted: string[], updated: string[] } }>}
+ *   changes: { added: string[], deleted: string[] } }>}
  *   Returns null if there's no reference/ dir or no specs.
  */
 export function syncOas(input) {
@@ -275,11 +275,10 @@ export async function run(_options, _cmd, ctx) {
 
   let totalAdded = 0;
   let totalDeleted = 0;
-  let totalUpdated = 0;
 
   for (const { filename, spec, opCount, changes } of results) {
     const title = spec.info?.title || filename;
-    const hasChanges = changes.added.length + changes.deleted.length + changes.updated.length > 0;
+    const hasChanges = changes.added.length + changes.deleted.length > 0;
 
     const dot = hasChanges ? styles.warn('●') : styles.success('●');
     console.log();
@@ -295,20 +294,16 @@ export async function run(_options, _cmd, ctx) {
     for (const file of changes.deleted) {
       console.log(`    ${styles.err('−')} Deleted ${file}`);
     }
-    for (const file of changes.updated) {
-      console.log(`    ${styles.warn('~')} Updated ${file}`);
-    }
 
     totalAdded += changes.added.length;
     totalDeleted += changes.deleted.length;
-    totalUpdated += changes.updated.length;
   }
 
   console.log();
-  const total = totalAdded + totalDeleted + totalUpdated;
+  const total = totalAdded + totalDeleted;
   if (total === 0) {
     styles.ok('Reference pages are already in sync.');
   } else {
-    styles.ok(`Synced: ${totalAdded} added, ${totalDeleted} deleted, ${totalUpdated} updated.`);
+    styles.ok(`Synced: ${totalAdded} added, ${totalDeleted} deleted.`);
   }
 }
