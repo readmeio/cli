@@ -1,11 +1,14 @@
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import readline from 'node:readline'
 import * as styles from '../utils/styles.js'
 
 export const name = 'numbering'
 
-const SUFFIX_RE = /-(\d+)$/
+// ReadMe auto-dedupes slugs with a single-digit suffix (foo, foo-1, foo-2…).
+// Only those single-digit suffixes are treated as unnecessary.
+const SUFFIX_RE = /-(\d)$/
 
 function prompt(question) {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
@@ -33,7 +36,7 @@ function updateOrderYaml(fromPath, toPath) {
   }
 }
 
-export async function validateAll(files, gitRoot, { fix, nonInteractive } = {}) {
+export async function validateAll(files, gitRoot, { fix, nonInteractive, redirectDir } = {}) {
   const results = []
   const renames = []
 
@@ -120,12 +123,29 @@ export async function validateAll(files, gitRoot, { fix, nonInteractive } = {}) 
     if (answer === 'y' || answer === 'yes') {
       // Sort longest path first so nested dirs get renamed before parents.
       renames.sort((a, b) => b.from.length - a.from.length)
+
+      const redirectLines = []
       for (const r of renames) {
         fs.renameSync(r.from, r.to)
         updateOrderYaml(r.from, r.to)
+
+        // Emit bidirectional redirects (docs + reference) for each renamed slug,
+        // matching the bidi_remove_-1.js behavior from CX-3425.
+        const oldSlug = path.basename(r.from).replace(/\.(md|mdx)$/, '')
+        const newSlug = path.basename(r.to).replace(/\.(md|mdx)$/, '')
+        redirectLines.push(`/docs/${oldSlug} -> /docs/${newSlug}`)
+        redirectLines.push(`/reference/${oldSlug} -> /reference/${newSlug}`)
       }
       for (const r of results) {
         r.message += ' (fixed)'
+      }
+
+      if (redirectLines.length > 0) {
+        const outDir = redirectDir || path.join(os.homedir(), 'Desktop')
+        const redirectFile = path.join(outDir, `${path.basename(gitRoot)}_redirect.txt`)
+        fs.mkdirSync(outDir, { recursive: true })
+        fs.writeFileSync(redirectFile, redirectLines.join('\n') + '\n')
+        console.log(`  ${styles.success('✔')} Redirects written to ${styles.dim(redirectFile)}`)
       }
     }
   }
