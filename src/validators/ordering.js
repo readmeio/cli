@@ -3,20 +3,18 @@ import path from 'node:path';
 
 export const name = 'ordering';
 
-// Content directories where _order.yaml is expected (for the "missing from order" check).
-const ORDERED_DIRS = ['docs', 'recipes', 'custom_pages'];
+// Top-level content directories that use _order.yaml.
+const CONTENT_DIRS = ['docs', 'reference', 'recipes', 'custom_pages'];
 
-// Content directories scanned for stale _order.yaml entries.
-const STALE_SCAN_DIRS = ['docs', 'reference', 'recipes', 'custom_pages'];
+// Of those, the dirs that must list every page/folder. reference ordering is
+// OAS-managed, so we never flag pages "missing from" a reference _order.yaml —
+// but stale entries are flagged everywhere.
+const REQUIRE_ORDER = new Set(['docs', 'recipes', 'custom_pages']);
 
 // Values that YAML interprets as non-strings and need quoting in _order.yaml.
 const YAML_UNSAFE = /^(?:\d+\.?\d*|true|false|yes|no|on|off|null|~)$/i;
 function yamlSafeSlug(slug) {
   return YAML_UNSAFE.test(slug) ? `"${slug}"` : slug;
-}
-
-function slugFromFile(filename) {
-  return filename.replace(/\.(md|mdx)$/, '');
 }
 
 function parseOrderYaml(content) {
@@ -27,113 +25,94 @@ function parseOrderYaml(content) {
     .map((line) => line.slice(2).trim().replace(/^(['"])(.*)\1$/, '$2'));
 }
 
-// Recursively find every _order.yaml under a top-level content dir.
-function findOrderFiles(gitRoot, dir) {
-  const base = path.join(gitRoot, dir);
+function isIndex(name) {
+  return name === 'index' || name === 'index.md' || name === 'index.mdx';
+}
+
+/**
+ * Walk a content directory tree once. For every directory, capture the on-disk
+ * slug set (child pages + child folders) and its _order.yaml entries (or null
+ * when absent), so the caller can diff the two in a single pass.
+ */
+function collectDirs(gitRoot, topDir) {
+  const base = path.join(gitRoot, topDir);
   if (!fs.existsSync(base)) return [];
-  const found = [];
+
+  const dirs = [];
   const stack = [base];
   while (stack.length) {
     const cur = stack.pop();
+    const onDisk = new Set();
+    let orderEntries = null;
+
     for (const entry of fs.readdirSync(cur, { withFileTypes: true })) {
-      const full = path.join(cur, entry.name);
-      if (entry.isDirectory()) stack.push(full);
-      else if (entry.name === '_order.yaml') found.push(full);
+      if (entry.isDirectory()) {
+        onDisk.add(entry.name);
+        stack.push(path.join(cur, entry.name));
+      } else if (entry.name === '_order.yaml') {
+        orderEntries = parseOrderYaml(fs.readFileSync(path.join(cur, entry.name), 'utf-8'));
+      } else if (/\.(md|mdx)$/.test(entry.name) && !isIndex(entry.name)) {
+        onDisk.add(entry.name.replace(/\.(md|mdx)$/, ''));
+      }
     }
+
+    dirs.push({ dir: cur, onDisk, orderEntries });
   }
-  return found;
+  return dirs;
 }
 
-// True if `<dir>/<entry>` resolves to a page file or a subdirectory.
-function entryExists(dir, entry) {
-  if (fs.existsSync(path.join(dir, `${entry}.md`))) return true;
-  if (fs.existsSync(path.join(dir, `${entry}.mdx`))) return true;
-  try {
-    return fs.statSync(path.join(dir, entry)).isDirectory();
-  } catch {
-    return false;
-  }
-}
-
+/**
+ * Validate every _order.yaml against the files and folders next to it:
+ *   - on disk but missing from _order.yaml  → "Missing from _order.yaml" (required dirs only)
+ *   - in _order.yaml but missing on disk     → "Stale entry"
+ *   - an index entry that shouldn't be listed → "Invalid entry"
+ */
 export function validateAll(files, gitRoot, { fix } = {}) {
   const results = [];
 
-  // ---- Check 1: files/subdirs missing FROM _order.yaml ----
-  const dirContents = new Map();
-  for (const relPath of files) {
-    const topDir = relPath.split('/')[0];
-    if (!ORDERED_DIRS.includes(topDir)) continue;
+  for (const topDir of CONTENT_DIRS) {
+    const requireOrder = REQUIRE_ORDER.has(topDir);
 
-    const dir = path.dirname(relPath);
-    if (!dirContents.has(dir)) dirContents.set(dir, { files: [], subdirs: new Set() });
-
-    const filename = path.basename(relPath);
-    dirContents.get(dir).files.push(filename);
-
-    const parts = relPath.split('/');
-    if (parts.length > 2) {
-      const parentDir = parts.slice(0, -2).join('/');
-      const subdir = parts[parts.length - 2];
-      if (!dirContents.has(parentDir)) dirContents.set(parentDir, { files: [], subdirs: new Set() });
-      dirContents.get(parentDir).subdirs.add(subdir);
-    }
-  }
-
-  for (const [dir, { files: dirFiles, subdirs }] of dirContents) {
-    const orderPath = path.join(gitRoot, dir, '_order.yaml');
-
-    const expectedSlugs = [];
-    for (const f of dirFiles) {
-      if (f === 'index.md' || f === 'index.mdx') continue;
-      expectedSlugs.push(slugFromFile(f));
-    }
-    for (const sub of subdirs) {
-      expectedSlugs.push(sub);
-    }
-
-    if (!fs.existsSync(orderPath)) {
-      if (expectedSlugs.length === 0) continue;
-
-      results.push({
-        file: path.join(dir, '_order.yaml'),
-        rule: name,
-        severity: 'warning',
-        fixable: true,
-        message: `Missing order: _order.yaml not found (${expectedSlugs.length} ${expectedSlugs.length === 1 ? 'entry needs' : 'entries need'} ordering)`,
-        _fixAdd: { orderPath, missing: expectedSlugs },
-      });
-      continue;
-    }
-
-    const content = fs.readFileSync(orderPath, 'utf-8');
-    const ordered = new Set(parseOrderYaml(content));
-    const missing = expectedSlugs.filter((slug) => !ordered.has(slug));
-
-    if (missing.length > 0) {
-      results.push({
-        file: path.join(dir, '_order.yaml'),
-        rule: name,
-        severity: 'warning',
-        fixable: true,
-        message: `Missing from _order.yaml: ${missing.join(', ')}`,
-        _fixAdd: { orderPath, missing },
-      });
-    }
-  }
-
-  // ---- Check 2: entries present IN _order.yaml but absent on disk ----
-  const seenOrderFiles = new Set();
-  for (const dir of STALE_SCAN_DIRS) {
-    for (const orderPath of findOrderFiles(gitRoot, dir)) {
-      if (seenOrderFiles.has(orderPath)) continue;
-      seenOrderFiles.add(orderPath);
-
-      const orderDir = path.dirname(orderPath);
+    for (const { dir, onDisk, orderEntries } of collectDirs(gitRoot, topDir)) {
+      const orderPath = path.join(dir, '_order.yaml');
       const relOrder = path.relative(gitRoot, orderPath);
-      const entries = parseOrderYaml(fs.readFileSync(orderPath, 'utf-8'));
 
-      for (const entry of entries) {
-        if (entry === 'index' || entry === 'index.md' || entry === 'index.mdx') {
+      // No _order.yaml at all: only required dirs need one.
+      if (orderEntries === null) {
+        if (requireOrder && onDisk.size > 0) {
+          const missing = [...onDisk];
+          results.push({
+            file: relOrder,
+            rule: name,
+            severity: 'warning',
+            fixable: true,
+            message: `Missing order: _order.yaml not found (${missing.length} ${missing.length === 1 ? 'entry needs' : 'entries need'} ordering)`,
+            _fixAdd: { orderPath, missing },
+          });
+        }
+        continue;
+      }
+
+      const ordered = new Set(orderEntries);
+
+      // On disk but not ordered.
+      if (requireOrder) {
+        const missing = [...onDisk].filter((slug) => !ordered.has(slug));
+        if (missing.length > 0) {
+          results.push({
+            file: relOrder,
+            rule: name,
+            severity: 'warning',
+            fixable: true,
+            message: `Missing from _order.yaml: ${missing.join(', ')}`,
+            _fixAdd: { orderPath, missing },
+          });
+        }
+      }
+
+      // Ordered but not on disk (or an index entry that shouldn't be listed).
+      for (const entry of orderEntries) {
+        if (isIndex(entry)) {
           results.push({
             file: relOrder,
             rule: name,
@@ -142,9 +121,7 @@ export function validateAll(files, gitRoot, { fix } = {}) {
             message: `Invalid entry: "${entry}" should not be listed in _order.yaml`,
             _fixRemove: { orderPath, entry },
           });
-          continue;
-        }
-        if (!entryExists(orderDir, entry)) {
+        } else if (!onDisk.has(entry)) {
           results.push({
             file: relOrder,
             rule: name,
@@ -158,48 +135,51 @@ export function validateAll(files, gitRoot, { fix } = {}) {
     }
   }
 
-  // ---- Apply fixes ----
-  if (fix) {
-    // Additions first.
-    for (const r of results) {
-      if (!r._fixAdd) continue;
-      const { orderPath, missing } = r._fixAdd;
-      const newEntries = missing.map((slug) => `- ${yamlSafeSlug(slug)}`).join('\n');
+  if (!fix) return strip(results);
 
-      if (fs.existsSync(orderPath)) {
-        const existing = fs.readFileSync(orderPath, 'utf-8');
-        const sep = existing.endsWith('\n') ? '' : '\n';
-        fs.writeFileSync(orderPath, `${existing}${sep}${newEntries}\n`);
-      } else {
-        fs.mkdirSync(path.dirname(orderPath), { recursive: true });
-        fs.writeFileSync(orderPath, `${newEntries}\n`);
-      }
-      r.message += ' (fixed)';
-    }
+  // Additions: append missing slugs to the _order.yaml.
+  for (const r of results) {
+    if (!r._fixAdd) continue;
+    const { orderPath, missing } = r._fixAdd;
+    const newEntries = missing.map((slug) => `- ${yamlSafeSlug(slug)}`).join('\n');
 
-    // Removals: group stale/index entries by order file, then rewrite each once.
-    const removalsByPath = new Map();
-    for (const r of results) {
-      if (!r._fixRemove) continue;
-      const { orderPath, entry } = r._fixRemove;
-      if (!removalsByPath.has(orderPath)) removalsByPath.set(orderPath, new Set());
-      removalsByPath.get(orderPath).add(entry);
+    if (fs.existsSync(orderPath)) {
+      const existing = fs.readFileSync(orderPath, 'utf-8');
+      const sep = existing.endsWith('\n') ? '' : '\n';
+      fs.writeFileSync(orderPath, `${existing}${sep}${newEntries}\n`);
+    } else {
+      fs.mkdirSync(path.dirname(orderPath), { recursive: true });
+      fs.writeFileSync(orderPath, `${newEntries}\n`);
     }
-    for (const [orderPath, toRemove] of removalsByPath) {
-      if (!fs.existsSync(orderPath)) continue;
-      const kept = parseOrderYaml(fs.readFileSync(orderPath, 'utf-8')).filter((e) => !toRemove.has(e));
-      if (kept.length > 0) {
-        fs.writeFileSync(orderPath, kept.map((s) => `- ${yamlSafeSlug(s)}`).join('\n') + '\n');
-      } else {
-        fs.unlinkSync(orderPath);
-      }
-    }
-    for (const r of results) {
-      if (r._fixRemove) r.message += ' (fixed)';
-    }
+    r.message += ' (fixed)';
   }
 
-  // Strip internal fix data before returning.
+  // Removals: group stale/index entries by order file, then rewrite each once.
+  const removalsByPath = new Map();
+  for (const r of results) {
+    if (!r._fixRemove) continue;
+    const { orderPath, entry } = r._fixRemove;
+    if (!removalsByPath.has(orderPath)) removalsByPath.set(orderPath, new Set());
+    removalsByPath.get(orderPath).add(entry);
+  }
+  for (const [orderPath, toRemove] of removalsByPath) {
+    if (!fs.existsSync(orderPath)) continue;
+    const kept = parseOrderYaml(fs.readFileSync(orderPath, 'utf-8')).filter((e) => !toRemove.has(e));
+    if (kept.length > 0) {
+      fs.writeFileSync(orderPath, kept.map((s) => `- ${yamlSafeSlug(s)}`).join('\n') + '\n');
+    } else {
+      fs.unlinkSync(orderPath);
+    }
+  }
+  for (const r of results) {
+    if (r._fixRemove) r.message += ' (fixed)';
+  }
+
+  return strip(results);
+}
+
+// Remove internal fix descriptors before returning results to the reporter.
+function strip(results) {
   for (const r of results) {
     delete r._fixAdd;
     delete r._fixRemove;

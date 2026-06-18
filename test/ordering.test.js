@@ -64,3 +64,19 @@ test('--fix adds a file missing from _order.yaml', () => {
     rmRepo(root);
   }
 });
+
+test('a folder entry with no markdown children is not flagged stale', () => {
+  const root = makeRepo({
+    'docs/cat/sub/.gitkeep': '',
+    'docs/cat/_order.yaml': '- sub\n',
+  });
+  try {
+    const res = validateAll(collectFiles(root), root, {});
+    assert.ok(
+      !res.some((r) => /Stale entry: "sub"/.test(r.message)),
+      'a subfolder with no .md children still counts as on-disk',
+    );
+  } finally {
+    rmRepo(root);
+  }
+});
