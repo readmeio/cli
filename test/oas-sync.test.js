@@ -46,6 +46,8 @@ test('existing reference page title is not overwritten by sync', () => {
       fs.readFileSync(path.join(root, 'reference/Pets/Other/listPets.md'), 'utf-8'),
     );
     assert.equal(data.title, 'My custom title');
+    assert.equal(data.api.file, 'pets.json');
+    assert.equal(data.api.operationId, 'listPets');
   } finally {
     rmRepo(root);
   }

@@ -48,8 +48,11 @@ function findOrderFiles(gitRoot, dir) {
 function entryExists(dir, entry) {
   if (fs.existsSync(path.join(dir, `${entry}.md`))) return true;
   if (fs.existsSync(path.join(dir, `${entry}.mdx`))) return true;
-  const folder = path.join(dir, entry);
-  return fs.existsSync(folder) && fs.statSync(folder).isDirectory();
+  try {
+    return fs.statSync(path.join(dir, entry)).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 export function validateAll(files, gitRoot, { fix } = {}) {
@@ -130,7 +133,7 @@ export function validateAll(files, gitRoot, { fix } = {}) {
       const entries = parseOrderYaml(fs.readFileSync(orderPath, 'utf-8'));
 
       for (const entry of entries) {
-        if (entry === 'index' || entry === 'index.md') {
+        if (entry === 'index' || entry === 'index.md' || entry === 'index.mdx') {
           results.push({
             file: relOrder,
             rule: name,

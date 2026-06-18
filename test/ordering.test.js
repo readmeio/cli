@@ -48,3 +48,19 @@ test('stale entries are caught in reference too', () => {
     rmRepo(root);
   }
 });
+
+test('--fix adds a file missing from _order.yaml', () => {
+  const root = makeRepo({
+    'docs/foo.md': '---\ntitle: Foo\n---\n',
+    'docs/bar.md': '---\ntitle: Bar\n---\n',
+    'docs/_order.yaml': '- foo\n',
+  });
+  try {
+    validateAll(collectFiles(root), root, { fix: true });
+    const after = fs.readFileSync(path.join(root, 'docs/_order.yaml'), 'utf-8');
+    assert.match(after, /- bar/);
+    assert.match(after, /- foo/);
+  } finally {
+    rmRepo(root);
+  }
+});

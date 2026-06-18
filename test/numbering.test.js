@@ -41,3 +41,39 @@ test('multi-digit suffix is not treated as unnecessary', async () => {
     rmRepo(root);
   }
 });
+
+test('directory single-digit suffix renames with flat redirects (matches script)', async () => {
+  const root = makeRepo({ 'docs/guides-1/intro.md': '---\ntitle: Intro\n---\n' });
+  const redirectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rdme-redir-'));
+  try {
+    await validateAll(collectFiles(root), root, { fix: true, nonInteractive: true, redirectDir });
+    assert.ok(fs.existsSync(path.join(root, 'docs/guides/intro.md')), 'folder renamed');
+    assert.ok(!fs.existsSync(path.join(root, 'docs/guides-1')), 'old folder gone');
+    const redirect = fs.readFileSync(
+      path.join(redirectDir, `${path.basename(root)}_redirect.txt`),
+      'utf-8',
+    );
+    assert.match(redirect, /\/docs\/guides-1 -> \/docs\/guides/);
+    assert.match(redirect, /\/reference\/guides-1 -> \/reference\/guides/);
+  } finally {
+    rmRepo(root);
+    rmRepo(redirectDir);
+  }
+});
+
+test('plain lint run (no fix) writes no redirect file and does not rename', async () => {
+  const root = makeRepo({ 'docs/foo-1.md': '---\ntitle: Foo\n---\n' });
+  const redirectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rdme-redir-'));
+  try {
+    const res = await validateAll(collectFiles(root), root, { redirectDir });
+    assert.ok(Array.isArray(res) && res.some((r) => r.message.includes('Unnecessary suffix')));
+    assert.equal(
+      fs.existsSync(path.join(redirectDir, `${path.basename(root)}_redirect.txt`)),
+      false,
+    );
+    assert.ok(fs.existsSync(path.join(root, 'docs/foo-1.md')), 'file not renamed without fix');
+  } finally {
+    rmRepo(root);
+    rmRepo(redirectDir);
+  }
+});

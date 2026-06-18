@@ -32,3 +32,16 @@ test('reference page WITHOUT api still requires title', () => {
     'non-api reference pages should still require a title',
   );
 });
+
+test('docs page without title is still flagged', () => {
+  const content = '---\nexcerpt: just an excerpt\n---\n';
+  const result = validate({
+    content,
+    relativePath: 'docs/some-page.md',
+    filePath: '/tmp/some-page.md',
+  });
+  assert.ok(
+    messages(result).some((m) => m.includes("must have required property 'title'")),
+    'docs pages should still require a title',
+  );
+});
