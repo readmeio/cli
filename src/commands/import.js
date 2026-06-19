@@ -3240,12 +3240,14 @@ async function resolveDocsBaseUrl(sourceUrl) {
   if (candidates.length === 0) return null
 
   const llmsHits = await Promise.all(candidates.map(async (c) => ({ c, res: await fetchLlmsTxt(`${c.url.href}llms.txt`) })))
-  const withLlms = llmsHits.find(({ res }) => res.ok && res.usable && (res.stats?.linkItems ?? 0) > 0)
+  const withLlms = llmsHits.find(
+    ({ c, res }) => res.ok && res.usable && (res.stats?.linkItems ?? 0) > 0 && inCandidateScope(c, res.finalUrl),
+  )
   if (withLlms) return { url: withLlms.c.url, kind: withLlms.c.kind, hasLlms: true }
 
-  // No llms.txt anywhere — adopt the first route that simply resolves, so the
-  // scrape/sitemap fallbacks at least run against the docs site. A subdomain
-  // whose llms.txt probe failed at the network layer never resolved, so skip it.
+  // No usable in-scope llms.txt — adopt the first route that simply resolves,
+  // so the scrape/sitemap fallbacks at least run against the docs site. A
+  // subdomain whose llms.txt probe failed at the network layer never resolved.
   const existence = await Promise.all(
     llmsHits.map(async ({ c, res }) => {
       if (res.error && c.kind === 'subdomain') return { c, exists: false }
@@ -3259,17 +3261,31 @@ async function resolveDocsBaseUrl(sourceUrl) {
 }
 
 /**
- * Does a well-known docs route exist? A subdomain must answer 200 without
- * redirecting off its host (catch-all DNS → marketing doesn't count); a path
- * must answer 200 without redirecting out of its prefix. DNS failures → false.
+ * Is `finalUrl` (where a fetch landed after following redirects) still within
+ * the candidate's scope? Subdomain candidates must keep their host; path
+ * candidates must keep their path prefix. A cross-scope redirect means the
+ * route is just an alias to somewhere else (usually the marketing apex).
+ */
+function inCandidateScope(candidate, finalUrl) {
+  let final
+  try {
+    final = new URL(finalUrl || candidate.url.href)
+  } catch {
+    return false
+  }
+  if (candidate.kind === 'subdomain') return final.hostname === candidate.url.hostname
+  return final.pathname.toLowerCase().startsWith(candidate.url.pathname.toLowerCase())
+}
+
+/**
+ * Does a well-known docs route exist and stay in scope? Follows redirects and
+ * rejects anything that lands outside the candidate (a `docs.` subdomain that
+ * bounces to marketing, a `/docs/` that 302s home). DNS failures → false.
  */
 async function docsRouteResolves(candidate) {
   try {
     const res = await fetch(candidate.url.href, { redirect: 'follow', headers: { 'User-Agent': 'readme-cli-import' } })
-    if (!res.ok) return false
-    const final = new URL(res.url || candidate.url.href)
-    if (candidate.kind === 'subdomain') return final.hostname === candidate.url.hostname
-    return final.pathname.toLowerCase().startsWith(candidate.url.pathname.toLowerCase())
+    return res.ok && inCandidateScope(candidate, res.url)
   } catch {
     return false
   }
@@ -3558,6 +3574,7 @@ async function fetchLlmsTxt(llmsUrl) {
     return {
       ok: true,
       status: res.status,
+      finalUrl: res.url,
       parsed: analysis.parsed,
       usable: analysis.usable,
       reason: analysis.reason,
