@@ -41,9 +41,12 @@ export function args(cmd) {
 }
 
 // Docs locations probed when the user hands us a bare homepage. Each is tried
-// as a subdomain swap (docs.example.com) AND a path prefix (example.com/docs/).
-// Order is preference order — earlier wins ties.
-const WELL_KNOWN_DOC_ROUTES = ['docs', 'doc', 'developers', 'developer', 'documentation', 'documentations']
+// as a subdomain swap (docs.example.com) and, unless subdomain-only, a path
+// prefix (example.com/docs/). Order is preference order — earlier wins ties.
+const WELL_KNOWN_DOC_ROUTES = ['docs', 'doc', 'developers', 'developer', 'documentation', 'documentations', 'platform']
+// Routes probed only as a subdomain (platform.example.com). Their path form
+// (example.com/platform/) is usually a marketing/product page, not docs.
+const SUBDOMAIN_ONLY_DOC_ROUTES = new Set(['platform'])
 
 /**
  * Run the importer programmatically. Mirrors the CLI command but throws on
@@ -131,6 +134,11 @@ export async function importDocs(options) {
     }
   }
 
+  const llmsPaths = new Set()
+  for (const o of perSourceOrganized) {
+    for (const p of o.llmsPaths || []) llmsPaths.add(p)
+  }
+
   if (debugSnapshots) {
     debugSnapshots['05-organized.json'] = organized
     const debugDir = path.join(os.tmpdir(), `readme-import-debug-${hostnameJoined}-${Date.now()}`)
@@ -157,7 +165,7 @@ export async function importDocs(options) {
     styles.info(`Staging frontmatter stubs in ${styles.bold(stagingDir)}...`)
     const stageStart = Date.now()
     const staged = await timePhase('stage stubs', async () =>
-      stageOrganized(organized, stagingDir, { skipApiReference: !!options.skipApiReference }),
+      stageOrganized(organized, stagingDir, { skipApiReference: !!options.skipApiReference, llmsPaths }),
     )
 
     // Changelog pages stage into docs/Changelog/ (a schema-valid docs
@@ -578,9 +586,9 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
             debugSnapshots[`04-after-orphan-buckets${dbgSuffix}.json`] = {
               apiReferenceCollected: apiResult.category
                 ? {
-                    pageCount: apiResult.category.pages.length,
-                    mergedFromScraped: apiResult.mergedScrapedTitles,
-                  }
+                  pageCount: apiResult.category.pages.length,
+                  mergedFromScraped: apiResult.mergedScrapedTitles,
+                }
                 : null,
               buckets,
               scraped: JSON.parse(JSON.stringify(scraped)),
@@ -714,6 +722,15 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
 
   styles.ok(`Organized in ${styles.bold(formatDuration(Date.now() - organizeStart))}.`)
   organized.oasJsonUrls = oasJsonUrls
+
+  // Record which page URLs came from llms.txt
+  const llmsPaths = new Set()
+  if (llms) {
+    for (const p of [...knownUrls, ...extractedChangelog]) {
+      if (p.url) llmsPaths.add(normalizePath(p.url))
+    }
+  }
+  organized.llmsPaths = llmsPaths
   return organized
 }
 
@@ -1179,7 +1196,7 @@ async function tryMintlifyNav(sourceUrl, knownPages, firecrawlKey) {
 function extractMintlifyConfig(body) {
   try {
     return JSON.parse(body)
-  } catch {}
+  } catch { }
   // Pull out the first balanced `{ ... }` that contains a "navigation" key.
   const navIdx = body.indexOf('"navigation"')
   if (navIdx === -1) return null
@@ -1190,7 +1207,7 @@ function extractMintlifyConfig(body) {
       try {
         const parsed = JSON.parse(candidate)
         if (parsed && parsed.navigation) return parsed
-      } catch {}
+      } catch { }
     }
     start = body.lastIndexOf('{', start - 1)
   }
@@ -1548,9 +1565,9 @@ async function scrapeNavFromSite(sourceUrl, knownPages, firecrawlKey) {
   const r1Urls = isDiscovery
     ? flattenTree(categoryOrder).slice(0, MAX_DISCOVERY_FETCHES)
     : categoryOrder
-        .map((c) => c.pages[0])
-        .filter(Boolean)
-        .map((p) => toBrowsableUrl(p.url))
+      .map((c) => c.pages[0])
+      .filter(Boolean)
+      .map((p) => toBrowsableUrl(p.url))
   const r1Start = Date.now()
   // Firecrawl standard-plan concurrency is 10; 5 leaves headroom for retries.
   // Native HTTP can run hotter since we're hitting our own loopback.
@@ -1808,7 +1825,7 @@ function collectApiReferencePages(orphans, scraped) {
     let segs = []
     try {
       segs = new URL(p.url).pathname.split('/').filter(Boolean)
-    } catch {}
+    } catch { }
     // segs[0] is the api-prefix itself; segs[1] (if any) is the resource.
     const resource = segs.length >= 3 ? segs[1] : null
     if (!resource) {
@@ -2622,7 +2639,7 @@ function clusterByUrlPath(pages) {
     let segs = []
     try {
       segs = new URL(p.url).pathname.split('/').filter(Boolean)
-    } catch {}
+    } catch { }
     if (segs.length === 0) {
       noSegPages.push(p)
     } else {
@@ -3000,9 +3017,9 @@ async function runJsonQuery({ systemPrompt, userPrompt, model }) {
   } catch (e) {
     throw new Error(
       `Claude returned invalid JSON: ${e.message}\n` +
-        `Output length: ${stripped.length} chars. Likely hit the model's output limit — try --model sonnet.\n\n` +
-        `First 500 chars:\n${stripped.slice(0, 500)}\n\n` +
-        `Last 500 chars:\n${stripped.slice(-500)}`,
+      `Output length: ${stripped.length} chars. Likely hit the model's output limit — try --model sonnet.\n\n` +
+      `First 500 chars:\n${stripped.slice(0, 500)}\n\n` +
+      `Last 500 chars:\n${stripped.slice(-500)}`,
     )
   }
 }
@@ -3206,8 +3223,9 @@ function dropAssetItemsFromParsed(parsed) {
 
 /**
  * Build the ordered list of well-known docs locations to probe. For each route
- * we emit a subdomain candidate (stripping a leading `www.` first) and a path
- * candidate. Base URLs end in `/` so `${url.href}llms.txt` is well-formed.
+ * we emit a subdomain candidate (stripping a leading `www.` first) and, unless
+ * the route is subdomain-only, a path candidate. Base URLs end in `/` so
+ * `${url.href}llms.txt` is well-formed.
  */
 function buildWellKnownDocRoutes(sourceUrl) {
   const out = []
@@ -3222,7 +3240,7 @@ function buildWellKnownDocRoutes(sourceUrl) {
   for (const route of WELL_KNOWN_DOC_ROUTES) {
     const subHost = `${route}.${apexHost}`
     if (subHost !== sourceUrl.hostname) add('subdomain', `${sourceUrl.protocol}//${subHost}/`)
-    add('path', `${sourceUrl.origin}/${route}/`)
+    if (!SUBDOMAIN_ONLY_DOC_ROUTES.has(route)) add('path', `${sourceUrl.origin}/${route}/`)
   }
   return out
 }
@@ -3826,6 +3844,7 @@ function stageOrganized(organized, stagingDir, opts = {}) {
   const subDirsByTopDir = new Map()
   const counts = { fileCount: 0, skippedApiRef: 0 }
   const skipApiReference = !!opts.skipApiReference
+  const llmsPaths = opts.llmsPaths || new Set()
 
   const eligibleCategories = (organized.categories || []).filter((cat) => {
     if (skipApiReference && routeCategory(cat.title).topDir === 'reference') {
@@ -3884,6 +3903,9 @@ function stageOrganized(organized, stagingDir, opts = {}) {
         // step reads it to fetch the page body. x-prefixed custom field is the
         // git-format convention for metadata the schema doesn't know about.
         frontmatter['x-import'] = toBrowsableUrl(page.url)
+        // Pages sourced from llms.txt serve raw markdown at `<url>.md`; flag them
+        // so the runner knows it can append `.md` when fetching the body.
+        if (llmsPaths.has(normalizePath(page.url))) frontmatter['x-from-llms'] = 'true'
         // hide pages that need import
         frontmatter.hidden = 'true'
       }
