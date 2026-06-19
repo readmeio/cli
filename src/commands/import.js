@@ -3239,24 +3239,38 @@ async function resolveDocsBaseUrl(sourceUrl) {
   const candidates = buildWellKnownDocRoutes(sourceUrl)
   if (candidates.length === 0) return null
 
-  const llmsHits = await Promise.all(candidates.map(async (c) => ({ c, res: await fetchLlmsTxt(`${c.url.href}llms.txt`) })))
-  const withLlms = llmsHits.find(
-    ({ c, res }) => res.ok && res.usable && (res.stats?.linkItems ?? 0) > 0 && inCandidateScope(c, res.finalUrl),
-  )
-  if (withLlms) return { url: withLlms.c.url, kind: withLlms.c.kind, hasLlms: true }
+  styles.info(`Probing ${styles.bold(String(candidates.length))} well-known docs routes from ${styles.bold(sourceUrl.toString())}...`)
 
-  // No usable in-scope llms.txt — adopt the first route that simply resolves,
-  // so the scrape/sitemap fallbacks at least run against the docs site. A
-  // subdomain whose llms.txt probe failed at the network layer never resolved.
+  const llmsHits = await Promise.all(candidates.map(async (c) => ({ c, res: await fetchLlmsTxt(`${c.url.href}llms.txt`) })))
+  for (const { c, res } of llmsHits) {
+    const url = `${c.url.href}llms.txt`
+    if (res.ok && res.usable && (res.stats?.linkItems ?? 0) > 0) {
+      if (inCandidateScope(c, res.finalUrl)) {
+        styles.info(styles.dim(`  ${url} → valid llms.txt (${res.stats.linkItems} links)`))
+        return { url: c.url, kind: c.kind, hasLlms: true }
+      }
+      styles.info(styles.dim(`  ${url} → llms.txt redirects to ${new URL(res.finalUrl).host} (alias) — skipping`))
+    } else if (res.ok) {
+      styles.info(styles.dim(`  ${url} → no usable llms.txt`))
+    } else {
+      styles.info(styles.dim(`  ${url} → ${res.status ? `HTTP ${res.status}` : res.error || 'no llms.txt'}`))
+    }
+  }
+
   const existence = await Promise.all(
     llmsHits.map(async ({ c, res }) => {
       if (res.error && c.kind === 'subdomain') return { c, exists: false }
       return { c, exists: await docsRouteResolves(c) }
     }),
   )
-  const resolved = existence.find(({ exists }) => exists)
-  if (resolved) return { url: resolved.c.url, kind: resolved.c.kind, hasLlms: false }
+  for (const { c, exists } of existence) {
+    if (exists) {
+      styles.info(styles.dim(`  ${c.url.href} → resolves (no llms.txt)`))
+      return { url: c.url, kind: c.kind, hasLlms: false }
+    }
+  }
 
+  styles.info(styles.dim(`  no well-known docs route matched — keeping ${sourceUrl.toString()}`))
   return null
 }
 
