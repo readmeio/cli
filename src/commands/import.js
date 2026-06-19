@@ -40,6 +40,11 @@ export function args(cmd) {
   cmd.addOption(new Option('--debug').hideHelp())
 }
 
+// Docs locations probed when the user hands us a bare homepage. Each is tried
+// as a subdomain swap (docs.example.com) AND a path prefix (example.com/docs/).
+// Order is preference order — earlier wins ties.
+const WELL_KNOWN_DOC_ROUTES = ['docs', 'doc', 'developers', 'developer', 'documentation', 'documentations']
+
 /**
  * Run the importer programmatically. Mirrors the CLI command but throws on
  * fatal errors instead of calling `process.exit`, and returns a result object
@@ -231,6 +236,16 @@ export async function importDocs(options) {
  * the hostname so parallel runs don't clobber each other.
  */
 async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSnapshots) {
+  // Probe well-known docs routes (docs./developer. subdomains and /docs/, 
+  // … path prefixes) and adopt the first that resolves as the real base, so everything downstream runs
+  const docsBase = await timePhase('probe well-known docs routes', () => resolveDocsBaseUrl(sourceUrl))
+  if (docsBase) {
+    styles.info(
+      `${styles.bold(sourceUrl.toString())} looks like a homepage — switching to docs route ${styles.bold(docsBase.url.toString())}${styles.dim(docsBase.hasLlms ? ' (llms.txt found)' : ' (no llms.txt; using for scrape fallback)')}.`,
+    )
+    sourceUrl = docsBase.url
+  }
+
   // Discover llms.txt files by BFS walking parents AND children. Seed the
   // frontier with the walk-up paths (source → root). Any "hit" (file exists
   // with at least one link row) expands the frontier: parent path + distinct
@@ -3188,23 +3203,76 @@ function dropAssetItemsFromParsed(parsed) {
   return dropped
 }
 
-function buildLlmsCandidates(sourceUrl) {
+
+/**
+ * Build the ordered list of well-known docs locations to probe. For each route
+ * we emit a subdomain candidate (stripping a leading `www.` first) and a path
+ * candidate. Base URLs end in `/` so `${url.href}llms.txt` is well-formed.
+ */
+function buildWellKnownDocRoutes(sourceUrl) {
   const out = []
   const seen = new Set()
-  const add = (url) => {
-    if (!seen.has(url)) {
-      seen.add(url)
-      out.push(url)
-    }
+  const add = (kind, href) => {
+    if (seen.has(href)) return
+    seen.add(href)
+    out.push({ kind, url: new URL(href) })
   }
 
-  const origin = sourceUrl.origin
-  const segs = sourceUrl.pathname.split('/').filter(Boolean)
-  for (let i = segs.length; i >= 0; i--) {
-    const prefix = segs.slice(0, i).join('/')
-    add(`${origin}${prefix ? '/' + prefix : ''}/llms.txt`)
+  const apexHost = sourceUrl.hostname.replace(/^www\./i, '')
+  for (const route of WELL_KNOWN_DOC_ROUTES) {
+    const subHost = `${route}.${apexHost}`
+    if (subHost !== sourceUrl.hostname) add('subdomain', `${sourceUrl.protocol}//${subHost}/`)
+    add('path', `${sourceUrl.origin}/${route}/`)
   }
   return out
+}
+
+/**
+ * For a bare homepage, probe well-known docs routes and return the best base to
+ * adopt, or null to leave the source untouched. A route serving a usable
+ * llms.txt always beats one that merely resolves. Returns `{ url, kind, hasLlms }`.
+ */
+async function resolveDocsBaseUrl(sourceUrl) {
+  if (sourceUrl.pathname && sourceUrl.pathname !== '/') return null
+  if (WELL_KNOWN_DOC_ROUTES.includes(sourceUrl.hostname.split('.')[0].toLowerCase())) return null
+
+  const candidates = buildWellKnownDocRoutes(sourceUrl)
+  if (candidates.length === 0) return null
+
+  const llmsHits = await Promise.all(candidates.map(async (c) => ({ c, res: await fetchLlmsTxt(`${c.url.href}llms.txt`) })))
+  const withLlms = llmsHits.find(({ res }) => res.ok && res.usable && (res.stats?.linkItems ?? 0) > 0)
+  if (withLlms) return { url: withLlms.c.url, kind: withLlms.c.kind, hasLlms: true }
+
+  // No llms.txt anywhere — adopt the first route that simply resolves, so the
+  // scrape/sitemap fallbacks at least run against the docs site. A subdomain
+  // whose llms.txt probe failed at the network layer never resolved, so skip it.
+  const existence = await Promise.all(
+    llmsHits.map(async ({ c, res }) => {
+      if (res.error && c.kind === 'subdomain') return { c, exists: false }
+      return { c, exists: await docsRouteResolves(c) }
+    }),
+  )
+  const resolved = existence.find(({ exists }) => exists)
+  if (resolved) return { url: resolved.c.url, kind: resolved.c.kind, hasLlms: false }
+
+  return null
+}
+
+/**
+ * Does a well-known docs route exist? A subdomain must answer 200 without
+ * redirecting off its host (catch-all DNS → marketing doesn't count); a path
+ * must answer 200 without redirecting out of its prefix. DNS failures → false.
+ */
+async function docsRouteResolves(candidate) {
+  try {
+    const res = await fetch(candidate.url.href, { redirect: 'follow', headers: { 'User-Agent': 'readme-cli-import' } })
+    if (!res.ok) return false
+    const final = new URL(res.url || candidate.url.href)
+    if (candidate.kind === 'subdomain') return final.hostname === candidate.url.hostname
+    return final.pathname.toLowerCase().startsWith(candidate.url.pathname.toLowerCase())
+  } catch {
+    return false
+  }
 }
 
 // Hard cap on total probes during BFS discovery — protects against
@@ -4077,8 +4145,8 @@ function ensureUniqueSlugs(categories) {
       slug = `${base}-${n}`
       styles.error(
         `Slug collision after segment expansion: ${base} — falling back to ${slug} for ${describe(e)}. ` +
-          `Pages were deduped by path before organize and category title is already part of the slug, ` +
-          `so this indicates the organize step produced duplicates within a single category.`,
+        `Pages were deduped by path before organize and category title is already part of the slug, ` +
+        `so this indicates the organize step produced duplicates within a single category.`,
       )
     }
     used.add(slug)
