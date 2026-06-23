@@ -6,8 +6,11 @@ const H2_RE = /^##\s+(.+)$/
 //   - Breadcrumb-prefixed rows used by Fern/Mintlify-style indices:
 //       `ElevenAgents [Agent WebSockets](url)`
 //       `API Reference > Agents > Branches [List branches](url)`
+//   - Trailing-parenthetical-breadcrumb rows (AssemblyAI/Fern variant) — the
+//     breadcrumb sits between the url and the description and is matched-and-discarded:
+//       `[text](url) (Breadcrumb > path): description`
 // Captures: [prefix, text, url, description] (prefix and description may be empty).
-const LINK_LINE_RE = /^\s*(?:[-*+]\s+)?([^\[\n]*?)\s*\[([^\]]+)\] ?\(([^)\s]+)\)(?:\s*[:—–-]\s*(.+?))?\s*$/
+const LINK_LINE_RE = /^\s*(?:[-*+]\s+)?([^\[\n]*?)\s*\[([^\]]+)\] ?\(([^)\s]+)\)(?:\s+\([^)]*\))?(?:\s*[:—–-]\s*(.+?))?\s*$/
 const BLOCKQUOTE_RE = /^\s*>/
 const FENCE_RE = /^\s*(?:```|~~~)/
 
