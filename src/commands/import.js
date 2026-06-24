@@ -48,6 +48,9 @@ const WELL_KNOWN_DOC_ROUTES = ['docs', 'doc', 'developers', 'developer', 'docume
 // Routes probed only as a subdomain (platform.example.com). Their path form
 // (example.com/platform/) is usually a marketing/product page, not docs.
 const SUBDOMAIN_ONLY_DOC_ROUTES = new Set(['platform'])
+// Max concurrent HTTP probes when checking whether a section's landing URL
+// (e.g. /docs/cli) really exists before importing it as a real overview page.
+const LANDING_PROBE_CAP = 8
 
 /**
  * Run the importer programmatically. Mirrors the CLI command but throws on
@@ -716,6 +719,12 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
   // alongside the rest of the tree for consistency. Merges into a pre-existing
   // Changelog category (scrape path's reclassifier may have already built one).
   injectChangelogCategory(organized, extractedChangelog)
+
+  // Import section landing pages (e.g. /docs/cli) that llms.txt models as a
+  // bare heading + child links and so never lists as a page of their own.
+  // Runs before nesting so the injected page lands at its trie node and
+  // nestByUrlHierarchy renders it as the real parent of its children.
+  await injectSectionLandingPages(organized, sourceUrl)
 
   for (const cat of organized.categories || []) {
     cat.pages = nestByUrlHierarchy(cat.pages)
@@ -2706,6 +2715,96 @@ function clusterByUrlPath(pages) {
 }
 
 /**
+ * Import section landing pages that the source models structurally rather than
+ * as a link. In llms.txt a section like the Vercel CLI is a bare `## CLI`
+ * heading followed by 68 `/docs/cli/<cmd>` links — the importer turns the
+ * heading into a category but `/docs/cli` itself is never listed, so its real,
+ * content-bearing overview page is dropped. ReadMe then redirects the
+ * content-less category to its first child (a broken landing page).
+ *
+ * For each category we compute the common URL prefix of its children (the
+ * section's landing URL), HTTP-probe it, and — when it really exists and stays
+ * in scope — prepend it as a real page so nestByUrlHierarchy renders it as the
+ * parent holding the children. Mutates `organized` in place.
+ */
+async function injectSectionLandingPages(organized, sourceUrl) {
+  const cats = organized?.categories || []
+  if (cats.length === 0) return
+
+  // Dedup set: every page URL already in the tree, by normalized path.
+  const known = new Set()
+  for (const c of cats) {
+    for (const p of collectUrlPagesDeep(c.pages || [])) known.add(normalizePath(p.url))
+  }
+
+  // Base path of the import itself — landing candidates must be strictly
+  // deeper than this so we never probe `/docs` (the base) as a "section".
+  const baseDepth = (urlTrieSegs(sourceUrl) || []).length
+  const origin = new URL(sourceUrl).origin
+
+  // Build one landing candidate per eligible category (cheap gate first).
+  const candidates = []
+  for (const cat of cats) {
+    const kids = collectUrlPagesDeep(cat.pages || [])
+    if (kids.length < 2) continue
+
+    // Longest common path prefix across the children — same loop as
+    // clusterByUrlPath's common-depth scan, over urlTrieSegs.
+    const parts = kids.map((p) => urlTrieSegs(p.url)).filter(Boolean)
+    if (parts.length < 2) continue
+    let commonDepth = 0
+    while (commonDepth < parts[0].length) {
+      const seg = parts[0][commonDepth]
+      if (!parts.every((pp) => pp[commonDepth] === seg)) break
+      commonDepth++
+    }
+    const commonSegs = parts[0].slice(0, commonDepth)
+
+    // Must be strictly deeper than the import base, and not already a page.
+    if (commonSegs.length <= baseDepth) continue
+    const landingUrl = `${origin}/${commonSegs.join('/')}`
+    if (known.has(normalizePath(landingUrl))) continue
+
+    candidates.push({ cat, landingUrl })
+  }
+  if (candidates.length === 0) return
+
+  // Probe surviving candidates in parallel. Accept only a real, in-scope page
+  // that doesn't redirect onto an already-known child.
+  const accepted = []
+  await visitAllInParallel(
+    candidates,
+    async ({ cat, landingUrl }) => {
+      try {
+        const res = await fetch(landingUrl, {
+          redirect: 'follow',
+          headers: { 'User-Agent': 'readme-cli-import' },
+        })
+        if (!res.ok) return
+        const candPath = new URL(landingUrl).pathname.toLowerCase()
+        const finalPath = new URL(res.url).pathname.toLowerCase()
+        if (!finalPath.startsWith(candPath)) return
+        if (known.has(normalizePath(res.url))) return
+        accepted.push({ cat, landingUrl })
+      } catch {
+        // Network error / unparseable — treat as "no landing page".
+      }
+    },
+    LANDING_PROBE_CAP,
+  )
+
+  for (const { cat, landingUrl } of accepted) {
+    // Don't set x-from-llms: the page isn't in llmsPaths, so the runner fetches
+    // its rendered HTML via the content cascade (there's no .md mirror).
+    cat.pages.unshift({ title: cat.title, url: landingUrl })
+    known.add(normalizePath(landingUrl))
+  }
+  if (accepted.length > 0) {
+    styles.info(`Imported ${styles.bold(String(accepted.length))} section landing page(s).`)
+  }
+}
+
+/**
  * Used by discovery-mode scraping (no llms.txt) to decide whether a nav
  * link is worth importing as a doc page. Filters out cross-origin links,
  * asset file types, build artifacts, and anchors-on-same-page.
@@ -4096,7 +4195,12 @@ function ensureUniqueSlugs(categories) {
     for (const p of pages || []) {
       const urlSegs = segmentsFor(p)
       const segments = categorySeg ? [categorySeg, ...urlSegs] : urlSegs
-      entries.push({ page: p, segments, fallback: p.title, depth: 1 })
+      // Synthetic/empty-parent nodes have no content. Never let one win a bare
+      // single-segment slug (e.g. a placeholder `…/vercel-flags/cli` claiming
+      // `cli`), or it squats the slug a real overview page wants and ReadMe
+      // redirects the content-less parent to its first child. Floor their slug
+      // at 2 trailing segments so they namespace to `vercel-flags-cli` instead.
+      entries.push({ page: p, segments, fallback: p.title, depth: p._emptyParent ? 2 : 1 })
       if (p.pages) walk(p.pages, categorySeg)
     }
   }
