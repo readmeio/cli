@@ -701,6 +701,10 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
         const fastPath = sectionsLookUsable(llms.parsed.sections)
         styles.info(`Organizing with Claude (${styles.bold(options.model)}, ${fastPath ? 'fast path: icons only' : 'full reorg'})...`)
         organized = await timePhase('claude organize', () => organizeWithClaude(llms.parsed, options.model))
+        const movedRef = reclassifyReferencePages(organized)
+        if (movedRef > 0) {
+          styles.info(`Moved ${styles.bold(String(movedRef))} page${movedRef === 1 ? '' : 's'} into ${styles.bold('API Reference')} based on URL path.`)
+        }
       }
     }
   } else {
