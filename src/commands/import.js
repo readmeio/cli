@@ -11,6 +11,7 @@ import { syncOas } from './oas-sync.js'
 import OASNormalize from 'oas-normalize'
 import { slotOrphansPrompt, iconizeNavPrompt, organizeFromSectionsPrompt, organizeFromScratchPrompt, stripCodeFences } from '../prompts/index.js'
 import { analyzeLlmsTxt } from '../utils/llms.js'
+import { urlTrieSegs, extractUrlPathSegments, normalizePath, stripSegmentExtensions } from '../utils/url-segs.js'
 
 export const command = 'import'
 export const order = 7
@@ -2190,26 +2191,7 @@ function collectUrlPagesDeep(pages, out = []) {
   return out
 }
 
-/**
- * Parse a URL's pathname into segments suitable for trie nesting. Strips file
- * extensions (`.md`/`.html`/etc.) and drops a trailing `index` segment so
- * `/foo`, `/foo/`, `/foo/index.html`, and `/foo/index.md` all collapse to the
- * same logical page — the static-site-generator convention every browser and
- * web server already follows. Returns null if the URL can't be parsed.
- */
-function urlTrieSegs(url) {
-  try {
-    const segs = new URL(url).pathname
-      .split('/')
-      .filter(Boolean)
-      .map((s) => s.replace(/\.(md|mdx|html?)$/i, ''))
-      .filter(Boolean)
-    if (segs.length > 0 && segs[segs.length - 1].toLowerCase() === 'index') segs.pop()
-    return segs
-  } catch {
-    return null
-  }
-}
+// urlTrieSegs is imported from ../utils/url-segs.js
 
 /**
  * Re-parent URL-bearing siblings by URL path so descendants nest under their
@@ -2320,7 +2302,7 @@ function nestByUrlHierarchy(pages, anchorSegs = null) {
       outPage = node.page
     } else {
       const rawSeg = node.segment
-      const cleanedSeg = rawSeg.replace(/\.(md|mdx|html?)$/i, '').replace(/^\d+[-_.]/, '') || rawSeg
+      const cleanedSeg = stripSegmentExtensions(rawSeg).replace(/^\d+[-_.]/, '') || rawSeg
       outPage = {
         title: titleCase(cleanedSeg),
         _emptyParent: true,
@@ -2782,20 +2764,7 @@ function decodeEntities(s) {
     .replace(/&rdquo;/g, '”')
 }
 
-/**
- * Reduce a URL to a comparable pathname: lowercase host, strip trailing slash
- * and common suffixes (.md, .html) so `/foo/bar.md` and `/foo/bar` match.
- */
-function normalizePath(url) {
-  try {
-    const u = new URL(url)
-    let p = u.pathname.replace(/\/$/, '').toLowerCase()
-    p = p.replace(/\.(md|mdx|html?)$/i, '')
-    return p
-  } catch {
-    return String(url).toLowerCase()
-  }
-}
+// normalizePath is imported from ../utils/url-segs.js
 
 /**
  * Given a set of scraped categories + orphan pages that didn't match the nav
@@ -4084,27 +4053,7 @@ function buildFrontmatter(topDir, page, slug, pickIcon, opts = {}) {
 }
 
 /**
- * Extract URL path segments for slug planning. Strips file extensions and
- * leading numeric prefixes (e.g. `01-intro` → `intro`) the same way the
- * legacy deriveSlug did, so the depth-1 result is byte-for-byte compatible.
- * Also drops a trailing `index` segment — many SSGs render `/foo/` as
- * `/foo/index.html` and emit either form in their URL lists; we don't want
- * every page collapsing to the same `index` base slug.
- */
-function extractUrlPathSegments(url) {
-  if (!url) return []
-  try {
-    const segs = new URL(url).pathname
-      .split('/')
-      .filter(Boolean)
-      .map((s) => s.replace(/\.(md|mdx|html?)$/i, '').replace(/^\d+[-_.]/, ''))
-      .filter(Boolean)
-    if (segs.length > 0 && segs[segs.length - 1].toLowerCase() === 'index') segs.pop()
-    return segs
-  } catch {
-    return []
-  }
-}
+// extractUrlPathSegments is imported from ../utils/url-segs.js
 
 /**
  * Compute a globally-unique slug for every page in the tree.
@@ -4138,7 +4087,7 @@ function ensureUniqueSlugs(categories) {
   const segmentsFor = (p) => {
     if (p._virtualPathSegs && p._virtualPathSegs.length > 0) {
       return p._virtualPathSegs
-        .map((s) => s.replace(/\.(md|mdx|html?)$/i, '').replace(/^\d+[-_.]/, ''))
+        .map((s) => stripSegmentExtensions(s).replace(/^\d+[-_.]/, ''))
         .filter(Boolean)
     }
     return extractUrlPathSegments(p.url)
