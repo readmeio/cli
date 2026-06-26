@@ -397,6 +397,29 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
     )
   }
 
+  // Dedupe items across llms.parsed.sections by URL (first occurrence wins).
+  // Some llms.txt files cross-reference the same page under multiple headings —
+  // feeding duplicate URLs into the organize step causes the same page to appear
+  // in multiple sidebar sections regardless of which path (direct, icons, full
+  // reorg) runs downstream.
+  if (llms) {
+    const seenItemUrls = new Set()
+    let deduped = 0
+    for (const section of llms.parsed.sections) {
+      const before = section.items.length
+      section.items = section.items.filter((item) => {
+        const key = normalizePath(item.url)
+        if (seenItemUrls.has(key)) return false
+        seenItemUrls.add(key)
+        return true
+      })
+      deduped += before - section.items.length
+    }
+    if (deduped > 0) {
+      styles.info(styles.dim(`Deduped ${deduped} cross-section duplicate URL${deduped === 1 ? '' : 's'} from llms.txt sections.`))
+    }
+  }
+
   const dbgSuffix = `-${sourceUrl.hostname}`
   if (debugSnapshots) {
     debugSnapshots[`01-llms-parsed${dbgSuffix}.json`] = { llmsUrl, parsed: llms ? llms.parsed : null, skipped: skippedLlms }
@@ -2936,8 +2959,10 @@ function usableSections(sections) {
 }
 
 function sectionsLookUsable(sections) {
-  if (!sections || sections.length > 40) return false
-  return usableSections(sections).length >= 3
+  const usable = usableSections(sections)
+  if (usable.length < 3) return false
+  const avg = usable.reduce((n, s) => n + s.items.length, 0) / usable.length
+  return avg >= 5 && avg <= 100
 }
 
 async function organizeWithClaude(parsed, model) {
@@ -3002,13 +3027,17 @@ async function organizeFromScratch(parsed, model) {
   // Rehydrate pages from the id references Claude returned.
   const expandedCategories = []
   const usedIds = new Set()
+  const usedUrls = new Set()
   for (const cat of raw.categories || []) {
     const pages = []
     for (const id of cat.pageIds || []) {
       const item = items[id]
       if (!item) continue // ignore out-of-range ids
       if (usedIds.has(id)) continue // ignore dupes
+      const normUrl = normalizePath(item.url)
+      if (usedUrls.has(normUrl)) continue // guard against same URL at different input indexes
       usedIds.add(id)
+      usedUrls.add(normUrl)
       pages.push({
         title: item.title,
         url: item.url,
