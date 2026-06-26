@@ -3,13 +3,17 @@
  * Centralised here so the single-extension-strip bug only lives in one place.
  */
 
+// Extensions that are implementation artifacts, not meaningful path segments.
+const DOC_FILE_EXTENSIONS = ['md', 'mdx', 'html', 'htm', 'txt']
+const DOC_EXT_RE = new RegExp(`(\\.(${DOC_FILE_EXTENSIONS.join('|')}))+$`, 'i')
+
 /**
- * Strip all chained doc-file extensions (.html.md, .html, .md, .mdx, .htm)
+ * Strip all chained doc-file extensions (.html.md, .html, .md, .mdx, .htm, .txt)
  * from a single URL path segment. Handles the double-extension pattern used
- * by some SSGs (e.g. plaid.com's llms.txt links end with `.html.md`).
+ * by some SSGs (e.g. `.html.md`).
  */
 export function stripSegmentExtensions(s) {
-  return s.replace(/(\.(md|mdx|html?))+$/i, '')
+  return s.replace(DOC_EXT_RE, '')
 }
 
 /**
@@ -64,7 +68,7 @@ export function normalizePath(url) {
   try {
     const u = new URL(url)
     let p = u.pathname.replace(/\/$/, '').toLowerCase()
-    p = p.replace(/(\.(md|mdx|html?))+$/i, '')
+    p = p.replace(DOC_EXT_RE, '')
     return p
   } catch {
     return String(url).toLowerCase()
