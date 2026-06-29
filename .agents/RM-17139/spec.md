@@ -47,3 +47,7 @@ The same generic route terms can also pollute collision resolution. A category o
 ## Further notes
 
 The runner repo depends on the CLI via the local `@readme/cli` file dependency in this worktree setup, so the final Mintlify smoke should be run from the runner repo after CLI changes are in place.
+
+## Approval
+
+Approved by Xavier on 2026-06-29T07:18:23Z.
