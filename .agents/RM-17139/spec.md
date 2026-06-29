@@ -10,6 +10,7 @@ The same generic route terms can also pollute collision resolution. A category o
 
 1. A source page whose derived slug would be exactly `docs`, `doc`, `documentation`, or `documentations` is emitted with a meaningful fallback slug, `introduction`, instead of the generic route slug.
 2. Generic docs route/category terms are normalized before unique-slug resolution, so they are attempted first and do not unnecessarily reserve or pollute later slugs.
+   - For example, if the organized tree has `Docs` and `AI` categories, run unique-slug assignment for the `Docs` category first so generic docs normalization cannot be forced into polluted slugs by later categories.
 3. Generic docs category/path terms are not used as disambiguating prefixes for page slugs. For example, a `Docs / Getting Started` page should prefer `getting-started`, not `docs-getting-started`.
 4. If normalization still leaves a slug collision, the CLI keeps the existing collision fallback behavior and suffix style; this ticket does not change global suffix semantics.
 5. Non-generic route segments keep current behavior. For example, `/docs/api`, `/docs/getting-started`, and segments like `docs-api` or `documentation-settings` are not rewritten just because they contain a generic docs word.
@@ -30,6 +31,7 @@ The same generic route terms can also pollute collision resolution. A category o
 - Treat exact generic docs terms as non-semantic only when they are standalone segments/category labels: `docs`, `doc`, `documentation`, and `documentations`.
 - Replace a terminal slug candidate that would be exactly one of those generic terms with `introduction`.
 - Ensure generic docs category/path terms are tried/normalized before other slug assignment work so they do not claim useful slugs or force later pages into `docs-*` expansions.
+- Process categories with generic docs labels before non-generic categories during unique-slug assignment; for example, `Docs` should be assigned before `AI`.
 - Do not rewrite partial matches such as `docs-api` or `documentation-settings`.
 - Preserve the CLI's existing final collision fallback behavior, including its current numeric suffix style.
 
