@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { stripSegmentExtensions, urlTrieSegs, extractUrlPathSegments, normalizePath } from './url-segs.js'
+import { stripSegmentExtensions, urlTrieSegs, extractUrlPathSegments, normalizePath, compareCanonicalUrlPreference, llmsPageDedupeKey } from './url-segs.js'
 
 // ---------------------------------------------------------------------------
 // stripSegmentExtensions
@@ -139,10 +139,78 @@ test('normalizePath: trailing slash and bare path produce same key', () => {
   assert.equal(a, b)
 })
 
+test('normalizePath: index variants and bare path produce same key', () => {
+  const bare = normalizePath('https://example.com/docs/get-started')
+  assert.equal(normalizePath('https://example.com/docs/get-started/'), bare)
+  assert.equal(normalizePath('https://example.com/docs/get-started/index.html'), bare)
+  assert.equal(normalizePath('https://example.com/docs/get-started/index.htm'), bare)
+})
+
 test('normalizePath: lowercases result', () => {
   assert.equal(normalizePath('https://example.com/Docs/QuickStart'), '/docs/quickstart')
 })
 
 test('normalizePath: falls back for unparseable input', () => {
   assert.equal(normalizePath('not-a-url'), 'not-a-url')
+})
+
+// ---------------------------------------------------------------------------
+// llmsPageDedupeKey — llms.txt page-row deduplication
+// ---------------------------------------------------------------------------
+
+test('llmsPageDedupeKey: includes origin so same paths on different hosts stay distinct', () => {
+  assert.notEqual(
+    llmsPageDedupeKey('https://docs.example.com/docs/get-started.md'),
+    llmsPageDedupeKey('https://example.com/docs/get-started.md'),
+  )
+})
+
+test('llmsPageDedupeKey: preserves query params by default', () => {
+  assert.notEqual(
+    llmsPageDedupeKey('https://example.com/docs/search?product=api'),
+    llmsPageDedupeKey('https://example.com/docs/search?product=sdk'),
+  )
+})
+
+test('llmsPageDedupeKey: normalizes query param order', () => {
+  assert.equal(
+    llmsPageDedupeKey('https://example.com/docs/search?b=2&a=1'),
+    llmsPageDedupeKey('https://example.com/docs/search?a=1&b=2'),
+  )
+})
+
+test('llmsPageDedupeKey: ignores fragments but preserves router query state', () => {
+  assert.equal(
+    llmsPageDedupeKey('https://example.com/docs/get-started.md?tab=js#install'),
+    llmsPageDedupeKey('https://example.com/docs/get-started?tab=js#auth'),
+  )
+})
+
+test('llmsPageDedupeKey: collapses doc URL spellings for the same page', () => {
+  const bare = llmsPageDedupeKey('https://example.com/docs/get-started')
+  assert.equal(llmsPageDedupeKey('https://example.com/docs/get-started.md'), bare)
+  assert.equal(llmsPageDedupeKey('https://example.com/docs/get-started/index.html'), bare)
+  assert.equal(llmsPageDedupeKey('https://example.com/docs/get-started/'), bare)
+})
+
+// ---------------------------------------------------------------------------
+// compareCanonicalUrlPreference — retained URL selection
+// ---------------------------------------------------------------------------
+
+test('compareCanonicalUrlPreference: prefers md over txt, bare, trailing slash, and index', () => {
+  const urls = [
+    'https://example.com/docs/get-started/index.html',
+    'https://example.com/docs/get-started/',
+    'https://example.com/docs/get-started',
+    'https://example.com/docs/get-started.txt',
+    'https://example.com/docs/get-started.md',
+  ]
+
+  assert.deepEqual([...urls].sort(compareCanonicalUrlPreference), [
+    'https://example.com/docs/get-started.md',
+    'https://example.com/docs/get-started.txt',
+    'https://example.com/docs/get-started',
+    'https://example.com/docs/get-started/',
+    'https://example.com/docs/get-started/index.html',
+  ])
 })
