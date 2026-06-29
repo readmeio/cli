@@ -16,6 +16,27 @@ test('ensureUniqueSlugs: generic docs terminal paths fall back to introduction',
   }
 })
 
+test('ensureUniqueSlugs: terminal generic docs paths use introduction under non-generic categories', () => {
+  const page = { title: 'Docs', url: 'https://example.com/docs' }
+
+  assert.equal(
+    assignedSlug([{ title: 'Guides', pages: [page] }], page),
+    'introduction',
+  )
+})
+
+test('ensureUniqueSlugs: category segment disambiguates introduction collisions', () => {
+  const guidesPage = { title: 'Docs', url: 'https://example.com/docs' }
+  const apiPage = { title: 'Docs', url: 'https://example.com/docs' }
+  const slugs = ensureUniqueSlugs([
+    { title: 'Guides', pages: [guidesPage] },
+    { title: 'API', pages: [apiPage] },
+  ])
+
+  assert.equal(slugs.get(guidesPage), 'guides-introduction')
+  assert.equal(slugs.get(apiPage), 'api-introduction')
+})
+
 test('ensureUniqueSlugs: generic docs category does not prefix an available page slug', () => {
   const page = { title: 'Getting Started', url: 'https://example.com/docs/getting-started' }
 

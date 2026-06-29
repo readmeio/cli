@@ -4195,14 +4195,18 @@ export function ensureUniqueSlugs(categories) {
     }
     return extractUrlPathSegments(p.url)
   }
-  const normalizedSegmentsFor = (p, categorySeg) => {
-    const rawSegments = categorySeg ? [categorySeg, ...segmentsFor(p)] : segmentsFor(p)
-    const semanticSegments = rawSegments.filter((seg) => !isGenericDocsSegment(seg))
+  const normalizedSegmentsFor = (p) => {
+    const semanticSegments = segmentsFor(p).filter((seg) => !isGenericDocsSegment(seg))
     return semanticSegments.length > 0 ? semanticSegments : ['introduction']
+  }
+  const expansionSegmentsFor = (p, categorySeg) => {
+    const pageSegments = normalizedSegmentsFor(p)
+    if (!categorySeg || isGenericDocsSegment(categorySeg)) return pageSegments
+    return [categorySeg, ...pageSegments]
   }
   const walk = (pages, categorySeg) => {
     for (const p of pages || []) {
-      const segments = normalizedSegmentsFor(p, categorySeg)
+      const segments = expansionSegmentsFor(p, categorySeg)
       // Synthetic/empty-parent nodes have no content. Never let one win a bare
       // single-segment slug (e.g. a placeholder `…/vercel-flags/cli` claiming
       // `cli`), or it squats the slug a real overview page wants and ReadMe
