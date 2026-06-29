@@ -1,5 +1,10 @@
 const H1_RE = /^#\s+(.+)$/
 const H2_RE = /^##\s+(.+)$/
+const H3_RE = /^###\s+(.+)$/
+
+// Max items per section before we consider it "oversized" for usability purposes.
+// Mirrors the cap in usableSections() in import.js.
+const MAX_SECTION_ITEMS = 200
 // Any line whose meaningful content is a markdown link. Accepts:
 //   - Standard list rows:           `- [text](url)`, `* [text](url) — desc`
 //   - Bare link lines:              `[text](url)`
@@ -39,6 +44,21 @@ export function analyzeLlmsTxt(body, llmsUrl, options = {}) {
 }
 
 export function parseLlmsTxt(body, llmsUrl, options = {}) {
+  const h2Result = parseSections(body, llmsUrl, H2_RE, options)
+
+  const allOversized = h2Result.sections.length === 0 ||
+    h2Result.sections.every((s) => s.items.length > MAX_SECTION_ITEMS)
+  if (allOversized && /^###\s/m.test(body)) {
+    const h3Result = parseSections(body, llmsUrl, H3_RE, options)
+    if (h3Result.sections.length > 1) {
+      return { ...h3Result, h3Fallback: true }
+    }
+  }
+
+  return h2Result
+}
+
+function parseSections(body, llmsUrl, sectionRe, options = {}) {
   const lines = body.split(/\r?\n/)
   let title = null
   const sections = []
@@ -51,9 +71,9 @@ export function parseLlmsTxt(body, llmsUrl, options = {}) {
       continue
     }
 
-    const h2 = line.match(H2_RE)
-    if (h2) {
-      current = { title: h2[1].trim(), items: [] }
+    const sectionMatch = line.match(sectionRe)
+    if (sectionMatch) {
+      current = { title: sectionMatch[1].trim(), items: [] }
       sections.push(current)
       continue
     }

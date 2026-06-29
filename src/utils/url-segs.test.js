@@ -26,6 +26,14 @@ test('stripSegmentExtensions: strips .mdx', () => {
   assert.equal(stripSegmentExtensions('page.mdx'), 'page')
 })
 
+test('stripSegmentExtensions: strips .txt', () => {
+  assert.equal(stripSegmentExtensions('terminal.txt'), 'terminal')
+})
+
+test('stripSegmentExtensions: leaves bare txt segment untouched (no dot prefix)', () => {
+  assert.equal(stripSegmentExtensions('txt'), 'txt')
+})
+
 test('stripSegmentExtensions: leaves plain segments untouched', () => {
   assert.equal(stripSegmentExtensions('quickstart'), 'quickstart')
 })
@@ -82,6 +90,13 @@ test('urlTrieSegs: plain URL without extension passes through', () => {
 
 test('urlTrieSegs: returns null on unparseable input', () => {
   assert.equal(urlTrieSegs('not-a-url'), null)
+})
+
+test('urlTrieSegs: .txt segment strips extension (warp.dev pattern)', () => {
+  assert.deepEqual(
+    urlTrieSegs('https://docs.warp.dev/_llms-txt/terminal.txt'),
+    ['_llms-txt', 'terminal'],
+  )
 })
 
 // ---------------------------------------------------------------------------
@@ -154,6 +169,13 @@ test('normalizePath: falls back for unparseable input', () => {
   assert.equal(normalizePath('not-a-url'), 'not-a-url')
 })
 
+test('normalizePath: strips .txt extension (warp.dev pattern)', () => {
+  assert.equal(
+    normalizePath('https://docs.warp.dev/_llms-txt/terminal.txt'),
+    '/_llms-txt/terminal',
+  )
+})
+
 // ---------------------------------------------------------------------------
 // llmsPageDedupeKey — llms.txt page-row deduplication
 // ---------------------------------------------------------------------------
@@ -189,6 +211,7 @@ test('llmsPageDedupeKey: ignores fragments but preserves router query state', ()
 test('llmsPageDedupeKey: collapses doc URL spellings for the same page', () => {
   const bare = llmsPageDedupeKey('https://example.com/docs/get-started')
   assert.equal(llmsPageDedupeKey('https://example.com/docs/get-started.md'), bare)
+  assert.equal(llmsPageDedupeKey('https://example.com/docs/get-started.txt'), bare)
   assert.equal(llmsPageDedupeKey('https://example.com/docs/get-started/index.html'), bare)
   assert.equal(llmsPageDedupeKey('https://example.com/docs/get-started/'), bare)
 })
