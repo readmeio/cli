@@ -72,6 +72,31 @@ export function normalizePath(url) {
   }
 }
 
+/**
+ * Dedupe key for llms.txt page rows only.
+ *
+ * Invariants:
+ * - includes origin so same-path docs on different hosts stay distinct
+ * - collapses doc URL spellings for the same page tail (.md/.mdx/.html/.htm, /index, trailing slash)
+ * - preserves query params because some docs routers encode page state there
+ * - ignores fragments because they identify anchors within a page, not separate import pages
+ */
+export function llmsPageDedupeKey(url) {
+  try {
+    const u = new URL(url)
+    let p = u.pathname.replace(/\/$/, '').toLowerCase()
+    p = p.replace(/(\.(md|mdx|html?))+$/i, '')
+    p = p.replace(/\/index$/i, '')
+
+    const params = [...u.searchParams.entries()].sort(([ak, av], [bk, bv]) => (ak === bk ? av.localeCompare(bv) : ak.localeCompare(bk)))
+    const query = params.length > 0 ? `?${params.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&')}` : ''
+
+    return `${u.origin.toLowerCase()}${p || '/'}${query}`
+  } catch {
+    return String(url).toLowerCase()
+  }
+}
+
 export function compareCanonicalUrlPreference(a, b) {
   const aRank = canonicalUrlPreferenceRank(a)
   const bRank = canonicalUrlPreferenceRank(b)

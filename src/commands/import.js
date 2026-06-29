@@ -11,7 +11,7 @@ import { syncOas } from './oas-sync.js'
 import OASNormalize from 'oas-normalize'
 import { slotOrphansPrompt, iconizeNavPrompt, organizeFromSectionsPrompt, organizeFromScratchPrompt, stripCodeFences } from '../prompts/index.js'
 import { analyzeLlmsTxt } from '../utils/llms.js'
-import { urlTrieSegs, extractUrlPathSegments, normalizePath, stripSegmentExtensions, compareCanonicalUrlPreference } from '../utils/url-segs.js'
+import { urlTrieSegs, extractUrlPathSegments, normalizePath, stripSegmentExtensions, compareCanonicalUrlPreference, llmsPageDedupeKey } from '../utils/url-segs.js'
 
 export const command = 'import'
 export const order = 7
@@ -3421,6 +3421,10 @@ function pathToLlmsUrl(origin, path) {
   return `${origin}${path}/llms.txt`
 }
 
+function llmsParseOptionsForUrl(llmsUrl) {
+  return { rootRelativeResolution: llmsPathFromUrl(llmsUrl) === '/' ? 'origin' : 'llms-dir' }
+}
+
 /**
  * Derive the path a fetched llms.txt "lives at" (its pathname minus the
  * trailing `/llms.txt`), so explicit-link hits carry the same `path` shape
@@ -3528,7 +3532,7 @@ async function discoverLlmsTxt(sourceUrl) {
     const results = await Promise.all(
       ring.map(async (path) => {
         const llmsUrl = pathToLlmsUrl(sourceUrl.origin, path)
-        const res = await fetchLlmsTxt(llmsUrl)
+        const res = await fetchLlmsTxt(llmsUrl, llmsParseOptionsForUrl(llmsUrl))
         return { path, llmsUrl, res }
       }),
     )
@@ -3584,7 +3588,7 @@ async function discoverLlmsTxt(sourceUrl) {
     }
     if (ring.length === 0) break
 
-    const results = await Promise.all(ring.map(async (llmsUrl) => ({ llmsUrl, res: await fetchLlmsTxt(llmsUrl) })))
+    const results = await Promise.all(ring.map(async (llmsUrl) => ({ llmsUrl, res: await fetchLlmsTxt(llmsUrl, llmsParseOptionsForUrl(llmsUrl)) })))
 
     const next = []
     for (const { llmsUrl, res } of results) {
@@ -3629,7 +3633,7 @@ function mergeValidHits(hits) {
     for (const section of hit.parsed.sections) {
       const items = []
       for (const item of section.items) {
-        const key = normalizePath(item.url)
+        const key = llmsPageDedupeKey(item.url)
         const existing = claimed.get(key)
         if (existing) {
           if (compareCanonicalUrlPreference(item.url, existing.url) < 0) existing.url = item.url
@@ -3669,7 +3673,7 @@ function mergeValidHits(hits) {
 /**
  * Best-effort fetch of a site's /llms.txt plus a simple structural usability check.
  */
-async function fetchLlmsTxt(llmsUrl) {
+async function fetchLlmsTxt(llmsUrl, options = {}) {
   try {
     const res = await fetch(llmsUrl, {
       redirect: 'follow',
@@ -3677,7 +3681,7 @@ async function fetchLlmsTxt(llmsUrl) {
     })
     if (!res.ok) return { ok: false, status: res.status }
     const text = await res.text()
-    const analysis = analyzeLlmsTxt(text, llmsUrl)
+    const analysis = analyzeLlmsTxt(text, llmsUrl, options)
     return {
       ok: true,
       status: res.status,
@@ -4375,6 +4379,8 @@ function makeIconPicker() {
     return icon
   }
 }
+
+export const __test__ = { discoverLlmsTxt, mergeValidHits }
 
 function formatDuration(ms) {
   const safe = Math.max(0, ms)

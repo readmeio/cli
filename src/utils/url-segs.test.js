@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { stripSegmentExtensions, urlTrieSegs, extractUrlPathSegments, normalizePath, compareCanonicalUrlPreference } from './url-segs.js'
+import { stripSegmentExtensions, urlTrieSegs, extractUrlPathSegments, normalizePath, compareCanonicalUrlPreference, llmsPageDedupeKey } from './url-segs.js'
 
 // ---------------------------------------------------------------------------
 // stripSegmentExtensions
@@ -152,6 +152,45 @@ test('normalizePath: lowercases result', () => {
 
 test('normalizePath: falls back for unparseable input', () => {
   assert.equal(normalizePath('not-a-url'), 'not-a-url')
+})
+
+// ---------------------------------------------------------------------------
+// llmsPageDedupeKey — llms.txt page-row deduplication
+// ---------------------------------------------------------------------------
+
+test('llmsPageDedupeKey: includes origin so same paths on different hosts stay distinct', () => {
+  assert.notEqual(
+    llmsPageDedupeKey('https://docs.example.com/docs/get-started.md'),
+    llmsPageDedupeKey('https://example.com/docs/get-started.md'),
+  )
+})
+
+test('llmsPageDedupeKey: preserves query params by default', () => {
+  assert.notEqual(
+    llmsPageDedupeKey('https://example.com/docs/search?product=api'),
+    llmsPageDedupeKey('https://example.com/docs/search?product=sdk'),
+  )
+})
+
+test('llmsPageDedupeKey: normalizes query param order', () => {
+  assert.equal(
+    llmsPageDedupeKey('https://example.com/docs/search?b=2&a=1'),
+    llmsPageDedupeKey('https://example.com/docs/search?a=1&b=2'),
+  )
+})
+
+test('llmsPageDedupeKey: ignores fragments but preserves router query state', () => {
+  assert.equal(
+    llmsPageDedupeKey('https://example.com/docs/get-started.md?tab=js#install'),
+    llmsPageDedupeKey('https://example.com/docs/get-started?tab=js#auth'),
+  )
+})
+
+test('llmsPageDedupeKey: collapses doc URL spellings for the same page', () => {
+  const bare = llmsPageDedupeKey('https://example.com/docs/get-started')
+  assert.equal(llmsPageDedupeKey('https://example.com/docs/get-started.md'), bare)
+  assert.equal(llmsPageDedupeKey('https://example.com/docs/get-started/index.html'), bare)
+  assert.equal(llmsPageDedupeKey('https://example.com/docs/get-started/'), bare)
 })
 
 // ---------------------------------------------------------------------------
