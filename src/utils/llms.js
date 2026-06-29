@@ -40,6 +40,7 @@ export function analyzeLlmsTxt(body, llmsUrl) {
 
 export function parseLlmsTxt(body, llmsUrl) {
   const lines = body.split(/\r?\n/)
+  const resolveRootRelativeFromLlmsDir = shouldResolveRootRelativeFromLlmsDir(lines, llmsUrl)
   let title = null
   const sections = []
   let current = null
@@ -58,7 +59,7 @@ export function parseLlmsTxt(body, llmsUrl) {
       continue
     }
 
-    const item = parseListLink(line, llmsUrl)
+    const item = parseListLink(line, llmsUrl, resolveRootRelativeFromLlmsDir)
     if (!item) continue
 
     if (!current) {
@@ -119,12 +120,12 @@ function classifyLines(body) {
   return { conforming, nonConforming, total, ratio }
 }
 
-function parseListLink(line, llmsUrl) {
+function parseListLink(line, llmsUrl, resolveRootRelativeFromLlmsDir = false) {
   const match = line.match(LINK_LINE_RE)
   if (!match) return null
 
   const [, prefix, text, rawUrl, trailingDesc] = match
-  const url = normalizeUrl(rawUrl, llmsUrl)
+  const url = normalizeUrl(rawUrl, llmsUrl, resolveRootRelativeFromLlmsDir)
   if (!url) return null
 
   // Prefer an explicit trailing description (`[text](url) — desc`); fall back
@@ -139,15 +140,73 @@ function parseListLink(line, llmsUrl) {
   }
 }
 
-function normalizeUrl(rawUrl, llmsUrl) {
+function normalizeUrl(rawUrl, llmsUrl, resolveRootRelativeFromLlmsDir = false) {
   const trimmed = String(rawUrl || '').trim().replace(/[.,;]+$/, '')
   if (!trimmed || /^#/.test(trimmed) || /^(mailto|javascript):/i.test(trimmed)) return null
 
   try {
-    const url = llmsUrl ? new URL(trimmed, llmsUrl) : new URL(trimmed)
+    const url = llmsUrl ? new URL(resolveLlmsRelativeUrl(trimmed, llmsUrl, resolveRootRelativeFromLlmsDir), llmsUrl) : new URL(trimmed)
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
     return url.toString()
   } catch {
     return null
   }
+}
+
+function shouldResolveRootRelativeFromLlmsDir(lines, llmsUrl) {
+  const nestedPrefix = getLlmsNestedPrefix(llmsUrl)
+  if (!nestedPrefix) return false
+
+  let eligible = 0
+  let outsideNestedPrefix = 0
+
+  for (const line of lines) {
+    const match = line.match(LINK_LINE_RE)
+    if (!match) continue
+
+    const rawUrl = String(match[3] || '').trim().replace(/[.,;]+$/, '')
+    if (!isRootRelativeUrl(rawUrl)) continue
+
+    try {
+      const resolved = new URL(rawUrl, llmsUrl)
+      eligible++
+      if (!isPathWithinPrefix(resolved.pathname, nestedPrefix)) outsideNestedPrefix++
+    } catch {
+      // Invalid links are ignored by normalizeUrl too.
+    }
+  }
+
+  return eligible > 0 && outsideNestedPrefix / eligible > 0.5
+}
+
+function resolveLlmsRelativeUrl(trimmed, llmsUrl, resolveRootRelativeFromLlmsDir) {
+  if (!resolveRootRelativeFromLlmsDir || !isRootRelativeUrl(trimmed)) return trimmed
+
+  const nestedPrefix = getLlmsNestedPrefix(llmsUrl)
+  if (!nestedPrefix) return trimmed
+
+  const normallyResolved = new URL(trimmed, llmsUrl)
+  if (isPathWithinPrefix(normallyResolved.pathname, nestedPrefix)) return trimmed
+
+  return `.${trimmed}`
+}
+
+function getLlmsNestedPrefix(llmsUrl) {
+  if (!llmsUrl) return null
+
+  try {
+    const pathname = new URL(llmsUrl).pathname
+    const dir = pathname.replace(/llms\.txt$/i, '').replace(/\/+$/, '/')
+    return dir === '/' ? null : dir
+  } catch {
+    return null
+  }
+}
+
+function isRootRelativeUrl(rawUrl) {
+  return /^\/(?!\/)/.test(rawUrl)
+}
+
+function isPathWithinPrefix(pathname, prefix) {
+  return pathname === prefix.replace(/\/$/, '') || pathname.startsWith(prefix)
 }

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { stripSegmentExtensions, urlTrieSegs, extractUrlPathSegments, normalizePath } from './url-segs.js'
+import { stripSegmentExtensions, urlTrieSegs, extractUrlPathSegments, normalizePath, compareCanonicalUrlPreference } from './url-segs.js'
 
 // ---------------------------------------------------------------------------
 // stripSegmentExtensions
@@ -139,10 +139,39 @@ test('normalizePath: trailing slash and bare path produce same key', () => {
   assert.equal(a, b)
 })
 
+test('normalizePath: index variants and bare path produce same key', () => {
+  const bare = normalizePath('https://example.com/docs/get-started')
+  assert.equal(normalizePath('https://example.com/docs/get-started/'), bare)
+  assert.equal(normalizePath('https://example.com/docs/get-started/index.html'), bare)
+  assert.equal(normalizePath('https://example.com/docs/get-started/index.htm'), bare)
+})
+
 test('normalizePath: lowercases result', () => {
   assert.equal(normalizePath('https://example.com/Docs/QuickStart'), '/docs/quickstart')
 })
 
 test('normalizePath: falls back for unparseable input', () => {
   assert.equal(normalizePath('not-a-url'), 'not-a-url')
+})
+
+// ---------------------------------------------------------------------------
+// compareCanonicalUrlPreference — retained URL selection
+// ---------------------------------------------------------------------------
+
+test('compareCanonicalUrlPreference: prefers md over txt, bare, trailing slash, and index', () => {
+  const urls = [
+    'https://example.com/docs/get-started/index.html',
+    'https://example.com/docs/get-started/',
+    'https://example.com/docs/get-started',
+    'https://example.com/docs/get-started.txt',
+    'https://example.com/docs/get-started.md',
+  ]
+
+  assert.deepEqual([...urls].sort(compareCanonicalUrlPreference), [
+    'https://example.com/docs/get-started.md',
+    'https://example.com/docs/get-started.txt',
+    'https://example.com/docs/get-started',
+    'https://example.com/docs/get-started/',
+    'https://example.com/docs/get-started/index.html',
+  ])
 })

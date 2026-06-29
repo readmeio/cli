@@ -56,17 +56,40 @@ export function extractUrlPathSegments(url) {
 
 /**
  * Normalise a URL to a canonical path key for deduplication. Strips trailing
- * slash, strips all chained doc-file extensions from the path tail, and
- * lowercases — so `/foo/bar.html.md`, `/foo/bar.html`, and `/foo/bar` all
- * resolve to the same key `/foo/bar`.
+ * slash, strips all chained doc-file extensions from the path tail, drops a
+ * trailing `index`, and lowercases — so `/foo/bar.html.md`, `/foo/bar.html`,
+ * `/foo/bar/index.html`, and `/foo/bar` all resolve to the same key `/foo/bar`.
  */
 export function normalizePath(url) {
   try {
     const u = new URL(url)
     let p = u.pathname.replace(/\/$/, '').toLowerCase()
     p = p.replace(/(\.(md|mdx|html?))+$/i, '')
-    return p
+    p = p.replace(/\/index$/i, '')
+    return p || '/'
   } catch {
     return String(url).toLowerCase()
+  }
+}
+
+export function compareCanonicalUrlPreference(a, b) {
+  const aRank = canonicalUrlPreferenceRank(a)
+  const bRank = canonicalUrlPreferenceRank(b)
+  if (aRank !== bRank) return aRank - bRank
+  return String(a || '').length - String(b || '').length
+}
+
+function canonicalUrlPreferenceRank(url) {
+  try {
+    const pathname = new URL(url).pathname
+    const lower = pathname.toLowerCase()
+    if (/\.md$/.test(lower)) return 0
+    if (/\.txt$/.test(lower)) return 1
+    if (!/\/$/.test(pathname) && !/\/index\.html?$/.test(lower) && !/\.[^/]+$/.test(lower)) return 2
+    if (/\/$/.test(pathname)) return 3
+    if (/\/index\.html?$/.test(lower)) return 4
+    return 5
+  } catch {
+    return 5
   }
 }
