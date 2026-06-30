@@ -4265,7 +4265,7 @@ function buildFrontmatter(topDir, page, slug, pickIcon, opts = {}) {
  * //   <Overview (Guides)>          => 'guides-overview',            // expanded (collides)
  * // }
  */
-function ensureUniqueSlugs(categories) {
+export function ensureUniqueSlugs(categories) {
   const entries = []
   const segmentsFor = (p) => {
     if (p._virtualPathSegs && p._virtualPathSegs.length > 0) {
@@ -4275,10 +4275,18 @@ function ensureUniqueSlugs(categories) {
     }
     return extractUrlPathSegments(p.url)
   }
+  const normalizedSegmentsFor = (p) => {
+    const semanticSegments = segmentsFor(p).filter((seg) => !isGenericDocsSegment(seg))
+    return semanticSegments.length > 0 ? semanticSegments : ['introduction']
+  }
+  const expansionSegmentsFor = (p, categorySeg) => {
+    const pageSegments = normalizedSegmentsFor(p)
+    if (!categorySeg || isGenericDocsSegment(categorySeg)) return pageSegments
+    return [categorySeg, ...pageSegments]
+  }
   const walk = (pages, categorySeg) => {
     for (const p of pages || []) {
-      const urlSegs = segmentsFor(p)
-      const segments = categorySeg ? [categorySeg, ...urlSegs] : urlSegs
+      const segments = expansionSegmentsFor(p, categorySeg)
       // Synthetic/empty-parent nodes have no content. Never let one win a bare
       // single-segment slug (e.g. a placeholder `…/vercel-flags/cli` claiming
       // `cli`), or it squats the slug a real overview page wants and ReadMe
@@ -4288,7 +4296,12 @@ function ensureUniqueSlugs(categories) {
       if (p.pages) walk(p.pages, categorySeg)
     }
   }
-  for (const c of categories || []) {
+  const genericCategoriesFirst = [...(categories || [])].sort((a, b) => {
+    const aGeneric = isGenericDocsSegment(a?.title || '')
+    const bGeneric = isGenericDocsSegment(b?.title || '')
+    return Number(bGeneric) - Number(aGeneric)
+  })
+  for (const c of genericCategoriesFirst) {
     const rawTitle = (c?.title || '').trim()
     const categorySeg = rawTitle ? kebabCase(rawTitle) : ''
     walk(c.pages, categorySeg)
@@ -4343,6 +4356,11 @@ function ensureUniqueSlugs(categories) {
     result.set(e.page, slug)
   }
   return result
+}
+
+const GENERIC_DOCS_SEGMENTS = new Set(['doc', 'docs', 'documentation', 'documentations'])
+function isGenericDocsSegment(segment) {
+  return GENERIC_DOCS_SEGMENTS.has(kebabCase(segment))
 }
 
 // Values YAML interprets as non-strings need quoting when used as _order entries.
