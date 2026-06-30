@@ -29,8 +29,8 @@ const FENCE_RE = /^\s*(?:```|~~~)/
 const RATIO_CHECK_MIN_LINKS = 10
 const MIN_CONFORMING_RATIO = 0.7
 
-export function analyzeLlmsTxt(body, llmsUrl) {
-  const parsed = parseLlmsTxt(body, llmsUrl)
+export function analyzeLlmsTxt(body, llmsUrl, options = {}) {
+  const parsed = parseLlmsTxt(body, llmsUrl, options)
   const lineStats = classifyLines(body)
   const linkItems = parsed.sections.reduce((sum, s) => sum + s.items.length, 0)
   const reason = getSkipReason(body, linkItems, lineStats)
@@ -43,8 +43,8 @@ export function analyzeLlmsTxt(body, llmsUrl) {
   }
 }
 
-export function parseLlmsTxt(body, llmsUrl) {
-  const h2Result = parseSections(body, llmsUrl, H2_RE)
+export function parseLlmsTxt(body, llmsUrl, options = {}) {
+  const h2Result = parseSections(body, llmsUrl, H2_RE, options)
 
   // If every H2 section is oversized (or there are none), and the file has H3
   // headings, re-parse treating H3 (###) as section boundaries.
@@ -52,7 +52,7 @@ export function parseLlmsTxt(body, llmsUrl) {
   const allOversized = h2Result.sections.length === 0 ||
     h2Result.sections.every((s) => s.items.length > MAX_SECTION_ITEMS)
   if (allOversized && /^###\s/m.test(body)) {
-    const h3Result = parseSections(body, llmsUrl, H3_RE)
+    const h3Result = parseSections(body, llmsUrl, H3_RE, options)
     if (h3Result.sections.length > 1) {
       return { ...h3Result, h3Fallback: true }
     }
@@ -61,7 +61,7 @@ export function parseLlmsTxt(body, llmsUrl) {
   return h2Result
 }
 
-function parseSections(body, llmsUrl, sectionRe) {
+function parseSections(body, llmsUrl, sectionRe, options = {}) {
   const lines = body.split(/\r?\n/)
   let title = null
   const sections = []
@@ -81,7 +81,7 @@ function parseSections(body, llmsUrl, sectionRe) {
       continue
     }
 
-    const item = parseListLink(line, llmsUrl)
+    const item = parseListLink(line, llmsUrl, options)
     if (!item) continue
 
     if (!current) {
@@ -142,12 +142,12 @@ function classifyLines(body) {
   return { conforming, nonConforming, total, ratio }
 }
 
-function parseListLink(line, llmsUrl) {
+function parseListLink(line, llmsUrl, options = {}) {
   const match = line.match(LINK_LINE_RE)
   if (!match) return null
 
   const [, prefix, text, rawUrl, trailingDesc] = match
-  const url = normalizeUrl(rawUrl, llmsUrl)
+  const url = normalizeUrl(rawUrl, llmsUrl, options)
   if (!url) return null
 
   // Prefer an explicit trailing description (`[text](url) — desc`); fall back
@@ -162,15 +162,58 @@ function parseListLink(line, llmsUrl) {
   }
 }
 
-function normalizeUrl(rawUrl, llmsUrl) {
+function normalizeUrl(rawUrl, llmsUrl, options = {}) {
   const trimmed = String(rawUrl || '').trim().replace(/[.,;]+$/, '')
   if (!trimmed || /^#/.test(trimmed) || /^(mailto|javascript):/i.test(trimmed)) return null
 
   try {
-    const url = llmsUrl ? new URL(trimmed, llmsUrl) : new URL(trimmed)
+    const url = llmsUrl ? new URL(resolveLlmsRelativeUrl(trimmed, llmsUrl, options), llmsUrl) : new URL(trimmed)
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
     return url.toString()
   } catch {
     return null
   }
+}
+
+function resolveLlmsRelativeUrl(trimmed, llmsUrl, options) {
+  if (options.rootRelativeResolution !== 'llms-dir' || !isRootRelativeUrl(trimmed)) return trimmed
+
+  const nestedPrefix = getLlmsNestedPrefix(llmsUrl)
+  if (!nestedPrefix) return trimmed
+
+  const normallyResolved = new URL(trimmed, llmsUrl)
+  if (!shouldResolveRootRelativeFromLlmsDir(trimmed, normallyResolved.pathname, nestedPrefix)) return trimmed
+
+  return `.${trimmed}`
+}
+
+function shouldResolveRootRelativeFromLlmsDir(rawUrl, pathname, nestedPrefix) {
+  if (isPathWithinPrefix(pathname, nestedPrefix)) return false
+  if (/\/llms\.txt$/i.test(pathname)) return false
+
+  const lastSegment = pathname.split('/').pop() || ''
+  const ext = lastSegment.match(/\.([a-z0-9]+)$/i)?.[1]?.toLowerCase()
+  if (ext && !['htm', 'html', 'md', 'mdx'].includes(ext)) return false
+
+  return isRootRelativeUrl(rawUrl)
+}
+
+function getLlmsNestedPrefix(llmsUrl) {
+  if (!llmsUrl) return null
+
+  try {
+    const pathname = new URL(llmsUrl).pathname
+    const dir = pathname.replace(/llms\.txt$/i, '').replace(/\/+$/, '/')
+    return dir === '/' ? null : dir
+  } catch {
+    return null
+  }
+}
+
+function isRootRelativeUrl(rawUrl) {
+  return /^\/(?!\/)/.test(rawUrl)
+}
+
+function isPathWithinPrefix(pathname, prefix) {
+  return pathname === prefix.replace(/\/$/, '') || pathname.startsWith(prefix)
 }

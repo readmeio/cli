@@ -5,6 +5,106 @@ import { parseLlmsTxt, analyzeLlmsTxt } from './llms.js'
 const BASE = 'https://docs.example.com/llms.txt'
 
 // ---------------------------------------------------------------------------
+// parseLlmsTxt — root-relative resolution
+// ---------------------------------------------------------------------------
+
+test('parseLlmsTxt: root-relative links resolve from the origin by default', () => {
+  const parsed = parseLlmsTxt(
+    `# Example\n\n## Guides\n- [Overview](/overview.md)\n- [Install](/docs/install.md)\n`,
+    'https://example.com/docs/llms.txt',
+  )
+
+  const urls = parsed.sections[0].items.map((item) => item.url)
+  assert.deepEqual(urls, [
+    'https://example.com/overview.md',
+    'https://example.com/docs/install.md',
+  ])
+})
+
+test('parseLlmsTxt: explicit llms-dir policy resolves nested root-relative page links from the llms.txt directory', () => {
+  const parsed = parseLlmsTxt(
+    `# Example\n\n## Guides\n- [Overview](/overview.md)\n- [API](/api/reference.md)\n- [Absolute](https://example.com/reference/openapi.md)\n`,
+    'https://example.com/docs/llms.txt',
+    { rootRelativeResolution: 'llms-dir' },
+  )
+
+  const urls = parsed.sections[0].items.map((item) => item.url)
+  assert.deepEqual(urls, [
+    'https://example.com/docs/overview.md',
+    'https://example.com/docs/api/reference.md',
+    'https://example.com/reference/openapi.md',
+  ])
+})
+
+test('parseLlmsTxt: llms-dir policy preserves links already scoped to the llms.txt directory', () => {
+  const parsed = parseLlmsTxt(
+    `# Example\n\n## Guides\n- [Already scoped](/docs/reference.md)\n- [Deep already scoped](/docs/api/reference.md?version=1#auth)\n`,
+    'https://example.com/docs/llms.txt',
+    { rootRelativeResolution: 'llms-dir' },
+  )
+
+  const urls = parsed.sections[0].items.map((item) => item.url)
+  assert.deepEqual(urls, [
+    'https://example.com/docs/reference.md',
+    'https://example.com/docs/api/reference.md?version=1#auth',
+  ])
+})
+
+test('parseLlmsTxt: llms-dir policy does not rewrite explicit nested llms.txt links', () => {
+  const parsed = parseLlmsTxt(
+    `# Example\n\n## Guides\n- [API llms](/api/llms.txt)\n- [Docs API llms](/docs/api/llms.txt)\n`,
+    'https://example.com/docs/llms.txt',
+    { rootRelativeResolution: 'llms-dir' },
+  )
+
+  const urls = parsed.sections[0].items.map((item) => item.url)
+  assert.deepEqual(urls, [
+    'https://example.com/api/llms.txt',
+    'https://example.com/docs/api/llms.txt',
+  ])
+})
+
+test('parseLlmsTxt: llms-dir policy preserves root-scoped non-page files', () => {
+  const parsed = parseLlmsTxt(
+    `# Example\n\n## Guides\n- [Overview](/overview.md)\n- [OpenAPI](/reference/openapi.yaml)\n- [Image](/assets/logo.png)\n`,
+    'https://example.com/docs/llms.txt',
+    { rootRelativeResolution: 'llms-dir' },
+  )
+
+  const urls = parsed.sections[0].items.map((item) => item.url)
+  assert.deepEqual(urls, [
+    'https://example.com/docs/overview.md',
+    'https://example.com/reference/openapi.yaml',
+    'https://example.com/assets/logo.png',
+  ])
+})
+
+test('parseLlmsTxt: llms-dir policy handles query and hash page links', () => {
+  const parsed = parseLlmsTxt(
+    `# Example\n\n## Guides\n- [Overview](/overview.md?tab=js#install)\n- [No extension](/get-started?tab=js#install)\n- [Hash only](#local)\n`,
+    'https://example.com/docs/llms.txt',
+    { rootRelativeResolution: 'llms-dir' },
+  )
+
+  const urls = parsed.sections[0].items.map((item) => item.url)
+  assert.deepEqual(urls, [
+    'https://example.com/docs/overview.md?tab=js#install',
+    'https://example.com/docs/get-started?tab=js#install',
+  ])
+})
+
+test('parseLlmsTxt: malformed and unsupported links are ignored', () => {
+  const parsed = parseLlmsTxt(
+    `# Example\n\n## Guides\n- [Mail](mailto:test@example.com)\n- [JS](javascript:alert(1))\n- [OK](/ok.md)\n`,
+    'https://example.com/docs/llms.txt',
+    { rootRelativeResolution: 'llms-dir' },
+  )
+
+  const urls = parsed.sections[0].items.map((item) => item.url)
+  assert.deepEqual(urls, ['https://example.com/docs/ok.md'])
+})
+
+// ---------------------------------------------------------------------------
 // parseLlmsTxt — standard H2 sections
 // ---------------------------------------------------------------------------
 
@@ -63,8 +163,6 @@ function makeCouchbaseBody(sections, itemsPerSection) {
 const CB_SECTIONS = ['.NET Analytics SDK (1.0)', '.NET Entity Framework (1.0)', '.NET SDK (3.9)']
 
 test('parseLlmsTxt: falls back to H3 when single H2 section is oversized', () => {
-  // Build a body with one H2 containing 201 items so it trips the oversized threshold,
-  // then verify the H3 re-parse produces sensible sections.
   const manyItems = Array.from({ length: 201 }, (_, i) =>
     `- [Page ${i}](https://docs.example.com/page-${i})`
   ).join('\n')
@@ -93,7 +191,6 @@ test('parseLlmsTxt: falls back to H3 when single H2 section is oversized', () =>
 })
 
 test('parseLlmsTxt: Couchbase-style H3 structure produces one section per SDK', () => {
-  // 3 sections × 70 items = 210 items in the single H2 → oversized → H3 fallback
   const body = makeCouchbaseBody(CB_SECTIONS, 70)
   const result = parseLlmsTxt(body, 'https://docs.couchbase.com/llms.txt')
 

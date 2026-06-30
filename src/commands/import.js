@@ -11,7 +11,7 @@ import { syncOas } from './oas-sync.js'
 import OASNormalize from 'oas-normalize'
 import { slotOrphansPrompt, iconizeNavPrompt, organizeFromSectionsPrompt, organizeFromScratchPrompt, stripCodeFences } from '../prompts/index.js'
 import { analyzeLlmsTxt } from '../utils/llms.js'
-import { urlTrieSegs, extractUrlPathSegments, normalizePath, stripSegmentExtensions } from '../utils/url-segs.js'
+import { urlTrieSegs, extractUrlPathSegments, normalizePath, stripSegmentExtensions, compareCanonicalUrlPreference, llmsPageDedupeKey } from '../utils/url-segs.js'
 
 export const command = 'import'
 export const order = 7
@@ -444,14 +444,13 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
     // Dedupe llms.txt entries by pathname. Some sites (zod.dev, fumadocs) list
     // every in-page anchor as its own llms.txt row (`/v4?id=wrapping-up`,
     // `/v4?id=metadata`, …) even though they all live on one rendered page.
-    // We prefer the "cleanest" URL per path — the shortest one, which is
-    // usually the one without a query string or hash. Asset/meta filtering
-    // already happened upstream on llms.parsed.sections.
+    // Prefer direct markdown source forms over shorter rendered URLs because
+    // they are better import sources for downstream content fetching.
     const byKnownPath = new Map()
     for (const p of rawKnownUrls) {
       const key = normalizePath(p.url)
       const prev = byKnownPath.get(key)
-      if (!prev || p.url.length < prev.url.length) byKnownPath.set(key, p)
+      if (!prev || compareCanonicalUrlPreference(p.url, prev.url) < 0) byKnownPath.set(key, p)
     }
     knownUrls = Array.from(byKnownPath.values())
     const dropped = rawKnownUrls.length - knownUrls.length
@@ -3495,6 +3494,10 @@ function pathToLlmsUrl(origin, path) {
   return `${origin}${path}/llms.txt`
 }
 
+function llmsParseOptionsForUrl(llmsUrl) {
+  return { rootRelativeResolution: llmsPathFromUrl(llmsUrl) === '/' ? 'origin' : 'llms-dir' }
+}
+
 /**
  * Derive the path a fetched llms.txt "lives at" (its pathname minus the
  * trailing `/llms.txt`), so explicit-link hits carry the same `path` shape
@@ -3602,7 +3605,7 @@ async function discoverLlmsTxt(sourceUrl) {
     const results = await Promise.all(
       ring.map(async (path) => {
         const llmsUrl = pathToLlmsUrl(sourceUrl.origin, path)
-        const res = await fetchLlmsTxt(llmsUrl)
+        const res = await fetchLlmsTxt(llmsUrl, llmsParseOptionsForUrl(llmsUrl))
         return { path, llmsUrl, res }
       }),
     )
@@ -3658,7 +3661,7 @@ async function discoverLlmsTxt(sourceUrl) {
     }
     if (ring.length === 0) break
 
-    const results = await Promise.all(ring.map(async (llmsUrl) => ({ llmsUrl, res: await fetchLlmsTxt(llmsUrl) })))
+    const results = await Promise.all(ring.map(async (llmsUrl) => ({ llmsUrl, res: await fetchLlmsTxt(llmsUrl, llmsParseOptionsForUrl(llmsUrl)) })))
 
     const next = []
     for (const { llmsUrl, res } of results) {
@@ -3697,15 +3700,19 @@ function mergeValidHits(hits) {
   const deepestFirst = [...valid].sort((a, b) => b.path.length - a.path.length)
   const shallowestFirst = [...valid].sort((a, b) => a.path.length - b.path.length)
 
-  const claimed = new Set()
+  const claimed = new Map()
   const sections = []
   for (const hit of deepestFirst) {
     for (const section of hit.parsed.sections) {
       const items = []
       for (const item of section.items) {
-        const key = normalizePath(item.url)
-        if (claimed.has(key)) continue
-        claimed.add(key)
+        const key = llmsPageDedupeKey(item.url)
+        const existing = claimed.get(key)
+        if (existing) {
+          if (compareCanonicalUrlPreference(item.url, existing.url) < 0) existing.url = item.url
+          continue
+        }
+        claimed.set(key, item)
         items.push(item)
       }
       if (items.length > 0) sections.push({ title: section.title, items })
@@ -3739,7 +3746,7 @@ function mergeValidHits(hits) {
 /**
  * Best-effort fetch of a site's /llms.txt plus a simple structural usability check.
  */
-async function fetchLlmsTxt(llmsUrl) {
+async function fetchLlmsTxt(llmsUrl, options = {}) {
   try {
     const res = await fetch(llmsUrl, {
       redirect: 'follow',
@@ -3747,7 +3754,7 @@ async function fetchLlmsTxt(llmsUrl) {
     })
     if (!res.ok) return { ok: false, status: res.status }
     const text = await res.text()
-    const analysis = analyzeLlmsTxt(text, llmsUrl)
+    const analysis = analyzeLlmsTxt(text, llmsUrl, options)
     return {
       ok: true,
       status: res.status,
@@ -4445,6 +4452,8 @@ function makeIconPicker() {
     return icon
   }
 }
+
+export const __test__ = { discoverLlmsTxt, mergeValidHits }
 
 function formatDuration(ms) {
   const safe = Math.max(0, ms)
