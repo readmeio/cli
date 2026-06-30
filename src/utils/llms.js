@@ -46,6 +46,9 @@ export function analyzeLlmsTxt(body, llmsUrl, options = {}) {
 export function parseLlmsTxt(body, llmsUrl, options = {}) {
   const h2Result = parseSections(body, llmsUrl, H2_RE, options)
 
+  // If every H2 section is oversized (or there are none), and the file has H3
+  // headings, re-parse treating H3 (###) as section boundaries.
+  // For strange LLMS.txt formatting
   const allOversized = h2Result.sections.length === 0 ||
     h2Result.sections.every((s) => s.items.length > MAX_SECTION_ITEMS)
   if (allOversized && /^###\s/m.test(body)) {

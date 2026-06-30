@@ -144,6 +144,9 @@ test('parseLlmsTxt: items with no H2 fall into implicit Resources section', () =
 // parseLlmsTxt — H3 fallback
 // ---------------------------------------------------------------------------
 
+// Generates a Couchbase-style body: one H2 bucket, N H3 sub-sections each
+// with `itemsPerSection` pages. With itemsPerSection >= 68, the single H2
+// section exceeds MAX_SECTION_ITEMS (200) and triggers the H3 fallback.
 function makeCouchbaseBody(sections, itemsPerSection) {
   const lines = ['# Couchbase', '', '> Official Couchbase docs.', '', '## Docs', '']
   for (const title of sections) {
