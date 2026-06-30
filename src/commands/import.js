@@ -372,6 +372,9 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
     } else {
       styles.info(styles.dim(`Merged ${llms.sourceFiles.length} llms.txt files (root: ${llmsUrl}; aggregate ratio ${s.ratio.toFixed(2)}).`))
     }
+    if (llms.parsed.h3Fallback) {
+      styles.info(styles.dim(`H2 sections oversized — re-parsed using H3 (###) headings as section boundaries.`))
+    }
   }
 
   // Pre-extract changelog pages so AI / URL clustering / section-direct paths
@@ -395,6 +398,29 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
         `Pre-extracted ${extractedChangelog.length} changelog page${extractedChangelog.length === 1 ? '' : 's'} — bypassing organization, attaching as Changelog category at the end.`,
       ),
     )
+  }
+
+  // Dedupe items across llms.parsed.sections by URL (first occurrence wins).
+  // Some llms.txt files cross-reference the same page under multiple headings —
+  // feeding duplicate URLs into the organize step causes the same page to appear
+  // in multiple sidebar sections regardless of which path (direct, icons, full
+  // reorg) runs downstream.
+  if (llms) {
+    const seenItemUrls = new Set()
+    let deduped = 0
+    for (const section of llms.parsed.sections) {
+      const before = section.items.length
+      section.items = section.items.filter((item) => {
+        const key = normalizePath(item.url)
+        if (seenItemUrls.has(key)) return false
+        seenItemUrls.add(key)
+        return true
+      })
+      deduped += before - section.items.length
+    }
+    if (deduped > 0) {
+      styles.info(styles.dim(`Deduped ${deduped} cross-section duplicate URL${deduped === 1 ? '' : 's'} from llms.txt sections.`))
+    }
   }
 
   const dbgSuffix = `-${sourceUrl.hostname}`
@@ -474,6 +500,7 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
 
   let scraped
   let scrapeStart = Date.now()
+  const scrapeDiagnostics = {}
   if (mintlifyNav) {
     scraped = { title: mintlifyNav.title, categories: mintlifyNav.categories }
   } else if (archbeeNav) {
@@ -481,7 +508,8 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
   } else {
     styles.info(`Scraping sidebar nav from ${styles.bold(sourceUrl.toString())}${firecrawlKey ? ' ' + styles.dim('(via Firecrawl)') : ''}...`)
     scrapeStart = Date.now()
-    scraped = await timePhase('scrape nav', () => scrapeNavFromSite(sourceUrl.toString(), knownUrls, firecrawlKey))
+    scraped = await timePhase('scrape nav', () => scrapeNavFromSite(sourceUrl.toString(), knownUrls, firecrawlKey, scrapeDiagnostics))
+    if (!scraped) scrapeDiagnostics.reason ??= 'unknown'
   }
   if (debugSnapshots) {
     debugSnapshots[`02-scraped-raw${dbgSuffix}.json`] = scraped ? JSON.parse(JSON.stringify(scraped)) : null
@@ -495,6 +523,7 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
   // node because that's the one /docs page the scrape saw). Discard the
   // scrape and fall through to the llms.txt path, which uses URL-based
   // clustering when multiple files were merged.
+  let scrapeDiscardedForCoverage = false
   if (scraped && llms && knownUrls.length > 0) {
     const scrapedPages = scraped.categories.reduce((n, c) => n + countUrlPagesDeep(c.pages), 0)
     const coverage = scrapedPages / knownUrls.length
@@ -503,6 +532,7 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
         `Scrape covered ${styles.bold(Math.round(coverage * 100) + '%')} of llms.txt pages (need ≥75%) — discarding scrape and organizing from llms.txt.`,
       )
       scraped = null
+      scrapeDiscardedForCoverage = true
     }
   }
 
@@ -636,9 +666,31 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
   } else if (!llms && knownUrls.length === 0) {
     throw new Error(`No llms.txt or sitemap.xml and the sidebar scrape found no usable structure — can't import ${sourceUrl.toString()}.`)
   } else if (llms) {
-    styles.warning(`Couldn't extract a useful nav — falling back to llms.txt-based organization.`)
+    if (!scrapeDiscardedForCoverage) {
+      const d = scrapeDiagnostics || {}
+      if (d.reason === 'no-categories-round0') {
+        styles.warning(`Sidebar scrape found no nav structure on the round-0 fetch — falling back to llms.txt organization.`)
+      } else if (d.reason === 'below-threshold') {
+        styles.warning(
+          `Sidebar scrape below acceptance threshold (got ${d.categories} categor${d.categories === 1 ? 'y' : 'ies'}, ${d.matched} matched pages — need ${d.need}) — falling back to llms.txt organization.`,
+        )
+      } else {
+        styles.warning(`Sidebar scrape returned no usable nav — falling back to llms.txt organization.`)
+      }
+    }
   } else {
-    styles.warning(`Couldn't extract a useful nav — falling back to sitemap URL clustering.`)
+    if (!scrapeDiscardedForCoverage) {
+      const d = scrapeDiagnostics || {}
+      if (d.reason === 'no-categories-round0') {
+        styles.warning(`Sidebar scrape found no nav structure on the round-0 fetch — falling back to sitemap URL clustering.`)
+      } else if (d.reason === 'below-threshold') {
+        styles.warning(
+          `Sidebar scrape below acceptance threshold (got ${d.categories} categor${d.categories === 1 ? 'y' : 'ies'}, ${d.matched} matched pages — need ${d.need}) — falling back to sitemap URL clustering.`,
+        )
+      } else {
+        styles.warning(`Sidebar scrape returned no usable nav — falling back to sitemap URL clustering.`)
+      }
+    }
   }
   console.log()
 
@@ -1425,7 +1477,7 @@ function isMonotonicAlpha(titles) {
  * renders its sidebar server-side as <nav>/<aside> with <h*> section headers.
  * Returns null if coverage is too low to be useful.
  */
-async function scrapeNavFromSite(sourceUrl, knownPages, firecrawlKey) {
+async function scrapeNavFromSite(sourceUrl, knownPages, firecrawlKey, diagnostics = {}) {
   // Index known pages by normalized pathname so we can match nav hrefs against them.
   const byPath = new Map()
   for (const p of knownPages) byPath.set(normalizePath(p.url), p)
@@ -1561,7 +1613,10 @@ async function scrapeNavFromSite(sourceUrl, knownPages, firecrawlKey) {
   const r0Start = Date.now()
   await visit(sourceUrl)
   const r0Ms = Date.now() - r0Start
-  if (categoryOrder.length === 0) return null
+  if (categoryOrder.length === 0) {
+    diagnostics.reason = 'no-categories-round0'
+    return null
+  }
 
   // Round 1 (parallel): visit pages so each branch has a chance to expose
   // its sub-items. Sidebars on most docs sites auto-expand the current
@@ -1595,9 +1650,21 @@ async function scrapeNavFromSite(sourceUrl, knownPages, firecrawlKey) {
   // have llms.txt to compare against.
   const categories = categoryOrder.filter((c) => c.pages.length > 0)
   if (isDiscovery) {
-    if (categories.length < 1 || matched.size < 5) return null
+    if (categories.length < 1 || matched.size < 5) {
+      diagnostics.reason = 'below-threshold'
+      diagnostics.categories = categories.length
+      diagnostics.matched = matched.size
+      diagnostics.need = '≥1 category, ≥5 matched pages'
+      return null
+    }
   } else {
-    if (categories.length < 2 || matched.size < 10) return null
+    if (categories.length < 2 || matched.size < 10) {
+      diagnostics.reason = 'below-threshold'
+      diagnostics.categories = categories.length
+      diagnostics.matched = matched.size
+      diagnostics.need = '≥2 categories, ≥10 matched pages'
+      return null
+    }
   }
   return { title: null, categories }
 }
@@ -2935,8 +3002,10 @@ function usableSections(sections) {
 }
 
 function sectionsLookUsable(sections) {
-  if (!sections || sections.length > 40) return false
-  return usableSections(sections).length >= 3
+  const usable = usableSections(sections)
+  if (usable.length < 3) return false
+  const avg = usable.reduce((n, s) => n + s.items.length, 0) / usable.length
+  return avg >= 5 && avg <= 100
 }
 
 async function organizeWithClaude(parsed, model) {
@@ -3001,13 +3070,17 @@ async function organizeFromScratch(parsed, model) {
   // Rehydrate pages from the id references Claude returned.
   const expandedCategories = []
   const usedIds = new Set()
+  const usedUrls = new Set()
   for (const cat of raw.categories || []) {
     const pages = []
     for (const id of cat.pageIds || []) {
       const item = items[id]
       if (!item) continue // ignore out-of-range ids
       if (usedIds.has(id)) continue // ignore dupes
+      const normUrl = normalizePath(item.url)
+      if (usedUrls.has(normUrl)) continue // guard against same URL at different input indexes
       usedIds.add(id)
+      usedUrls.add(normUrl)
       pages.push({
         title: item.title,
         url: item.url,
