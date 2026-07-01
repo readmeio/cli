@@ -2,6 +2,11 @@ const H1_RE = /^#\s+(.+)$/
 const H2_RE = /^##\s+(.+)$/
 const H3_RE = /^###\s+(.+)$/
 
+// llms.txt might have a literal " (section)" marker to every
+// grouping heading (e.g. `## getting-started (section)`). It's internal
+// metadata, not part of the category name — strip it before it reaches the sidebar.
+const SECTION_MARKER_RE = /\s*\(section\)\s*$/i
+
 // Max items per section before we consider it "oversized" for usability purposes.
 // Mirrors the cap in usableSections() in import.js.
 const MAX_SECTION_ITEMS = 200
@@ -76,7 +81,7 @@ function parseSections(body, llmsUrl, sectionRe, options = {}) {
 
     const sectionMatch = line.match(sectionRe)
     if (sectionMatch) {
-      current = { title: sectionMatch[1].trim(), items: [] }
+      current = { title: sectionMatch[1].trim().replace(SECTION_MARKER_RE, '').trim(), items: [] }
       sections.push(current)
       continue
     }
