@@ -4326,15 +4326,11 @@ export function ensureUniqueSlugs(categories) {
       if (!groups.has(s)) groups.set(s, [])
       groups.get(s).push(e)
     }
-    for (const slug of reservedSlugs) {
-      if (!groups.has(slug)) groups.set(slug, [])
-      groups.get(slug).push({ reserved: true })
-    }
     let grew = false
-    for (const group of groups.values()) {
-      if (group.length < 2) continue
+    for (const [slug, group] of groups) {
+      if (group.length < 2 && !reservedSlugs.has(slug)) continue
       for (const e of group) {
-        if (!e.reserved && e.depth < e.segments.length) {
+        if (e.depth < e.segments.length) {
           e.depth++
           grew = true
         }
@@ -4345,21 +4341,31 @@ export function ensureUniqueSlugs(categories) {
 
   const describe = (x) => `"${x.page.title || '(untitled)'}"${x.page.url ? ` <${x.page.url}>` : ' (group-only)'}`
   const used = new Set(reservedSlugs)
+  const assignedPageSlugs = new Set()
   const result = new Map()
   for (const e of entries) {
     const base = slugFor(e)
     let slug = base
     if (used.has(slug)) {
+      const collidesWithCategory = reservedSlugs.has(slug)
+      const collidesWithPage = assignedPageSlugs.has(slug)
       let n = 2
       while (used.has(`${slug}-${n}`)) n++
       slug = `${base}-${n}`
-      styles.error(
-        `Slug collision after segment expansion: ${base} — falling back to ${slug} for ${describe(e)}. ` +
-        `Pages were deduped by path before organize and category titles are reserved, ` +
-        `so this indicates the organize step produced duplicates within a single category or a page/category collision with no expandable URL segments.`,
-      )
+
+      if (collidesWithCategory && !collidesWithPage) {
+        styles.warning(
+          `Page slug matches category slug after segment expansion: ${base} — using ${slug} for ${describe(e)}.`,
+        )
+      } else {
+        styles.error(
+          `Duplicate page slug after segment expansion: ${base} — falling back to ${slug} for ${describe(e)}. ` +
+          `Pages were deduped by path before organize, so this indicates the organize step produced duplicates within a single category.`,
+        )
+      }
     }
     used.add(slug)
+    assignedPageSlugs.add(slug)
     result.set(e.page, slug)
   }
   return result
