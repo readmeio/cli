@@ -70,6 +70,24 @@ test('ensureUniqueSlugs: generic docs category is assigned before non-generic ca
   assert.equal(slugs.get(aiPage), 'ai-getting-started')
 })
 
+test('ensureUniqueSlugs: category slugs are reserved when assigning page slugs', () => {
+  const page = { title: 'Capella Analytics', url: 'https://docs.couchbase.com/cloud/capella-analytics' }
+
+  assert.equal(
+    assignedSlug([{ title: 'Capella Analytics', pages: [page] }], page),
+    'cloud-capella-analytics',
+  )
+})
+
+test('ensureUniqueSlugs: page/category collisions without expandable URL segments use numeric fallback', () => {
+  const page = { title: 'API', url: 'https://example.com/api' }
+
+  assert.equal(
+    assignedSlug([{ title: 'API', pages: [page] }], page),
+    'api-2',
+  )
+})
+
 test('ensureUniqueSlugs: non-generic docs paths keep current base slug behavior', () => {
   const api = { title: 'API', url: 'https://example.com/docs/api' }
   const gettingStarted = { title: 'Getting Started', url: 'https://example.com/docs/getting-started' }

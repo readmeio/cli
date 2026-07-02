@@ -4267,6 +4267,7 @@ function buildFrontmatter(topDir, page, slug, pickIcon, opts = {}) {
  */
 export function ensureUniqueSlugs(categories) {
   const entries = []
+  const reservedSlugs = new Set()
   const segmentsFor = (p) => {
     if (p._virtualPathSegs && p._virtualPathSegs.length > 0) {
       return p._virtualPathSegs
@@ -4282,6 +4283,7 @@ export function ensureUniqueSlugs(categories) {
   const expansionSegmentsFor = (p, categorySeg) => {
     const pageSegments = normalizedSegmentsFor(p)
     if (!categorySeg || isGenericDocsSegment(categorySeg)) return pageSegments
+    if (pageSegments.length === 1 && pageSegments[0] === categorySeg) return pageSegments
     return [categorySeg, ...pageSegments]
   }
   const walk = (pages, categorySeg) => {
@@ -4304,6 +4306,7 @@ export function ensureUniqueSlugs(categories) {
   for (const c of genericCategoriesFirst) {
     const rawTitle = (c?.title || '').trim()
     const categorySeg = rawTitle ? kebabCase(rawTitle) : ''
+    if (categorySeg) reservedSlugs.add(categorySeg)
     walk(c.pages, categorySeg)
   }
 
@@ -4323,11 +4326,15 @@ export function ensureUniqueSlugs(categories) {
       if (!groups.has(s)) groups.set(s, [])
       groups.get(s).push(e)
     }
+    for (const slug of reservedSlugs) {
+      if (!groups.has(slug)) groups.set(slug, [])
+      groups.get(slug).push({ reserved: true })
+    }
     let grew = false
     for (const group of groups.values()) {
       if (group.length < 2) continue
       for (const e of group) {
-        if (e.depth < e.segments.length) {
+        if (!e.reserved && e.depth < e.segments.length) {
           e.depth++
           grew = true
         }
@@ -4337,7 +4344,7 @@ export function ensureUniqueSlugs(categories) {
   }
 
   const describe = (x) => `"${x.page.title || '(untitled)'}"${x.page.url ? ` <${x.page.url}>` : ' (group-only)'}`
-  const used = new Set()
+  const used = new Set(reservedSlugs)
   const result = new Map()
   for (const e of entries) {
     const base = slugFor(e)
@@ -4348,8 +4355,8 @@ export function ensureUniqueSlugs(categories) {
       slug = `${base}-${n}`
       styles.error(
         `Slug collision after segment expansion: ${base} — falling back to ${slug} for ${describe(e)}. ` +
-        `Pages were deduped by path before organize and category title is already part of the slug, ` +
-        `so this indicates the organize step produced duplicates within a single category.`,
+        `Pages were deduped by path before organize and category titles are reserved, ` +
+        `so this indicates the organize step produced duplicates within a single category or a page/category collision with no expandable URL segments.`,
       )
     }
     used.add(slug)
