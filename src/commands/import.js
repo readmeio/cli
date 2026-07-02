@@ -3336,14 +3336,14 @@ function narrowToDocsSubtreeIfNeeded(llms, sourceUrl, hits) {
  * enter the stub tree (skeleton has zero visibility of OAS files). The caller
  * downloads the returned URLs into the staged `oas/` dir.
  */
-function extractOasJsonUrlsFromParsed(parsed) {
-  const captured = []
+function dropParsedItems(parsed, shouldDrop) {
+  const dropped = []
   const keptSections = []
   for (const section of parsed.sections) {
     const keptItems = []
     for (const item of section.items) {
-      if (isOasJsonUrl(item.url)) {
-        captured.push({ url: item.url, text: item.text || null })
+      if (shouldDrop(item)) {
+        dropped.push(item)
         continue
       }
       keptItems.push(item)
@@ -3354,7 +3354,14 @@ function extractOasJsonUrlsFromParsed(parsed) {
     }
   }
   parsed.sections = keptSections
-  return captured
+  return dropped
+}
+
+function extractOasJsonUrlsFromParsed(parsed) {
+  return dropParsedItems(parsed, (item) => isOasJsonUrl(item.url)).map((item) => ({
+    url: item.url,
+    text: item.text || null,
+  }))
 }
 
 /**
@@ -3363,45 +3370,11 @@ function extractOasJsonUrlsFromParsed(parsed) {
  * items dropped.
  */
 function dropAssetItemsFromParsed(parsed) {
-  let dropped = 0
-  const keptSections = []
-  for (const section of parsed.sections) {
-    const keptItems = []
-    for (const item of section.items) {
-      if (isAssetOrMetaUrl(item.url)) {
-        dropped++
-        continue
-      }
-      keptItems.push(item)
-    }
-    if (keptItems.length > 0) {
-      section.items = keptItems
-      keptSections.push(section)
-    }
-  }
-  parsed.sections = keptSections
-  return dropped
+  return dropParsedItems(parsed, (item) => isAssetOrMetaUrl(item.url)).length
 }
 
 function dropExternalItemsFromParsed(parsed, allowedOrigins) {
-  let dropped = 0
-  const keptSections = []
-  for (const section of parsed.sections) {
-    const keptItems = []
-    for (const item of section.items) {
-      if (isExternalToAllowedOrigins(item.url, allowedOrigins)) {
-        dropped++
-        continue
-      }
-      keptItems.push(item)
-    }
-    if (keptItems.length > 0) {
-      section.items = keptItems
-      keptSections.push(section)
-    }
-  }
-  parsed.sections = keptSections
-  return dropped
+  return dropParsedItems(parsed, (item) => isExternalToAllowedOrigins(item.url, allowedOrigins)).length
 }
 
 /**
@@ -4511,7 +4484,7 @@ function makeIconPicker() {
   }
 }
 
-export const __test__ = { discoverLlmsTxt, mergeValidHits, dropExternalItemsFromParsed }
+export const __test__ = { discoverLlmsTxt, mergeValidHits, produceOrganizedForSource }
 
 function formatDuration(ms) {
   const safe = Math.max(0, ms)

@@ -26,32 +26,61 @@ function mergedItems(merged) {
   return merged.parsed.sections.flatMap((section) => section.items.map((item) => ({ text: item.text, url: item.url })))
 }
 
-test('llms drops external page links before organization', () => {
-  const parsed = {
-    sections: [
-      {
-        title: 'Guides',
-        items: [
-          { text: 'Overview', url: 'https://docs.example.com/overview.md' },
-          { text: 'Canonical', url: 'https://canonical-docs.example.com/install.md' },
-          { text: 'Platform Status', url: 'https://status.example.com/' },
-          { text: 'GitHub', url: 'https://github.com/example/project' },
-        ],
-      },
-      {
-        title: 'External Only',
-        items: [{ text: 'Support', url: 'https://support.example.com/' }],
-      },
-    ],
+function organizedPages(organized) {
+  const pages = []
+  const visit = (page) => {
+    pages.push(page)
+    for (const child of page.pages || []) visit(child)
   }
+  for (const category of organized.categories || []) {
+    for (const page of category.pages || []) visit(page)
+  }
+  return pages
+}
 
-  const dropped = __test__.dropExternalItemsFromParsed(parsed, new Set(['https://docs.example.com', 'https://canonical-docs.example.com']))
+test('llms import drops external page links before organization', async () => {
+  mockLlmsFetch({
+    'https://docs.example.com/llms.txt': `# Docs
 
-  assert.equal(dropped, 3)
-  assert.deepEqual(mergedItems({ parsed }), [
-    { text: 'Overview', url: 'https://docs.example.com/overview.md' },
-    { text: 'Canonical', url: 'https://canonical-docs.example.com/install.md' },
-  ])
+## Guides
+- [Overview](/overview.md)
+- [Install](/install.md)
+- [Configure](/configure.md)
+- [Deploy](/deploy.md)
+- [Operate](/operate.md)
+
+## Reference
+- [CLI](/cli.md)
+- [SDK](/sdk.md)
+- [API](/api.md)
+- [Auth](/auth.md)
+- [Webhooks](/webhooks.md)
+
+## Admin
+- [Users](/users.md)
+- [Teams](/teams.md)
+- [Billing](/billing.md)
+- [Audit Logs](/audit-logs.md)
+- [Settings](/settings.md)
+
+## External
+- [Platform Status](https://status.example.com/)
+- [GitHub](https://github.com/example/project)
+`,
+  })
+
+  const organized = await __test__.produceOrganizedForSource(
+    new URL('https://docs.example.com/'),
+    { model: 'test' },
+    async (_label, fn) => fn(),
+  )
+  const pages = organizedPages(organized)
+  const urls = pages.map((page) => page.url).filter(Boolean)
+
+  assert(urls.includes('https://docs.example.com/overview.md'))
+  assert(urls.includes('https://docs.example.com/cli.md'))
+  assert(!urls.some((url) => url.includes('status.example.com')))
+  assert(!urls.some((url) => url.includes('github.com/example/project')))
 })
 
 test('llms discovery and merge resolve nested files, dedupe canonical pages, and preserve distinct page states', async () => {
