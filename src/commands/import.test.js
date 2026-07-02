@@ -26,6 +26,34 @@ function mergedItems(merged) {
   return merged.parsed.sections.flatMap((section) => section.items.map((item) => ({ text: item.text, url: item.url })))
 }
 
+test('llms drops external page links before organization', () => {
+  const parsed = {
+    sections: [
+      {
+        title: 'Guides',
+        items: [
+          { text: 'Overview', url: 'https://docs.example.com/overview.md' },
+          { text: 'Canonical', url: 'https://canonical-docs.example.com/install.md' },
+          { text: 'Platform Status', url: 'https://status.example.com/' },
+          { text: 'GitHub', url: 'https://github.com/example/project' },
+        ],
+      },
+      {
+        title: 'External Only',
+        items: [{ text: 'Support', url: 'https://support.example.com/' }],
+      },
+    ],
+  }
+
+  const dropped = __test__.dropExternalItemsFromParsed(parsed, new Set(['https://docs.example.com', 'https://canonical-docs.example.com']))
+
+  assert.equal(dropped, 3)
+  assert.deepEqual(mergedItems({ parsed }), [
+    { text: 'Overview', url: 'https://docs.example.com/overview.md' },
+    { text: 'Canonical', url: 'https://canonical-docs.example.com/install.md' },
+  ])
+})
+
 test('llms discovery and merge resolve nested files, dedupe canonical pages, and preserve distinct page states', async () => {
   const seen = mockLlmsFetch({
     'https://example.com/docs/llms.txt': `# Docs\n\n## Index\n- [Guide llms](guide/llms.txt)\n- [API llms](https://example.com/docs/api/llms.txt)\n`,

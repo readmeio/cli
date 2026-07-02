@@ -304,6 +304,12 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
     if (dropped > 0) {
       styles.info(styles.dim(`Dropped ${dropped} asset/meta URL${dropped === 1 ? '' : 's'} (.yaml/.xml/.toml, llms*.txt) from llms.txt items.`))
     }
+
+    const allowedOrigins = new Set([sourceUrl.origin, ...(llms.sourceOrigins || [])])
+    const externalDropped = dropExternalItemsFromParsed(llms.parsed, allowedOrigins)
+    if (externalDropped > 0) {
+      styles.info(styles.dim(`Dropped ${externalDropped} external URL${externalDropped === 1 ? '' : 's'} from llms.txt items.`))
+    }
   }
 
   if (llms) {
@@ -3214,6 +3220,19 @@ function isOasJsonUrl(url) {
   }
 }
 
+function originOf(url) {
+  try {
+    return new URL(url).origin
+  } catch {
+    return null
+  }
+}
+
+function isExternalToAllowedOrigins(url, allowedOrigins) {
+  const origin = originOf(url)
+  return !origin || !allowedOrigins.has(origin)
+}
+
 // Immediate-child segments of root that signal a docs subtree on a
 // non-docs hostname. We deliberately keep the set tiny — over-matching
 // here (e.g. including `api`, `learn`) would over-filter sites whose
@@ -3364,6 +3383,26 @@ function dropAssetItemsFromParsed(parsed) {
   return dropped
 }
 
+function dropExternalItemsFromParsed(parsed, allowedOrigins) {
+  let dropped = 0
+  const keptSections = []
+  for (const section of parsed.sections) {
+    const keptItems = []
+    for (const item of section.items) {
+      if (isExternalToAllowedOrigins(item.url, allowedOrigins)) {
+        dropped++
+        continue
+      }
+      keptItems.push(item)
+    }
+    if (keptItems.length > 0) {
+      section.items = keptItems
+      keptSections.push(section)
+    }
+  }
+  parsed.sections = keptSections
+  return dropped
+}
 
 /**
  * Build the ordered list of well-known docs locations to probe. For each route
@@ -3740,6 +3779,7 @@ function mergeValidHits(hits) {
     stats,
     llmsUrl: shallowestFirst[0].llmsUrl,
     sourceFiles: shallowestFirst.map((h) => h.llmsUrl),
+    sourceOrigins: [...new Set(shallowestFirst.flatMap((h) => [originOf(h.llmsUrl), originOf(h.finalUrl)].filter(Boolean)))],
   }
 }
 
@@ -4471,7 +4511,7 @@ function makeIconPicker() {
   }
 }
 
-export const __test__ = { discoverLlmsTxt, mergeValidHits }
+export const __test__ = { discoverLlmsTxt, mergeValidHits, dropExternalItemsFromParsed }
 
 function formatDuration(ms) {
   const safe = Math.max(0, ms)
