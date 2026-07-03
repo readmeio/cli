@@ -83,6 +83,56 @@ test('llms import drops external page links before organization', async () => {
   assert(!urls.some((url) => url.includes('github.com/example/project')))
 })
 
+test('llms import preserves same-site docs origins before organization', async () => {
+  mockLlmsFetch({
+    'https://docs.example.com/llms.txt': `# Docs
+
+## Guides
+- [Overview](/overview.md)
+- [Install](/install.md)
+- [Quickstart](https://example.com/docs/quickstart.md)
+- [Tutorials](https://developers.example.com/tutorials.md)
+- [Learn](https://learn.example.com/docs/concepts.md)
+
+## API
+- [API Home](https://api.example.com/api-home.md)
+- [Authentication](https://api.example.com/authentication.md)
+- [Errors](https://api.example.com/errors.md)
+- [Pagination](https://api.example.com/pagination.md)
+- [Rate Limits](https://api.example.com/rate-limits.md)
+
+## Reference
+- [Reference Home](https://reference.example.com/home.md)
+- [Users](https://reference.example.com/users.md)
+- [Teams](https://reference.example.com/teams.md)
+- [Webhooks](https://reference.example.com/webhooks.md)
+- [SDKs](https://reference.example.com/sdks.md)
+
+## External
+- [Platform Status](https://status.example.com/)
+- [Blog](https://blog.example.com/launch)
+- [GitHub](https://github.com/example/project)
+`,
+  })
+
+  const organized = await __test__.produceOrganizedForSource(
+    new URL('https://docs.example.com/'),
+    { model: 'test' },
+    async (_label, fn) => fn(),
+  )
+  const urls = organizedPages(organized).map((page) => page.url).filter(Boolean)
+
+  assert(urls.includes('https://docs.example.com/overview.md'))
+  assert(urls.includes('https://example.com/docs/quickstart.md'))
+  assert(urls.includes('https://api.example.com/api-home.md'))
+  assert(urls.includes('https://developers.example.com/tutorials.md'))
+  assert(urls.includes('https://reference.example.com/home.md'))
+  assert(!urls.some((url) => url.includes('status.example.com')))
+  assert(!urls.some((url) => url.includes('blog.example.com')))
+  assert(!urls.some((url) => url.includes('github.com/example/project')))
+})
+
+
 test('llms discovery and merge resolve nested files, dedupe canonical pages, and preserve distinct page states', async () => {
   const seen = mockLlmsFetch({
     'https://example.com/docs/llms.txt': `# Docs\n\n## Index\n- [Guide llms](guide/llms.txt)\n- [API llms](https://example.com/docs/api/llms.txt)\n`,

@@ -305,8 +305,8 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
       styles.info(styles.dim(`Dropped ${dropped} asset/meta URL${dropped === 1 ? '' : 's'} (.yaml/.xml/.toml, llms*.txt) from llms.txt items.`))
     }
 
-    const allowedOrigins = new Set([sourceUrl.origin, ...(llms.sourceOrigins || [])])
-    const externalDropped = dropExternalItemsFromParsed(llms.parsed, allowedOrigins)
+    const boundary = createLlmsBoundary(sourceUrl, llms)
+    const externalDropped = dropExternalItemsFromParsed(llms.parsed, boundary)
     if (externalDropped > 0) {
       styles.info(styles.dim(`Dropped ${externalDropped} external URL${externalDropped === 1 ? '' : 's'} from llms.txt items.`))
     }
@@ -3228,9 +3228,46 @@ function originOf(url) {
   }
 }
 
-function isExternalToAllowedOrigins(url, allowedOrigins) {
-  const origin = originOf(url)
-  return !origin || !allowedOrigins.has(origin)
+const COMMON_SECOND_LEVEL_PUBLIC_SUFFIXES = new Set(['co.uk', 'com.au', 'com.br', 'com.mx', 'com.tr', 'co.jp', 'co.nz', 'co.za'])
+const DOCS_LIKE_HOST_LABELS = new Set(['api', 'apis', 'developer', 'developers', 'docs', 'doc', 'documentation', 'reference', 'references'])
+const DOCS_LIKE_PATH_SEGMENTS = new Set(['api', 'apis', 'api-reference', 'api-docs', 'developer', 'developers', 'docs', 'doc', 'documentation', 'guide', 'guides', 'learn', 'reference', 'references', 'tutorial', 'tutorials'])
+
+function siteKeyForHostname(hostname) {
+  const labels = hostname.toLowerCase().replace(/^www\./, '').split('.').filter(Boolean)
+  if (labels.length <= 2) return labels.join('.')
+  const suffix = labels.slice(-2).join('.')
+  if (COMMON_SECOND_LEVEL_PUBLIC_SUFFIXES.has(suffix) && labels.length >= 3) return labels.slice(-3).join('.')
+  return suffix
+}
+
+function isDocsLikeOriginOrPath(url) {
+  const hostLabels = url.hostname.toLowerCase().replace(/^www\./, '').split('.')
+  if (hostLabels.some((label) => DOCS_LIKE_HOST_LABELS.has(label) || /(?:^|-)(?:docs?|documentation|developers?|references?|api)(?:-|$)/.test(label))) {
+    return true
+  }
+
+  return url.pathname
+    .split('/')
+    .filter(Boolean)
+    .some((segment) => DOCS_LIKE_PATH_SEGMENTS.has(segment.toLowerCase()))
+}
+
+function createLlmsBoundary(sourceUrl, llms) {
+  return {
+    exactOrigins: new Set([sourceUrl.origin, ...(llms.sourceOrigins || [])]),
+    siteKey: siteKeyForHostname(sourceUrl.hostname),
+  }
+}
+
+function isExternalToLlmsBoundary(url, boundary) {
+  try {
+    const parsed = new URL(url)
+    if (boundary.exactOrigins.has(parsed.origin)) return false
+    if (siteKeyForHostname(parsed.hostname) === boundary.siteKey && isDocsLikeOriginOrPath(parsed)) return false
+    return true
+  } catch {
+    return true
+  }
 }
 
 // Immediate-child segments of root that signal a docs subtree on a
@@ -3373,8 +3410,8 @@ function dropAssetItemsFromParsed(parsed) {
   return dropParsedItems(parsed, (item) => isAssetOrMetaUrl(item.url)).length
 }
 
-function dropExternalItemsFromParsed(parsed, allowedOrigins) {
-  return dropParsedItems(parsed, (item) => isExternalToAllowedOrigins(item.url, allowedOrigins)).length
+function dropExternalItemsFromParsed(parsed, boundary) {
+  return dropParsedItems(parsed, (item) => isExternalToLlmsBoundary(item.url, boundary)).length
 }
 
 /**
@@ -3767,7 +3804,7 @@ async function fetchLlmsTxt(llmsUrl, options = {}) {
     })
     if (!res.ok) return { ok: false, status: res.status }
     const text = await res.text()
-    const analysis = analyzeLlmsTxt(text, llmsUrl, options)
+    const analysis = analyzeLlmsTxt(text, res.url || llmsUrl, options)
     return {
       ok: true,
       status: res.status,
