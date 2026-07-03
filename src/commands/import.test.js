@@ -14,10 +14,13 @@ function mockLlmsFetch(files) {
     const href = String(url)
     seen.push(href)
     if (!Object.hasOwn(files, href)) return new Response('', { status: 404 })
-    return new Response(files[href], {
+    const file = files[href]
+    const response = new Response(typeof file === 'string' ? file : file.body, {
       status: 200,
       headers: { 'content-type': 'text/plain' },
     })
+    if (typeof file !== 'string' && file.url) Object.defineProperty(response, 'url', { value: file.url })
+    return response
   }
   return seen
 }
@@ -132,6 +135,47 @@ test('llms import preserves same-site docs origins before organization', async (
   assert(!urls.some((url) => url.includes('github.com/example/project')))
 })
 
+test('redirected llms files resolve relative page links against the final canonical origin', async () => {
+  mockLlmsFetch({
+    'https://docs.example.com/llms.txt': {
+      url: 'https://canonical-docs.example.com/llms.txt',
+      body: `# Canonical Docs
+
+## Guides
+- [Overview](/overview.md)
+- [Install](/install.md)
+- [Configure](/configure.md)
+- [Deploy](/deploy.md)
+- [Operate](/operate.md)
+
+## Reference
+- [CLI](/cli.md)
+- [SDK](/sdk.md)
+- [API](/api.md)
+- [Auth](/auth.md)
+- [Webhooks](/webhooks.md)
+
+## Admin
+- [Users](/users.md)
+- [Teams](/teams.md)
+- [Billing](/billing.md)
+- [Audit Logs](/audit-logs.md)
+- [Settings](/settings.md)
+`,
+    },
+  })
+
+  const organized = await __test__.produceOrganizedForSource(
+    new URL('https://docs.example.com/'),
+    { model: 'test' },
+    async (_label, fn) => fn(),
+  )
+  const urls = organizedPages(organized).map((page) => page.url).filter(Boolean)
+
+  assert(urls.includes('https://canonical-docs.example.com/overview.md'))
+  assert(urls.includes('https://canonical-docs.example.com/cli.md'))
+  assert(!urls.includes('https://docs.example.com/overview.md'))
+})
 
 test('llms discovery and merge resolve nested files, dedupe canonical pages, and preserve distinct page states', async () => {
   const seen = mockLlmsFetch({
