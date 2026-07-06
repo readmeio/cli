@@ -3983,6 +3983,36 @@ function collapseRedundantLayers(container) {
   }
 }
 
+// Some sites serve regular guides under an /api/docs/* path (e.g. /api/docs/guides/*,
+// /api/docs/pricing). Treat a URL as real docs when it has both `api` and `docs` segments 
+// and the segment right after `docs` is not itself a reference/api slug.
+function isDocsUnderApiPath(url) {
+  try {
+    const segs = new URL(url).pathname.split('/').filter(Boolean).map((s) => s.toLowerCase())
+    const docsIdx = segs.findIndex((s) => s === 'docs' || s === 'doc')
+    if (!segs.includes('api') || docsIdx === -1) return false
+    const afterDocs = segs[docsIdx + 1]
+    return !afterDocs || !/^(api|api[-_]?reference|reference)$/.test(afterDocs)
+  } catch {
+    return false
+  }
+}
+
+// Prune a page tree, keeping only URL pages whose url passes `predicate` plus
+// empty-parent nodes that still have surviving descendants. Nesting preserved.
+function filterUrlPagesTree(pages, predicate) {
+  const out = []
+  for (const p of pages || []) {
+    const keptKids = filterUrlPagesTree(p.pages, predicate)
+    if (p.url) {
+      if (predicate(p.url)) out.push({ ...p, pages: keptKids })
+    } else if (keptKids.length > 0) {
+      out.push({ ...p, pages: keptKids })
+    }
+  }
+  return out
+}
+
 /**
  * Write the organized hierarchy to disk as git-format markdown stubs — just
  * frontmatter, no body yet. docs/ pages go under docs/<Category>/<slug>.md;
@@ -3998,13 +4028,23 @@ function stageOrganized(organized, stagingDir, opts = {}) {
   const skipApiReference = !!opts.skipApiReference
   const llmsPaths = opts.llmsPaths || new Set()
 
-  const eligibleCategories = (organized.categories || []).filter((cat) => {
+  const eligibleCategories = []
+  for (const cat of organized.categories || []) {
     if (skipApiReference && routeCategory(cat.title).topDir === 'reference') {
-      counts.skippedApiRef += countPagesDeep(cat.pages || [])
-      return false
+      // A reference-routed cluster can mix genuine OAS pages (/api/reference/*)
+      // with real guides served under /api/docs/*. Rescue the docs subtree —
+      // retitled so it routes to docs/ instead of the dropped reference/
+      const rescuedPages = filterUrlPagesTree(cat.pages || [], isDocsUnderApiPath)
+      const totalDeep = collectUrlPagesDeep(cat.pages || []).length
+      const rescuedDeep = collectUrlPagesDeep(rescuedPages).length
+      if (rescuedDeep > 0) {
+        eligibleCategories.push({ ...cat, title: 'API Docs', pages: rescuedPages })
+      }
+      counts.skippedApiRef += totalDeep - rescuedDeep
+      continue
     }
-    return true
-  })
+    eligibleCategories.push(cat)
+  }
 
   // TODO: Remove after readme/gitto handles better
   for (const cat of eligibleCategories) collapseRedundantLayers(cat)
