@@ -2855,6 +2855,14 @@ async function injectSectionLandingPages(organized, sourceUrl) {
         const finalPath = new URL(res.url).pathname.toLowerCase()
         if (!finalPath.startsWith(candPath)) return
         if (known.has(normalizePath(res.url))) return
+
+        // Check `<meta http-equiv="refresh">` navigates the browser elsewhere. 
+        const html = await res.text()
+        const metaRefresh = parseMetaRefreshTarget(html, res.url)
+        if (metaRefresh && normalizePath(metaRefresh) !== normalizePath(res.url)) return
+        const canonical = parseHtmlCanonical(html, res.url)
+        if (canonical && known.has(normalizePath(canonical))) return
+
         accepted.push({ cat, landingUrl })
       } catch {
         // Network error / unparseable — treat as "no landing page".
@@ -2871,6 +2879,41 @@ async function injectSectionLandingPages(organized, sourceUrl) {
   }
   if (accepted.length > 0) {
     styles.info(`Imported ${styles.bold(String(accepted.length))} section landing page(s).`)
+  }
+}
+
+/**
+ * Parse a client-side redirect target from an HTML page. Return pages with 
+ * `<meta http-equiv="refresh" content="0;url=/target/">` that navigates
+ * the browser elsewhere.
+ */
+function parseMetaRefreshTarget(html, baseUrl) {
+  if (!html) return null
+  const tag = /<meta[^>]+http-equiv=["']?refresh["']?[^>]*>/i.exec(html)
+  if (!tag) return null
+  const m = /content=["'][^"']*url=([^"'>\s]+)/i.exec(tag[0])
+  if (!m) return null
+  try {
+    return new URL(decodeEntities(m[1].trim()), baseUrl).toString()
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Parse the `<link rel="canonical" href="...">` target from an HTML page,
+ * resolved absolute against `baseUrl`. Returns null when absent or unparseable.
+ */
+function parseHtmlCanonical(html, baseUrl) {
+  if (!html) return null
+  const tag = /<link[^>]+rel=["']?canonical["']?[^>]*>/i.exec(html)
+  if (!tag) return null
+  const m = /href=["']([^"']+)["']/i.exec(tag[0])
+  if (!m) return null
+  try {
+    return new URL(decodeEntities(m[1].trim()), baseUrl).toString()
+  } catch {
+    return null
   }
 }
 
