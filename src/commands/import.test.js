@@ -9,6 +9,10 @@ afterEach(() => {
 })
 
 function mockLlmsFetch(files) {
+  return mockFetch(files, 'text/plain')
+}
+
+function mockFetch(files, contentType = 'application/xml') {
   const seen = []
   globalThis.fetch = async (url) => {
     const href = String(url)
@@ -16,15 +20,82 @@ function mockLlmsFetch(files) {
     if (!Object.hasOwn(files, href)) return new Response('', { status: 404 })
     return new Response(files[href], {
       status: 200,
-      headers: { 'content-type': 'text/plain' },
+      headers: { 'content-type': contentType },
     })
   }
   return seen
 }
 
+function sitemapXml(urls) {
+  return `<urlset>${urls.map((url) => `<url><loc>${url}</loc></url>`).join('')}</urlset>`
+}
+
 function mergedItems(merged) {
   return merged.parsed.sections.flatMap((section) => section.items.map((item) => ({ text: item.text, url: item.url })))
 }
+
+test('well-known sitemap candidates use the same docs route order as llms route probing, then walk source path to root', () => {
+  const sourceUrl = new URL('https://www.example.com/a/b')
+  const routeBases = __test__.buildWellKnownDocRoutes(sourceUrl).map((candidate) => candidate.url.href)
+  const sitemapCandidates = __test__.buildSitemapCandidates(sourceUrl).map((candidate) => candidate.url)
+
+  assert.deepEqual(
+    sitemapCandidates.slice(0, routeBases.length),
+    routeBases.map((href) => `${href}sitemap.xml`),
+  )
+  assert.deepEqual(sitemapCandidates.slice(-3), [
+    'https://www.example.com/a/b/sitemap.xml',
+    'https://www.example.com/a/sitemap.xml',
+    'https://www.example.com/sitemap.xml',
+  ])
+})
+
+test('sitemap discovery gathers root sitemap URLs before narrowing and does not scope to an ambiguous source path', async () => {
+  mockFetch({
+    'https://www.cerqlar.com/sitemap.xml': sitemapXml([
+      'https://www.cerqlar.com/',
+      'https://www.cerqlar.com/learn',
+      'https://www.cerqlar.com/blog/example',
+      'https://www.cerqlar.com/resources/thing',
+    ]),
+  })
+
+  const discovery = await __test__.discoverSitemapXml(new URL('https://www.cerqlar.com/learn'))
+
+  assert(discovery.urls.includes('https://www.cerqlar.com/learn'))
+  assert(discovery.urls.includes('https://www.cerqlar.com/blog/example'))
+  assert(discovery.urls.includes('https://www.cerqlar.com/resources/thing'))
+  assert.equal(discovery.urls.length, 4)
+})
+
+test('sitemap post-filtering narrows root sitemap URLs to a strong docs subtree on non-docs hosts', () => {
+  const urls = [
+    'https://example.com/pricing',
+    'https://example.com/blog/foo',
+    'https://example.com/docs/getting-started',
+    'https://example.com/docs/api/auth',
+  ]
+  const narrowed = __test__.narrowSitemapUrlsToDocsSubtreeIfNeeded(urls, new URL('https://example.com/learn'), [
+    { sitemapUrl: 'https://example.com/sitemap.xml' },
+  ])
+
+  assert.deepEqual(narrowed.urls, ['https://example.com/docs/getting-started', 'https://example.com/docs/api/auth'])
+  assert.equal(narrowed.segment, 'docs')
+  assert.equal(narrowed.dropped, 2)
+})
+
+test('sitemap post-filtering does not narrow to ambiguous learn subtree', () => {
+  const urls = [
+    'https://example.com/pricing',
+    'https://example.com/learn',
+    'https://example.com/learn/article',
+  ]
+  const narrowed = __test__.narrowSitemapUrlsToDocsSubtreeIfNeeded(urls, new URL('https://example.com/learn'), [
+    { sitemapUrl: 'https://example.com/sitemap.xml' },
+  ])
+
+  assert.equal(narrowed, null)
+})
 
 test('llms discovery and merge resolve nested files, dedupe canonical pages, and preserve distinct page states', async () => {
   const seen = mockLlmsFetch({
