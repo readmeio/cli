@@ -341,27 +341,31 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
   if (!llms) {
     // Sitemap fallback: gives us a flat URL list to anchor the scrape (slot
     // orphans by path) even though it lacks llms.txt's section structure.
-    // Scope is narrowed to the docs subtree of the source URL when possible
-    // so we don't pull in marketing/blog pages from a whole-site sitemap.
+    // Probe the same well-known docs routes as llms.txt, then walk up from the
+    // source path to root. Gather first; only then apply conservative docs
+    // subtree narrowing so ambiguous paths like /learn do not cause one-page
+    // false negatives.
     const sitemapCandidates = buildSitemapCandidates(sourceUrl)
-    const scopePrefix = deriveSitemapScope(sourceUrl)
     styles.info(
-      `${skippedLlms.length > 0 ? 'No usable llms.txt' : 'No llms.txt'} — checking for sitemap.xml (${sitemapCandidates.length} candidate${sitemapCandidates.length === 1 ? '' : 's'})${scopePrefix ? `, scoped to ${styles.bold(scopePrefix)}` : ''}...`,
+      `${skippedLlms.length > 0 ? 'No usable llms.txt' : 'No llms.txt'} — checking for sitemap.xml (${sitemapCandidates.length} candidate${sitemapCandidates.length === 1 ? '' : 's'})...`,
     )
-    const sitemapResult = await timePhase('fetch sitemap.xml', async () => {
-      for (const candidate of sitemapCandidates) {
-        const res = await fetchSitemap(candidate, scopePrefix)
-        if (res.ok && res.urls.length > 0) return { url: candidate, urls: res.urls }
-        const reason = res.ok ? '0 urls in scope' : res.status ? `HTTP ${res.status}` : res.error || 'failed'
-        styles.info(styles.dim(`  ${candidate} → ${reason}`))
-      }
-      return null
-    })
+    const sitemapDiscovery = await timePhase('discover sitemap.xml', () => discoverSitemapXml(sourceUrl))
+    for (const hit of sitemapDiscovery.hits) {
+      styles.info(styles.dim(`  ${hit.sitemapUrl} → valid (${hit.urls.length} URL${hit.urls.length === 1 ? '' : 's'})`))
+    }
+    for (const miss of sitemapDiscovery.misses) {
+      styles.info(styles.dim(`  ${miss.url} → ${miss.status ? `HTTP ${miss.status}` : miss.error || 'no sitemap.xml'}`))
+    }
     console.log()
-    if (sitemapResult) {
-      sitemapUrl = sitemapResult.url
-      sitemapKnownUrls = sitemapUrlsToKnownUrls(sitemapResult.urls)
-      styles.ok(`Found sitemap.xml at ${styles.bold(sitemapUrl)} — ${styles.bold(String(sitemapKnownUrls.length))} URL${sitemapKnownUrls.length === 1 ? '' : 's'} in scope.`)
+    if (sitemapDiscovery.urls.length > 0) {
+      sitemapUrl = sitemapDiscovery.hits[0]?.sitemapUrl || null
+      const narrowed = narrowSitemapUrlsToDocsSubtreeIfNeeded(sitemapDiscovery.urls, sourceUrl, sitemapDiscovery.hits)
+      const sitemapUrls = narrowed ? narrowed.urls : sitemapDiscovery.urls
+      if (narrowed) {
+        styles.info(styles.dim(`Narrowed sitemap URLs to /${narrowed.segment}/ subtree (${narrowed.kept} kept, ${narrowed.dropped} dropped).`))
+      }
+      sitemapKnownUrls = sitemapUrlsToKnownUrls(sitemapUrls)
+      styles.ok(`Found sitemap.xml${sitemapUrl ? ` at ${styles.bold(sitemapUrl)}` : ''} — ${styles.bold(String(sitemapKnownUrls.length))} URL${sitemapKnownUrls.length === 1 ? '' : 's'}.`)
     } else {
       styles.warning(`No llms.txt or sitemap.xml found — falling back to sidebar discovery via scrape.`)
     }
@@ -3812,78 +3816,134 @@ async function fetchLlmsTxt(llmsUrl, options = {}) {
   }
 }
 
-// Path segments that mark a docs scope. Used to find the right "base" for
-// filtering sitemap URLs: walking up from the source URL, the first segment
-// that matches becomes the scope prefix. Hits should stay narrow — `blog`
-// or `pricing` would over-include marketing pages.
-const WELL_KNOWN_DOC_SEGMENTS = new Set([
-  'docs',
-  'doc',
-  'documentation',
-  'guides',
-  'guide',
-  'references',
-  'reference',
-  'api',
-  'apis',
-  'api-reference',
-  'api-docs',
-  'learn',
-  'tutorials',
-  'tutorial',
-  'developers',
-  'developer',
-])
-
-/**
- * Decide which path prefix to use when filtering sitemap URLs to "the docs
- * portion of the site." Walk up the source URL's path looking for the first
- * well-known docs segment (`/docs/`, `/guides/`, `/api-reference/`, …) and
- * use the prefix up to and including it. Returns null when nothing matches —
- * in that case we accept any URL on the same origin (no path filter).
- */
-function deriveSitemapScope(sourceUrl) {
-  const segs = sourceUrl.pathname.split('/').filter(Boolean)
-  for (let i = segs.length - 1; i >= 0; i--) {
-    if (WELL_KNOWN_DOC_SEGMENTS.has(segs[i].toLowerCase())) {
-      return '/' + segs.slice(0, i + 1).join('/') + '/'
-    }
-  }
-  return null
+function pathToSitemapUrl(origin, path) {
+  if (!path || path === '/') return `${origin}/sitemap.xml`
+  return `${origin}${path}/sitemap.xml`
 }
 
 /**
- * Mirror buildLlmsCandidates but for sitemap.xml: walk up the source path
- * appending `/sitemap.xml` at each level, ending at origin root.
+ * Build sitemap probes from the shared well-known docs routes, then preserve
+ * the existing path walk-up behavior from source path to origin root.
  */
 function buildSitemapCandidates(sourceUrl) {
   const out = []
   const seen = new Set()
-  const add = (url) => {
-    if (!seen.has(url)) {
-      seen.add(url)
-      out.push(url)
-    }
+  const add = (url, meta) => {
+    if (seen.has(url)) return
+    seen.add(url)
+    out.push({ url, ...meta })
   }
-  const origin = sourceUrl.origin
+
+  for (const candidate of buildWellKnownDocRoutes(sourceUrl)) {
+    add(`${candidate.url.href}sitemap.xml`, { kind: candidate.kind, path: candidate.url.pathname || '/', route: candidate.url.href })
+  }
+
   const segs = sourceUrl.pathname.split('/').filter(Boolean)
   for (let i = segs.length; i >= 0; i--) {
-    const prefix = segs.slice(0, i).join('/')
-    add(`${origin}${prefix ? '/' + prefix : ''}/sitemap.xml`)
+    const path = '/' + segs.slice(0, i).join('/')
+    add(pathToSitemapUrl(sourceUrl.origin, path), { kind: 'path', path: path || '/', route: sourceUrl.origin })
   }
   return out
+}
+
+/**
+ * Discover all usable sitemap hits and gather their URL candidates before
+ * narrowing. Returns { hits, misses, urls } where urls are deduped in probe order.
+ */
+async function discoverSitemapXml(sourceUrl) {
+  const hits = []
+  const misses = []
+  const urls = []
+  const seenUrls = new Set()
+
+  for (const candidate of buildSitemapCandidates(sourceUrl)) {
+    const res = await fetchSitemap(candidate.url)
+    if (!res.ok) {
+      misses.push({ url: candidate.url, status: res.status, error: res.error })
+      continue
+    }
+    if (res.urls.length === 0) {
+      misses.push({ url: candidate.url, status: '0 urls' })
+      continue
+    }
+    const hit = { ...candidate, sitemapUrl: candidate.url, urls: res.urls }
+    hits.push(hit)
+    for (const url of res.urls) {
+      if (seenUrls.has(url)) continue
+      seenUrls.add(url)
+      urls.push(url)
+    }
+  }
+
+  return { hits, misses, urls }
+}
+
+/**
+ * Narrow sitemap URL candidates only when a root sitemap contributed and the
+ * gathered URL set clearly contains a strong docs-like root segment. Ambiguous
+ * roots such as /learn, /resources, /blog, and /api intentionally do not narrow.
+ */
+function narrowSitemapUrlsToDocsSubtreeIfNeeded(urls, sourceUrl, hits) {
+  if (sourceUrl.hostname.toLowerCase().includes('docs')) return null
+  const rootHit = hits.some((h) => {
+    try {
+      const u = new URL(h.sitemapUrl)
+      return u.origin === sourceUrl.origin && u.pathname === '/sitemap.xml'
+    } catch {
+      return false
+    }
+  })
+  if (!rootHit) return null
+
+  const firstSegs = new Set()
+  for (const url of urls) {
+    try {
+      const u = new URL(url)
+      if (u.origin !== sourceUrl.origin) continue
+      const seg = u.pathname.split('/').filter(Boolean)[0]
+      if (seg) firstSegs.add(seg.toLowerCase())
+    } catch {
+      // ignore unparseable URLs
+    }
+  }
+
+  let docsSegment = null
+  for (const seg of firstSegs) {
+    if (DOCS_LIKE_ROOT_SEGMENTS.has(seg)) {
+      docsSegment = seg
+      break
+    }
+  }
+  if (!docsSegment) return null
+
+  const prefix = '/' + docsSegment
+  const keptUrls = []
+  let dropped = 0
+  for (const url of urls) {
+    try {
+      const u = new URL(url)
+      const pn = u.pathname.toLowerCase()
+      if (u.origin === sourceUrl.origin && (pn === prefix || pn.startsWith(prefix + '/'))) {
+        keptUrls.push(url)
+      } else {
+        dropped++
+      }
+    } catch {
+      dropped++
+    }
+  }
+
+  if (keptUrls.length === 0) return null
+  return { segment: docsSegment, urls: keptUrls, kept: keptUrls.length, dropped }
 }
 
 /**
  * Best-effort fetch of a sitemap. Handles both `<urlset>` (a flat list of
  * page URLs) and `<sitemapindex>` (which references child sitemaps — we
  * recurse one level, capped at 10 children to avoid runaway fetches).
- *
- * `scopePrefix` is a path string ending in `/`, or null. When set, only URLs
- * whose pathname starts with the prefix and share the sitemap's origin are
- * returned. Returns { ok, urls } on success.
+ * Returns { ok, urls } on success.
  */
-async function fetchSitemap(sitemapUrl, scopePrefix, depth = 0) {
+async function fetchSitemap(sitemapUrl, depth = 0) {
   try {
     const res = await fetch(sitemapUrl, {
       redirect: 'follow',
@@ -3895,7 +3955,7 @@ async function fetchSitemap(sitemapUrl, scopePrefix, depth = 0) {
     if (!parsed) return { ok: false, error: 'not a sitemap' }
 
     if (parsed.kind === 'urlset') {
-      const urls = parsed.locs.filter((u) => urlInScope(u, sitemapUrl, scopePrefix))
+      const urls = parsed.locs.filter((u) => urlMatchesSitemapOrigin(u, sitemapUrl))
       return { ok: true, urls }
     }
 
@@ -3903,7 +3963,7 @@ async function fetchSitemap(sitemapUrl, scopePrefix, depth = 0) {
     const children = parsed.locs.slice(0, 10)
     const all = []
     for (const childUrl of children) {
-      const child = await fetchSitemap(childUrl, scopePrefix, depth + 1)
+      const child = await fetchSitemap(childUrl, depth + 1)
       if (child.ok) all.push(...child.urls)
     }
     return { ok: true, urls: all }
@@ -3941,7 +4001,7 @@ function decodeXmlEntities(s) {
     .replace(/&apos;/g, "'")
 }
 
-function urlInScope(urlStr, sitemapUrl, scopePrefix) {
+function urlMatchesSitemapOrigin(urlStr, sitemapUrl) {
   let u
   try {
     u = new URL(urlStr)
@@ -3954,9 +4014,7 @@ function urlInScope(urlStr, sitemapUrl, scopePrefix) {
   } catch {
     return false
   }
-  if (u.origin !== sm.origin) return false
-  if (scopePrefix && !u.pathname.startsWith(scopePrefix)) return false
-  return true
+  return u.origin === sm.origin
 }
 
 /**
@@ -4554,7 +4612,14 @@ function makeIconPicker() {
   }
 }
 
-export const __test__ = { discoverLlmsTxt, mergeValidHits }
+export const __test__ = {
+  buildWellKnownDocRoutes,
+  buildSitemapCandidates,
+  discoverLlmsTxt,
+  discoverSitemapXml,
+  mergeValidHits,
+  narrowSitemapUrlsToDocsSubtreeIfNeeded,
+}
 
 function formatDuration(ms) {
   const safe = Math.max(0, ms)
