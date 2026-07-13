@@ -3239,7 +3239,10 @@ async function runJsonQuery({ systemPrompt, userPrompt, model }) {
     process.stdout.write('\n')
   }
 
-  const stripped = stripCodeFences(text)
+  // The model sometimes narrates before/after the JSON ("I'll build...{...}")
+  // despite the prompt. Slice from the first {/[ to the matching last }/] so
+  // prose around the payload doesn't break the parse.
+  const stripped = extractJson(stripCodeFences(text))
 
   try {
     return JSON.parse(stripped)
@@ -3251,6 +3254,20 @@ async function runJsonQuery({ systemPrompt, userPrompt, model }) {
       `Last 500 chars:\n${stripped.slice(-500)}`,
     )
   }
+}
+
+function extractJson(text) {
+  const objStart = text.indexOf('{')
+  const arrStart = text.indexOf('[')
+  let start
+  if (objStart === -1 && arrStart === -1) return text
+  if (objStart === -1) start = arrStart
+  else if (arrStart === -1) start = objStart
+  else start = Math.min(objStart, arrStart)
+
+  const end = text.lastIndexOf(text[start] === '{' ? '}' : ']')
+  if (end <= start) return text
+  return text.slice(start, end + 1)
 }
 
 /**
