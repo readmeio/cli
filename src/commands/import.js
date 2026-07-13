@@ -253,7 +253,13 @@ export async function importDocs(options) {
  * the hostname so parallel runs don't clobber each other.
  */
 async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSnapshots) {
-  // Probe well-known docs routes (docs./developer. subdomains and /docs/, 
+  const redirected = await timePhase('follow source redirects', () => resolveRedirectedSourceUrl(sourceUrl))
+  if (redirected) {
+    styles.info(`${styles.bold(sourceUrl.toString())} redirects to ${styles.bold(redirected.toString())} — rebasing import onto the final URL.`)
+    sourceUrl = redirected
+  }
+
+  // Probe well-known docs routes (docs./developer. subdomains and /docs/,
   // … path prefixes) and adopt the first that resolves as the real base, so everything downstream runs
   const docsBase = await timePhase('probe well-known docs routes', () => resolveDocsBaseUrl(sourceUrl))
   if (docsBase) {
@@ -3492,6 +3498,26 @@ function buildWellKnownDocRoutes(sourceUrl) {
 }
 
 /**
+ * Follow redirects on the source URL itself and return the final URL when the
+ * site has moved (different origin or path), or null to keep the original.
+ * Trailing-slash and query/hash-only redirects don't count as a move.
+ */
+async function resolveRedirectedSourceUrl(sourceUrl) {
+  try {
+    const res = await fetch(sourceUrl.href, { redirect: 'follow', headers: { 'User-Agent': 'readme-cli-import' } })
+    if (!res.ok || !res.url) return null
+    const final = new URL(res.url)
+    final.search = ''
+    final.hash = ''
+    const norm = (u) => u.origin + u.pathname.replace(/\/+$/, '')
+    if (norm(final) === norm(sourceUrl)) return null
+    return final
+  } catch {
+    return null
+  }
+}
+
+/**
  * For a bare homepage, probe well-known docs routes and return the best base to
  * adopt, or null to leave the source untouched. A route serving a usable
  * llms.txt always beats one that merely resolves. Returns `{ url, kind, hasLlms }`.
@@ -3856,7 +3882,8 @@ async function fetchLlmsTxt(llmsUrl, options = {}) {
     })
     if (!res.ok) return { ok: false, status: res.status }
     const text = await res.text()
-    const analysis = analyzeLlmsTxt(text, llmsUrl, options)
+    const finalUrl = res.url || String(llmsUrl)
+    const analysis = analyzeLlmsTxt(text, finalUrl, finalUrl === String(llmsUrl) ? options : llmsParseOptionsForUrl(finalUrl))
     return {
       ok: true,
       status: res.status,
@@ -4613,7 +4640,7 @@ function makeIconPicker() {
   }
 }
 
-export const __test__ = { discoverLlmsTxt, mergeValidHits }
+export const __test__ = { discoverLlmsTxt, mergeValidHits, resolveRedirectedSourceUrl }
 
 function formatDuration(ms) {
   const safe = Math.max(0, ms)
