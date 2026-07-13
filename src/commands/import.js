@@ -1645,6 +1645,24 @@ async function scrapeNavFromSite(sourceUrl, knownPages, firecrawlKey, diagnostic
     styles.dim(`  ⏱  scrape breakdown: round0=${formatDuration(r0Ms)} round1=${formatDuration(r1Ms)} (${r1Urls.length} ${isDiscovery ? 'discovery' : 'category rep'} fetches)`),
   )
 
+  // Prune login/account chrome now that crawling is done. On Stoplight sites
+  // the "Sign in" → /auth link is the only seed on the bare landing page, so we
+  // had to keep it discoverable to reach the real sidebar — but it's not a doc.
+  const pruneAuthPages = (pages) => {
+    let removed = 0
+    for (let i = pages.length - 1; i >= 0; i--) {
+      const page = pages[i]
+      if (page.pages && page.pages.length > 0) removed += pruneAuthPages(page.pages)
+      if (isAuthChromeUrl(page.url) && (!page.pages || page.pages.length === 0)) {
+        matched.delete(normalizePath(page.url))
+        pages.splice(i, 1)
+        removed++
+      }
+    }
+    return removed
+  }
+  for (const cat of categoryOrder) pruneAuthPages(cat.pages)
+
   // Accept thresholds — looser in discovery mode (no llms.txt) where even a
   // single flat "Overview" bucket is better than nothing, stricter when we
   // have llms.txt to compare against.
@@ -2940,6 +2958,20 @@ function isDiscoverableLink(abs, base) {
   if (/\.(png|jpe?g|gif|svg|webp|ico|css|js|pdf|zip|tar|gz|woff2?|ttf|mp4|mp3)$/i.test(p)) return false
   if (p.startsWith('/_next/') || p.startsWith('/__/') || p.includes('/static/') || p.includes('/assets/')) return false
   return true
+}
+
+// Leading-segment auth routes: /auth, /login, /sign-in, /logout, /sso, /oauth…
+// These are login/account chrome (Stoplight's "Sign in" → /auth, etc.), not
+// docs. NOT filtered at link-discovery time — on some Stoplight sites the
+// bare landing page only exposes the "Sign in" link, which we still need as a
+// crawl seed to reach the real sidebar. Pruned from the tree post-crawl.
+const AUTH_ROUTE_RE = /^\/(?:auth|login|log-?in|sign-?in|sign-?up|signup|logout|log-?out|sign-?out|signout|register|sso|oauth2?)(?:\/|$)/i
+function isAuthChromeUrl(url) {
+  try {
+    return AUTH_ROUTE_RE.test(new URL(url).pathname)
+  } catch {
+    return false
+  }
 }
 
 // Zero-width spaces, direction marks, word joiner, BOM — some docs sites
