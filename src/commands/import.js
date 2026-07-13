@@ -1689,12 +1689,17 @@ function extractSidebarContainers(html) {
   const SIDEBAR_ATTR_RE =
     /\b(?:id|class|aria-label|data-testid)=(?:"[^"]*sidebar[^"]*"|'[^']*sidebar[^']*'|"[^"]*navigation[^"]*"|'[^']*navigation[^']*')|\brole=(?:"navigation"|'navigation')/i
 
+  // Layout-wrapper modifiers like `Page--with-sidebar` / `has-sidebar` describe
+  // an element that CONTAINS a sidebar, not one that IS a sidebar.
+  const WRAPPER_MODIFIER_RE = /(?:^|[\s"'-])(?:with|has)-sidebar(?=[\s"']|$)/i
+
   const out = []
   for (const tag of SIDEBAR_TAGS) {
     const openRe = new RegExp(`<${tag}\\b([^>]*)>`, 'gi')
     let m
     while ((m = openRe.exec(html)) !== null) {
       if (!SIDEBAR_ATTR_RE.test(m[1])) continue
+      if (WRAPPER_MODIFIER_RE.test(m[1])) continue
       const inner = extractBalancedTag(html, tag, m.index + m[0].length)
       if (inner != null && inner.length > 100) out.push(inner)
     }
