@@ -19,13 +19,15 @@ export const description = 'Import content from a URL and package it as a ReadMe
 export const hidden = true
 export const skipBootstrap = true
 
+export const DEFAULT_MODEL = 'claude-sonnet-5'
+
 export function args(cmd) {
   cmd.requiredOption(
     '--source <url-or-file...>',
     'One or more URLs to import from (space-separated or repeated), or a single local OpenAPI spec (.json/.yaml/.yml)',
   )
   cmd.option('-o, --output <path>', 'Output zip path (defaults to <basename>-readme.zip in cwd)')
-  cmd.addOption(new Option('-m, --model <name>', 'Claude model alias: haiku, sonnet, opus').choices(['haiku', 'sonnet', 'opus']).default('sonnet'))
+  cmd.addOption(new Option('-m, --model <name>', 'Claude model alias: haiku, sonnet, opus').choices(['haiku', 'sonnet', 'opus']).default(DEFAULT_MODEL))
   cmd.option('--firecrawl-key <key>', 'Firecrawl API key (or set FIRECRAWL_API_KEY env var) — enables JS-rendered sidebar scraping')
   cmd.option('--skip-api-reference', 'Drop pages routed to the API Reference / reference dir. Use when uploading the OAS spec separately.')
   cmd.option(
@@ -70,6 +72,9 @@ const LANDING_PROBE_CAP = 8
  * @returns {Promise<{ source: 'url' | 'oas', outputZip?: string, stagingDir?: string, fileCount: number, duration: number, phases: Array<{ label: string, ms: number }> }>}
  */
 export async function importDocs(options) {
+  const model = options.model || DEFAULT_MODEL
+  options = { ...options, model }
+
   const startedAt = Date.now()
   const phases = []
   const timePhase = async (label, fn) => {
