@@ -9,7 +9,16 @@ import matter from 'gray-matter'
 import * as styles from '../utils/styles.js'
 import { syncOas } from './oas-sync.js'
 import OASNormalize from 'oas-normalize'
-import { slotOrphansPrompt, iconizeNavPrompt, organizeFromSectionsPrompt, organizeFromScratchPrompt, stripCodeFences } from '../prompts/index.js'
+import {
+  slotOrphansPrompt,
+  slotOrphansOutputSchema,
+  iconizeNavPrompt,
+  iconizeNavOutputSchema,
+  organizeFromSectionsPrompt,
+  organizeFromSectionsOutputSchema,
+  organizeFromScratchPrompt,
+  organizeFromScratchOutputSchema,
+} from '../prompts/index.js'
 import { analyzeLlmsTxt } from '../utils/llms.js'
 import { urlTrieSegs, extractUrlPathSegments, normalizePath, stripSegmentExtensions, compareCanonicalUrlPreference, llmsPageDedupeKey } from '../utils/url-segs.js'
 
@@ -3038,7 +3047,8 @@ async function slotOrphansWithClaude(scraped, orphans, model) {
     categories: scraped.categories,
     orphans,
   })
-  const raw = await runJsonQuery({ systemPrompt, userPrompt, model })
+  const result = await runJsonQuery({ systemPrompt, userPrompt, model, schema: slotOrphansOutputSchema })
+  const raw = result.assignments
   if (!Array.isArray(raw)) {
     // If the model didn't cooperate, return all orphans unassigned.
     return orphans
@@ -3068,8 +3078,8 @@ async function iconizeScrapedNav(scraped, _unused, model, siteTitle) {
   const { systemPrompt, userPrompt } = iconizeNavPrompt({
     categories: scraped.categories,
   })
-  const icons = await runJsonQuery({ systemPrompt, userPrompt, model })
-  const iconArr = Array.isArray(icons) ? icons : []
+  const result = await runJsonQuery({ systemPrompt, userPrompt, model, schema: iconizeNavOutputSchema })
+  const iconArr = Array.isArray(result.icons) ? result.icons : []
   return {
     title: siteTitle || null,
     categories: scraped.categories.map((c, i) => ({
@@ -3121,7 +3131,8 @@ async function organizeFromSections(parsed, model) {
     siteTitle: parsed.title,
     sections,
   })
-  const raw = await runJsonQuery({ systemPrompt, userPrompt, model })
+  const result = await runJsonQuery({ systemPrompt, userPrompt, model, schema: organizeFromSectionsOutputSchema })
+  const raw = result.sections
   if (!Array.isArray(raw)) {
     throw new Error('Fast-path expected a JSON array of {title, icon} entries.')
   }
@@ -3156,7 +3167,7 @@ async function organizeFromScratch(parsed, model) {
     siteTitle: parsed.title,
     items,
   })
-  const raw = await runJsonQuery({ systemPrompt, userPrompt, model })
+  const raw = await runJsonQuery({ systemPrompt, userPrompt, model, schema: organizeFromScratchOutputSchema })
 
   // Rehydrate pages from the id references Claude returned.
   const expandedCategories = []
@@ -3201,11 +3212,13 @@ async function organizeFromScratch(parsed, model) {
 }
 
 /**
- * Shared Claude call for "send a prompt, parse JSON back". Logs the prompts so
- * we can see what went in, runs a heartbeat so silent model latency doesn't
- * look like a hang, and strips stray code fences if the model adds them.
+ * Shared Claude call for "send a prompt, get schema-validated JSON back".
+ * Logs the prompts so we can see what went in, and runs a heartbeat so silent
+ * model latency doesn't look like a hang. The SDK enforces `schema` and
+ * returns parsed data on the result message's `structured_output` field, so
+ * there's no text extraction or JSON.parse on this path.
  */
-async function runJsonQuery({ systemPrompt, userPrompt, model }) {
+async function runJsonQuery({ systemPrompt, userPrompt, model, schema }) {
   console.log()
   console.log(styles.dim('─ system prompt ─'))
   console.log(styles.dim(systemPrompt))
@@ -3219,24 +3232,28 @@ async function runJsonQuery({ systemPrompt, userPrompt, model }) {
   console.log()
 
   const heartbeat = setInterval(() => process.stdout.write(styles.dim('.')), 1000)
-  let text = ''
+  let structured
   try {
     for await (const message of query({
       prompt: userPrompt,
       options: {
         systemPrompt,
         allowedTools: [],
+        outputFormat: { type: 'json_schema', schema },
         ...(model ? { model } : {}),
       },
     })) {
-      if (message.type === 'assistant' && message.message?.content) {
-        for (const block of message.message.content) {
-          if (block.type === 'text' && block.text) text += block.text
+      if (message.type === 'result') {
+        if (message.subtype === 'error_max_structured_output_retries') {
+          throw new Error(
+            'Claude could not produce output matching the schema after retries. ' +
+            'Likely hit the model\'s output limit — try --model sonnet.',
+          )
         }
-      } else if (message.type === 'result') {
         if (message.subtype && message.subtype !== 'success') {
           throw new Error(`Claude failed: ${message.subtype}${message.error?.message ? ' — ' + message.error.message : ''}`)
         }
+        structured = message.structured_output
         break
       }
     }
@@ -3245,35 +3262,10 @@ async function runJsonQuery({ systemPrompt, userPrompt, model }) {
     process.stdout.write('\n')
   }
 
-  // The model sometimes narrates before/after the JSON ("I'll build...{...}")
-  // despite the prompt. Slice from the first {/[ to the matching last }/] so
-  // prose around the payload doesn't break the parse.
-  const stripped = extractJson(stripCodeFences(text))
-
-  try {
-    return JSON.parse(stripped)
-  } catch (e) {
-    throw new Error(
-      `Claude returned invalid JSON: ${e.message}\n` +
-      `Output length: ${stripped.length} chars. Likely hit the model's output limit — try --model sonnet.\n\n` +
-      `First 500 chars:\n${stripped.slice(0, 500)}\n\n` +
-      `Last 500 chars:\n${stripped.slice(-500)}`,
-    )
+  if (!structured || typeof structured !== 'object') {
+    throw new Error('Claude returned no structured output')
   }
-}
-
-function extractJson(text) {
-  const objStart = text.indexOf('{')
-  const arrStart = text.indexOf('[')
-  let start
-  if (objStart === -1 && arrStart === -1) return text
-  if (objStart === -1) start = arrStart
-  else if (arrStart === -1) start = objStart
-  else start = Math.min(objStart, arrStart)
-
-  const end = text.lastIndexOf(text[start] === '{' ? '}' : ']')
-  if (end <= start) return text
-  return text.slice(start, end + 1)
+  return structured
 }
 
 /**

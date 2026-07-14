@@ -19,15 +19,32 @@
 
 export const slotOrphansSystemPrompt = [
   'You assign orphan documentation pages to existing categories.',
-  'Output ONLY a valid JSON array of integers — one per orphan page, in order.',
+  'Respond with a JSON object of the form {"assignments": [...]} — one integer per orphan page, in order.',
   'Each integer is the category index (0-based) the orphan belongs in, or -1 if none fit.',
   '',
-  'Example output: [0, 2, 0, 1, -1, 3]',
+  'Example output: {"assignments": [0, 2, 0, 1, -1, 3]}',
   '',
   'Guidance:',
   '- Choose the best semantic fit based on the orphan\'s title and URL path.',
   '- Only use -1 when no existing category is plausible.',
 ].join('\n');
+
+/**
+ * Structured-output schema for slotOrphans. Root must be an object (top-level
+ * arrays aren't allowed), so the index array is wrapped in `assignments`.
+ */
+export const slotOrphansOutputSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['assignments'],
+  properties: {
+    assignments: {
+      type: 'array',
+      items: { type: 'integer' },
+      description: 'One entry per orphan page, in input order: the 0-based category index, or -1 if none fit.',
+    },
+  },
+};
 
 /**
  * @param {object}   input
@@ -54,7 +71,7 @@ export function buildSlotOrphansUserPrompt({ categories, orphans }) {
     `${orphans.length} orphan pages to slot:`,
     ...orphanList,
     '',
-    `Output a JSON array of ${orphans.length} integers, one per orphan in order (category index 0..${categories.length - 1}, or -1 for none).`,
+    `Output {"assignments": [...]} with ${orphans.length} integers, one per orphan in order (category index 0..${categories.length - 1}, or -1 for none).`,
   ].join('\n');
 }
 
@@ -69,11 +86,28 @@ export function slotOrphansPrompt(input) {
 
 export const iconizeNavSystemPrompt = [
   'You assign one FontAwesome Free Solid icon to each documentation category.',
-  'Output ONLY a valid JSON array of icon name strings, one per input category, in order.',
-  'Use the icon name only (no "fa-" prefix, no object wrapper).',
+  'Respond with a JSON object of the form {"icons": [...]} — one icon name string per input category, in order.',
+  'Use the icon name only (no "fa-" prefix).',
   '',
-  'Example output: ["rocket", "book", "code", "gear"]',
+  'Example output: {"icons": ["rocket", "book", "code", "gear"]}',
 ].join('\n');
+
+/**
+ * Structured-output schema for iconizeNav. Root must be an object, so the
+ * icon-name array is wrapped in `icons`.
+ */
+export const iconizeNavOutputSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['icons'],
+  properties: {
+    icons: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'One FontAwesome Free Solid icon name per input category, in order (no "fa-" prefix).',
+    },
+  },
+};
 
 /**
  * @param {object} input
@@ -86,7 +120,7 @@ export function buildIconizeNavUserPrompt({ categories }) {
     '',
     ...categories.map((c, i) => `${i}. ${c.title}`),
     '',
-    'Return a JSON array of FontAwesome icon names, one per category, in order.',
+    'Return {"icons": [...]} with one FontAwesome icon name per category, in order.',
   ].join('\n');
 }
 
@@ -101,19 +135,46 @@ export function iconizeNavPrompt(input) {
 
 export const organizeFromSectionsSystemPrompt = [
   'You assign a FontAwesome Free Solid icon to each documentation section, and lightly polish the section title.',
-  'Output ONLY a valid JSON array — no prose, no markdown, no code fences.',
+  'Respond with a JSON object matching the schema below.',
   '',
   'Schema:',
-  '[',
-  '  { "title": "<lightly polished Title Case, 1-4 words>", "icon": "<fontawesome icon name, no fa- prefix>" },',
-  '  ...',
-  ']',
+  '{',
+  '  "sections": [',
+  '    { "title": "<lightly polished Title Case, 1-4 words>", "icon": "<fontawesome icon name, no fa- prefix>" },',
+  '    ...',
+  '  ]',
+  '}',
   '',
   'Rules:',
   '- Return exactly one entry per input section, in the same order.',
   '- Keep the original title unless it clearly benefits from Title Case fixes; do not rename for topic/tone.',
   '- Pick an icon that semantically fits the section (e.g. rocket for Getting Started, code for API, plug for Integrations).',
 ].join('\n');
+
+/**
+ * Structured-output schema for organizeFromSections. Root must be an object,
+ * so the per-section entries are wrapped in `sections`.
+ */
+export const organizeFromSectionsOutputSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['sections'],
+  properties: {
+    sections: {
+      type: 'array',
+      description: 'Exactly one entry per input section, in the same order.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['title', 'icon'],
+        properties: {
+          title: { type: 'string', description: 'Lightly polished Title Case section title, 1-4 words.' },
+          icon: { type: 'string', description: 'FontAwesome Free Solid icon name, no "fa-" prefix.' },
+        },
+      },
+    },
+  },
+};
 
 /**
  * @param {object} input
@@ -128,7 +189,7 @@ export function buildOrganizeFromSectionsUserPrompt({ siteTitle, sections }) {
     '',
     ...sections.map((s, i) => `${i}. ${s.title} (${s.items.length} pages)`),
     '',
-    'Output the JSON array now.',
+    'Output the JSON object now.',
   ].join('\n');
 }
 
@@ -165,6 +226,33 @@ export const organizeFromScratchSystemPrompt = [
   '- Every input page id MUST appear in exactly one category. Do not drop or duplicate ids.',
   '- Keep category titles human-readable, Title Case, 1-4 words.',
 ].join('\n');
+
+/** Structured-output schema for organizeFromScratch. */
+export const organizeFromScratchOutputSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['title', 'categories'],
+  properties: {
+    title: { type: 'string', description: 'Short site or doc title.' },
+    categories: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['title', 'icon', 'pageIds'],
+        properties: {
+          title: { type: 'string', description: 'Title Case category name, 1-4 words.' },
+          icon: { type: 'string', description: 'FontAwesome Free Solid icon name, no "fa-" prefix.' },
+          pageIds: {
+            type: 'array',
+            items: { type: 'integer' },
+            description: 'Integer ids from the input page list. Every input id appears in exactly one category.',
+          },
+        },
+      },
+    },
+  },
+};
 
 /**
  * @param {object} input
