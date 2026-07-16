@@ -9,8 +9,18 @@ import matter from 'gray-matter'
 import * as styles from '../utils/styles.js'
 import { syncOas } from './oas-sync.js'
 import OASNormalize from 'oas-normalize'
-import { slotOrphansPrompt, iconizeNavPrompt, organizeFromSectionsPrompt, organizeFromScratchPrompt, stripCodeFences } from '../prompts/index.js'
+import {
+  slotOrphansPrompt,
+  slotOrphansOutputSchema,
+  iconizeNavPrompt,
+  iconizeNavOutputSchema,
+  organizeFromSectionsPrompt,
+  organizeFromSectionsOutputSchema,
+  organizeFromScratchPrompt,
+  organizeFromScratchOutputSchema,
+} from '../prompts/index.js'
 import { analyzeLlmsTxt } from '../utils/llms.js'
+import { urlTrieSegs, extractUrlPathSegments, normalizePath, stripSegmentExtensions, compareCanonicalUrlPreference, llmsPageDedupeKey } from '../utils/url-segs.js'
 
 export const command = 'import'
 export const order = 7
@@ -18,13 +28,15 @@ export const description = 'Import content from a URL and package it as a ReadMe
 export const hidden = true
 export const skipBootstrap = true
 
+export const DEFAULT_MODEL = 'claude-sonnet-5'
+
 export function args(cmd) {
   cmd.requiredOption(
     '--source <url-or-file...>',
     'One or more URLs to import from (space-separated or repeated), or a single local OpenAPI spec (.json/.yaml/.yml)',
   )
   cmd.option('-o, --output <path>', 'Output zip path (defaults to <basename>-readme.zip in cwd)')
-  cmd.addOption(new Option('-m, --model <name>', 'Claude model alias: haiku, sonnet, opus').choices(['haiku', 'sonnet', 'opus']).default('sonnet'))
+  cmd.addOption(new Option('-m, --model <name>', 'Claude model alias: haiku, sonnet, opus').choices(['haiku', 'sonnet', 'opus']).default(DEFAULT_MODEL))
   cmd.option('--firecrawl-key <key>', 'Firecrawl API key (or set FIRECRAWL_API_KEY env var) — enables JS-rendered sidebar scraping')
   cmd.option('--skip-api-reference', 'Drop pages routed to the API Reference / reference dir. Use when uploading the OAS spec separately.')
   cmd.option(
@@ -39,6 +51,17 @@ export function args(cmd) {
   // sidebar disagrees with the source.
   cmd.addOption(new Option('--debug').hideHelp())
 }
+
+// Docs locations probed when the user hands us a bare homepage. Each is tried
+// as a subdomain swap (docs.example.com) and, unless subdomain-only, a path
+// prefix (example.com/docs/). Order is preference order — earlier wins ties.
+const WELL_KNOWN_DOC_ROUTES = ['docs', 'doc', 'developers', 'developer', 'documentation', 'documentations', 'platform']
+// Routes probed only as a subdomain (platform.example.com). Their path form
+// (example.com/platform/) is usually a marketing/product page, not docs.
+const SUBDOMAIN_ONLY_DOC_ROUTES = new Set(['platform'])
+// Max concurrent HTTP probes when checking whether a section's landing URL
+// (e.g. /docs/cli) really exists before importing it as a real overview page.
+const LANDING_PROBE_CAP = 8
 
 /**
  * Run the importer programmatically. Mirrors the CLI command but throws on
@@ -58,6 +81,9 @@ export function args(cmd) {
  * @returns {Promise<{ source: 'url' | 'oas', outputZip?: string, stagingDir?: string, fileCount: number, duration: number, phases: Array<{ label: string, ms: number }> }>}
  */
 export async function importDocs(options) {
+  const model = options.model || DEFAULT_MODEL
+  options = { ...options, model }
+
   const startedAt = Date.now()
   const phases = []
   const timePhase = async (label, fn) => {
@@ -126,6 +152,11 @@ export async function importDocs(options) {
     }
   }
 
+  const llmsPaths = new Set()
+  for (const o of perSourceOrganized) {
+    for (const p of o.llmsPaths || []) llmsPaths.add(p)
+  }
+
   if (debugSnapshots) {
     debugSnapshots['05-organized.json'] = organized
     const debugDir = path.join(os.tmpdir(), `readme-import-debug-${hostnameJoined}-${Date.now()}`)
@@ -152,7 +183,7 @@ export async function importDocs(options) {
     styles.info(`Staging frontmatter stubs in ${styles.bold(stagingDir)}...`)
     const stageStart = Date.now()
     const staged = await timePhase('stage stubs', async () =>
-      stageOrganized(organized, stagingDir, { skipApiReference: !!options.skipApiReference }),
+      stageOrganized(organized, stagingDir, { skipApiReference: !!options.skipApiReference, llmsPaths }),
     )
 
     // Changelog pages stage into docs/Changelog/ (a schema-valid docs
@@ -231,6 +262,22 @@ export async function importDocs(options) {
  * the hostname so parallel runs don't clobber each other.
  */
 async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSnapshots) {
+  const redirected = await timePhase('follow source redirects', () => resolveRedirectedSourceUrl(sourceUrl))
+  if (redirected) {
+    styles.info(`${styles.bold(sourceUrl.toString())} redirects to ${styles.bold(redirected.toString())} — rebasing import onto the final URL.`)
+    sourceUrl = redirected
+  }
+
+  // Probe well-known docs routes (docs./developer. subdomains and /docs/,
+  // … path prefixes) and adopt the first that resolves as the real base, so everything downstream runs
+  const docsBase = await timePhase('probe well-known docs routes', () => resolveDocsBaseUrl(sourceUrl))
+  if (docsBase) {
+    styles.info(
+      `${styles.bold(sourceUrl.toString())} looks like a homepage — switching to docs route ${styles.bold(docsBase.url.toString())}${styles.dim(docsBase.hasLlms ? ' (llms.txt found)' : ' (no llms.txt; using for scrape fallback)')}.`,
+    )
+    sourceUrl = docsBase.url
+  }
+
   // Discover llms.txt files by BFS walking parents AND children. Seed the
   // frontier with the walk-up paths (source → root). Any "hit" (file exists
   // with at least one link row) expands the frontier: parent path + distinct
@@ -345,6 +392,9 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
     } else {
       styles.info(styles.dim(`Merged ${llms.sourceFiles.length} llms.txt files (root: ${llmsUrl}; aggregate ratio ${s.ratio.toFixed(2)}).`))
     }
+    if (llms.parsed.h3Fallback) {
+      styles.info(styles.dim(`H2 sections oversized — re-parsed using H3 (###) headings as section boundaries.`))
+    }
   }
 
   // Pre-extract changelog pages so AI / URL clustering / section-direct paths
@@ -370,6 +420,29 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
     )
   }
 
+  // Dedupe items across llms.parsed.sections by URL (first occurrence wins).
+  // Some llms.txt files cross-reference the same page under multiple headings —
+  // feeding duplicate URLs into the organize step causes the same page to appear
+  // in multiple sidebar sections regardless of which path (direct, icons, full
+  // reorg) runs downstream.
+  if (llms) {
+    const seenItemUrls = new Set()
+    let deduped = 0
+    for (const section of llms.parsed.sections) {
+      const before = section.items.length
+      section.items = section.items.filter((item) => {
+        const key = normalizePath(item.url)
+        if (seenItemUrls.has(key)) return false
+        seenItemUrls.add(key)
+        return true
+      })
+      deduped += before - section.items.length
+    }
+    if (deduped > 0) {
+      styles.info(styles.dim(`Deduped ${deduped} cross-section duplicate URL${deduped === 1 ? '' : 's'} from llms.txt sections.`))
+    }
+  }
+
   const dbgSuffix = `-${sourceUrl.hostname}`
   if (debugSnapshots) {
     debugSnapshots[`01-llms-parsed${dbgSuffix}.json`] = { llmsUrl, parsed: llms ? llms.parsed : null, skipped: skippedLlms }
@@ -391,14 +464,13 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
     // Dedupe llms.txt entries by pathname. Some sites (zod.dev, fumadocs) list
     // every in-page anchor as its own llms.txt row (`/v4?id=wrapping-up`,
     // `/v4?id=metadata`, …) even though they all live on one rendered page.
-    // We prefer the "cleanest" URL per path — the shortest one, which is
-    // usually the one without a query string or hash. Asset/meta filtering
-    // already happened upstream on llms.parsed.sections.
+    // Prefer direct markdown source forms over shorter rendered URLs because
+    // they are better import sources for downstream content fetching.
     const byKnownPath = new Map()
     for (const p of rawKnownUrls) {
       const key = normalizePath(p.url)
       const prev = byKnownPath.get(key)
-      if (!prev || p.url.length < prev.url.length) byKnownPath.set(key, p)
+      if (!prev || compareCanonicalUrlPreference(p.url, prev.url) < 0) byKnownPath.set(key, p)
     }
     knownUrls = Array.from(byKnownPath.values())
     const dropped = rawKnownUrls.length - knownUrls.length
@@ -448,6 +520,7 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
 
   let scraped
   let scrapeStart = Date.now()
+  const scrapeDiagnostics = {}
   if (mintlifyNav) {
     scraped = { title: mintlifyNav.title, categories: mintlifyNav.categories }
   } else if (archbeeNav) {
@@ -455,7 +528,8 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
   } else {
     styles.info(`Scraping sidebar nav from ${styles.bold(sourceUrl.toString())}${firecrawlKey ? ' ' + styles.dim('(via Firecrawl)') : ''}...`)
     scrapeStart = Date.now()
-    scraped = await timePhase('scrape nav', () => scrapeNavFromSite(sourceUrl.toString(), knownUrls, firecrawlKey))
+    scraped = await timePhase('scrape nav', () => scrapeNavFromSite(sourceUrl.toString(), knownUrls, firecrawlKey, scrapeDiagnostics))
+    if (!scraped) scrapeDiagnostics.reason ??= 'unknown'
   }
   if (debugSnapshots) {
     debugSnapshots[`02-scraped-raw${dbgSuffix}.json`] = scraped ? JSON.parse(JSON.stringify(scraped)) : null
@@ -469,6 +543,7 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
   // node because that's the one /docs page the scrape saw). Discard the
   // scrape and fall through to the llms.txt path, which uses URL-based
   // clustering when multiple files were merged.
+  let scrapeDiscardedForCoverage = false
   if (scraped && llms && knownUrls.length > 0) {
     const scrapedPages = scraped.categories.reduce((n, c) => n + countUrlPagesDeep(c.pages), 0)
     const coverage = scrapedPages / knownUrls.length
@@ -477,6 +552,7 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
         `Scrape covered ${styles.bold(Math.round(coverage * 100) + '%')} of llms.txt pages (need ≥75%) — discarding scrape and organizing from llms.txt.`,
       )
       scraped = null
+      scrapeDiscardedForCoverage = true
     }
   }
 
@@ -563,9 +639,9 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
             debugSnapshots[`04-after-orphan-buckets${dbgSuffix}.json`] = {
               apiReferenceCollected: apiResult.category
                 ? {
-                    pageCount: apiResult.category.pages.length,
-                    mergedFromScraped: apiResult.mergedScrapedTitles,
-                  }
+                  pageCount: apiResult.category.pages.length,
+                  mergedFromScraped: apiResult.mergedScrapedTitles,
+                }
                 : null,
               buckets,
               scraped: JSON.parse(JSON.stringify(scraped)),
@@ -610,9 +686,31 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
   } else if (!llms && knownUrls.length === 0) {
     throw new Error(`No llms.txt or sitemap.xml and the sidebar scrape found no usable structure — can't import ${sourceUrl.toString()}.`)
   } else if (llms) {
-    styles.warning(`Couldn't extract a useful nav — falling back to llms.txt-based organization.`)
+    if (!scrapeDiscardedForCoverage) {
+      const d = scrapeDiagnostics || {}
+      if (d.reason === 'no-categories-round0') {
+        styles.warning(`Sidebar scrape found no nav structure on the round-0 fetch — falling back to llms.txt organization.`)
+      } else if (d.reason === 'below-threshold') {
+        styles.warning(
+          `Sidebar scrape below acceptance threshold (got ${d.categories} categor${d.categories === 1 ? 'y' : 'ies'}, ${d.matched} matched pages — need ${d.need}) — falling back to llms.txt organization.`,
+        )
+      } else {
+        styles.warning(`Sidebar scrape returned no usable nav — falling back to llms.txt organization.`)
+      }
+    }
   } else {
-    styles.warning(`Couldn't extract a useful nav — falling back to sitemap URL clustering.`)
+    if (!scrapeDiscardedForCoverage) {
+      const d = scrapeDiagnostics || {}
+      if (d.reason === 'no-categories-round0') {
+        styles.warning(`Sidebar scrape found no nav structure on the round-0 fetch — falling back to sitemap URL clustering.`)
+      } else if (d.reason === 'below-threshold') {
+        styles.warning(
+          `Sidebar scrape below acceptance threshold (got ${d.categories} categor${d.categories === 1 ? 'y' : 'ies'}, ${d.matched} matched pages — need ${d.need}) — falling back to sitemap URL clustering.`,
+        )
+      } else {
+        styles.warning(`Sidebar scrape returned no usable nav — falling back to sitemap URL clustering.`)
+      }
+    }
   }
   console.log()
 
@@ -674,6 +772,10 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
         const fastPath = sectionsLookUsable(llms.parsed.sections)
         styles.info(`Organizing with Claude (${styles.bold(options.model)}, ${fastPath ? 'fast path: icons only' : 'full reorg'})...`)
         organized = await timePhase('claude organize', () => organizeWithClaude(llms.parsed, options.model))
+        const movedRef = reclassifyReferencePages(organized)
+        if (movedRef > 0) {
+          styles.info(`Moved ${styles.bold(String(movedRef))} page${movedRef === 1 ? '' : 's'} into ${styles.bold('API Reference')} based on URL path.`)
+        }
       }
     }
   } else {
@@ -693,12 +795,27 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
   // Changelog category (scrape path's reclassifier may have already built one).
   injectChangelogCategory(organized, extractedChangelog)
 
+  // Import section landing pages (e.g. /docs/cli) that llms.txt models as a
+  // bare heading + child links and so never lists as a page of their own.
+  // Runs before nesting so the injected page lands at its trie node and
+  // nestByUrlHierarchy renders it as the real parent of its children.
+  await injectSectionLandingPages(organized, sourceUrl)
+
   for (const cat of organized.categories || []) {
     cat.pages = nestByUrlHierarchy(cat.pages)
   }
 
   styles.ok(`Organized in ${styles.bold(formatDuration(Date.now() - organizeStart))}.`)
   organized.oasJsonUrls = oasJsonUrls
+
+  // Record which page URLs came from llms.txt
+  const llmsPaths = new Set()
+  if (llms) {
+    for (const p of [...knownUrls, ...extractedChangelog]) {
+      if (p.url) llmsPaths.add(normalizePath(p.url))
+    }
+  }
+  organized.llmsPaths = llmsPaths
   return organized
 }
 
@@ -1164,7 +1281,7 @@ async function tryMintlifyNav(sourceUrl, knownPages, firecrawlKey) {
 function extractMintlifyConfig(body) {
   try {
     return JSON.parse(body)
-  } catch {}
+  } catch { }
   // Pull out the first balanced `{ ... }` that contains a "navigation" key.
   const navIdx = body.indexOf('"navigation"')
   if (navIdx === -1) return null
@@ -1175,7 +1292,7 @@ function extractMintlifyConfig(body) {
       try {
         const parsed = JSON.parse(candidate)
         if (parsed && parsed.navigation) return parsed
-      } catch {}
+      } catch { }
     }
     start = body.lastIndexOf('{', start - 1)
   }
@@ -1380,7 +1497,7 @@ function isMonotonicAlpha(titles) {
  * renders its sidebar server-side as <nav>/<aside> with <h*> section headers.
  * Returns null if coverage is too low to be useful.
  */
-async function scrapeNavFromSite(sourceUrl, knownPages, firecrawlKey) {
+async function scrapeNavFromSite(sourceUrl, knownPages, firecrawlKey, diagnostics = {}) {
   // Index known pages by normalized pathname so we can match nav hrefs against them.
   const byPath = new Map()
   for (const p of knownPages) byPath.set(normalizePath(p.url), p)
@@ -1516,7 +1633,10 @@ async function scrapeNavFromSite(sourceUrl, knownPages, firecrawlKey) {
   const r0Start = Date.now()
   await visit(sourceUrl)
   const r0Ms = Date.now() - r0Start
-  if (categoryOrder.length === 0) return null
+  if (categoryOrder.length === 0) {
+    diagnostics.reason = 'no-categories-round0'
+    return null
+  }
 
   // Round 1 (parallel): visit pages so each branch has a chance to expose
   // its sub-items. Sidebars on most docs sites auto-expand the current
@@ -1533,9 +1653,9 @@ async function scrapeNavFromSite(sourceUrl, knownPages, firecrawlKey) {
   const r1Urls = isDiscovery
     ? flattenTree(categoryOrder).slice(0, MAX_DISCOVERY_FETCHES)
     : categoryOrder
-        .map((c) => c.pages[0])
-        .filter(Boolean)
-        .map((p) => toBrowsableUrl(p.url))
+      .map((c) => c.pages[0])
+      .filter(Boolean)
+      .map((p) => toBrowsableUrl(p.url))
   const r1Start = Date.now()
   // Firecrawl standard-plan concurrency is 10; 5 leaves headroom for retries.
   // Native HTTP can run hotter since we're hitting our own loopback.
@@ -1545,14 +1665,44 @@ async function scrapeNavFromSite(sourceUrl, knownPages, firecrawlKey) {
     styles.dim(`  ⏱  scrape breakdown: round0=${formatDuration(r0Ms)} round1=${formatDuration(r1Ms)} (${r1Urls.length} ${isDiscovery ? 'discovery' : 'category rep'} fetches)`),
   )
 
+  // Prune login/account chrome now that crawling is done. On Stoplight sites
+  // the "Sign in" → /auth link is the only seed on the bare landing page, so we
+  // had to keep it discoverable to reach the real sidebar — but it's not a doc.
+  const pruneAuthPages = (pages) => {
+    let removed = 0
+    for (let i = pages.length - 1; i >= 0; i--) {
+      const page = pages[i]
+      if (page.pages && page.pages.length > 0) removed += pruneAuthPages(page.pages)
+      if (isAuthChromeUrl(page.url) && (!page.pages || page.pages.length === 0)) {
+        matched.delete(normalizePath(page.url))
+        pages.splice(i, 1)
+        removed++
+      }
+    }
+    return removed
+  }
+  for (const cat of categoryOrder) pruneAuthPages(cat.pages)
+
   // Accept thresholds — looser in discovery mode (no llms.txt) where even a
   // single flat "Overview" bucket is better than nothing, stricter when we
   // have llms.txt to compare against.
   const categories = categoryOrder.filter((c) => c.pages.length > 0)
   if (isDiscovery) {
-    if (categories.length < 1 || matched.size < 5) return null
+    if (categories.length < 1 || matched.size < 5) {
+      diagnostics.reason = 'below-threshold'
+      diagnostics.categories = categories.length
+      diagnostics.matched = matched.size
+      diagnostics.need = '≥1 category, ≥5 matched pages'
+      return null
+    }
   } else {
-    if (categories.length < 2 || matched.size < 10) return null
+    if (categories.length < 2 || matched.size < 10) {
+      diagnostics.reason = 'below-threshold'
+      diagnostics.categories = categories.length
+      diagnostics.matched = matched.size
+      diagnostics.need = '≥2 categories, ≥10 matched pages'
+      return null
+    }
   }
   return { title: null, categories }
 }
@@ -1577,12 +1727,17 @@ function extractSidebarContainers(html) {
   const SIDEBAR_ATTR_RE =
     /\b(?:id|class|aria-label|data-testid)=(?:"[^"]*sidebar[^"]*"|'[^']*sidebar[^']*'|"[^"]*navigation[^"]*"|'[^']*navigation[^']*')|\brole=(?:"navigation"|'navigation')/i
 
+  // Layout-wrapper modifiers like `Page--with-sidebar` / `has-sidebar` describe
+  // an element that CONTAINS a sidebar, not one that IS a sidebar.
+  const WRAPPER_MODIFIER_RE = /(?:^|[\s"'-])(?:with|has)-sidebar(?=[\s"']|$)/i
+
   const out = []
   for (const tag of SIDEBAR_TAGS) {
     const openRe = new RegExp(`<${tag}\\b([^>]*)>`, 'gi')
     let m
     while ((m = openRe.exec(html)) !== null) {
       if (!SIDEBAR_ATTR_RE.test(m[1])) continue
+      if (WRAPPER_MODIFIER_RE.test(m[1])) continue
       const inner = extractBalancedTag(html, tag, m.index + m[0].length)
       if (inner != null && inner.length > 100) out.push(inner)
     }
@@ -1793,7 +1948,7 @@ function collectApiReferencePages(orphans, scraped) {
     let segs = []
     try {
       segs = new URL(p.url).pathname.split('/').filter(Boolean)
-    } catch {}
+    } catch { }
     // segs[0] is the api-prefix itself; segs[1] (if any) is the resource.
     const resource = segs.length >= 3 ? segs[1] : null
     if (!resource) {
@@ -2158,26 +2313,7 @@ function collectUrlPagesDeep(pages, out = []) {
   return out
 }
 
-/**
- * Parse a URL's pathname into segments suitable for trie nesting. Strips file
- * extensions (`.md`/`.html`/etc.) and drops a trailing `index` segment so
- * `/foo`, `/foo/`, `/foo/index.html`, and `/foo/index.md` all collapse to the
- * same logical page — the static-site-generator convention every browser and
- * web server already follows. Returns null if the URL can't be parsed.
- */
-function urlTrieSegs(url) {
-  try {
-    const segs = new URL(url).pathname
-      .split('/')
-      .filter(Boolean)
-      .map((s) => s.replace(/\.(md|mdx|html?)$/i, ''))
-      .filter(Boolean)
-    if (segs.length > 0 && segs[segs.length - 1].toLowerCase() === 'index') segs.pop()
-    return segs
-  } catch {
-    return null
-  }
-}
+// urlTrieSegs is imported from ../utils/url-segs.js
 
 /**
  * Re-parent URL-bearing siblings by URL path so descendants nest under their
@@ -2288,7 +2424,7 @@ function nestByUrlHierarchy(pages, anchorSegs = null) {
       outPage = node.page
     } else {
       const rawSeg = node.segment
-      const cleanedSeg = rawSeg.replace(/\.(md|mdx|html?)$/i, '').replace(/^\d+[-_.]/, '') || rawSeg
+      const cleanedSeg = stripSegmentExtensions(rawSeg).replace(/^\d+[-_.]/, '') || rawSeg
       outPage = {
         title: titleCase(cleanedSeg),
         _emptyParent: true,
@@ -2607,7 +2743,7 @@ function clusterByUrlPath(pages) {
     let segs = []
     try {
       segs = new URL(p.url).pathname.split('/').filter(Boolean)
-    } catch {}
+    } catch { }
     if (segs.length === 0) {
       noSegPages.push(p)
     } else {
@@ -2692,6 +2828,139 @@ function clusterByUrlPath(pages) {
 }
 
 /**
+ * Import section landing pages that the source models structurally rather than
+ * as a link. In llms.txt a section like the Vercel CLI is a bare `## CLI`
+ * heading followed by 68 `/docs/cli/<cmd>` links — the importer turns the
+ * heading into a category but `/docs/cli` itself is never listed, so its real,
+ * content-bearing overview page is dropped. ReadMe then redirects the
+ * content-less category to its first child (a broken landing page).
+ *
+ * For each category we compute the common URL prefix of its children (the
+ * section's landing URL), HTTP-probe it, and — when it really exists and stays
+ * in scope — prepend it as a real page so nestByUrlHierarchy renders it as the
+ * parent holding the children. Mutates `organized` in place.
+ */
+async function injectSectionLandingPages(organized, sourceUrl) {
+  const cats = organized?.categories || []
+  if (cats.length === 0) return
+
+  // Dedup set: every page URL already in the tree, by normalized path.
+  const known = new Set()
+  for (const c of cats) {
+    for (const p of collectUrlPagesDeep(c.pages || [])) known.add(normalizePath(p.url))
+  }
+
+  // Base path of the import itself — landing candidates must be strictly
+  // deeper than this so we never probe `/docs` (the base) as a "section".
+  const baseDepth = (urlTrieSegs(sourceUrl) || []).length
+  const origin = new URL(sourceUrl).origin
+
+  // Build one landing candidate per eligible category (cheap gate first).
+  const candidates = []
+  for (const cat of cats) {
+    const kids = collectUrlPagesDeep(cat.pages || [])
+    if (kids.length < 2) continue
+
+    // Longest common path prefix across the children — same loop as
+    // clusterByUrlPath's common-depth scan, over urlTrieSegs.
+    const parts = kids.map((p) => urlTrieSegs(p.url)).filter(Boolean)
+    if (parts.length < 2) continue
+    let commonDepth = 0
+    while (commonDepth < parts[0].length) {
+      const seg = parts[0][commonDepth]
+      if (!parts.every((pp) => pp[commonDepth] === seg)) break
+      commonDepth++
+    }
+    const commonSegs = parts[0].slice(0, commonDepth)
+
+    // Must be strictly deeper than the import base, and not already a page.
+    if (commonSegs.length <= baseDepth) continue
+    const landingUrl = `${origin}/${commonSegs.join('/')}`
+    if (known.has(normalizePath(landingUrl))) continue
+
+    candidates.push({ cat, landingUrl })
+  }
+  if (candidates.length === 0) return
+
+  // Probe surviving candidates in parallel. Accept only a real, in-scope page
+  // that doesn't redirect onto an already-known child.
+  const accepted = []
+  await visitAllInParallel(
+    candidates,
+    async ({ cat, landingUrl }) => {
+      try {
+        const res = await fetch(landingUrl, {
+          redirect: 'follow',
+          headers: { 'User-Agent': 'readme-cli-import' },
+        })
+        if (!res.ok) return
+        const candPath = new URL(landingUrl).pathname.toLowerCase()
+        const finalPath = new URL(res.url).pathname.toLowerCase()
+        if (!finalPath.startsWith(candPath)) return
+        if (known.has(normalizePath(res.url))) return
+
+        // Check `<meta http-equiv="refresh">` navigates the browser elsewhere. 
+        const html = await res.text()
+        const metaRefresh = parseMetaRefreshTarget(html, res.url)
+        if (metaRefresh && normalizePath(metaRefresh) !== normalizePath(res.url)) return
+        const canonical = parseHtmlCanonical(html, res.url)
+        if (canonical && known.has(normalizePath(canonical))) return
+
+        accepted.push({ cat, landingUrl })
+      } catch {
+        // Network error / unparseable — treat as "no landing page".
+      }
+    },
+    LANDING_PROBE_CAP,
+  )
+
+  for (const { cat, landingUrl } of accepted) {
+    // Don't set x-from-llms: the page isn't in llmsPaths, so the runner fetches
+    // its rendered HTML via the content cascade (there's no .md mirror).
+    cat.pages.unshift({ title: cat.title, url: landingUrl })
+    known.add(normalizePath(landingUrl))
+  }
+  if (accepted.length > 0) {
+    styles.info(`Imported ${styles.bold(String(accepted.length))} section landing page(s).`)
+  }
+}
+
+/**
+ * Parse a client-side redirect target from an HTML page. Return pages with 
+ * `<meta http-equiv="refresh" content="0;url=/target/">` that navigates
+ * the browser elsewhere.
+ */
+function parseMetaRefreshTarget(html, baseUrl) {
+  if (!html) return null
+  const tag = /<meta[^>]+http-equiv=["']?refresh["']?[^>]*>/i.exec(html)
+  if (!tag) return null
+  const m = /content=["'][^"']*url=([^"'>\s]+)/i.exec(tag[0])
+  if (!m) return null
+  try {
+    return new URL(decodeEntities(m[1].trim()), baseUrl).toString()
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Parse the `<link rel="canonical" href="...">` target from an HTML page,
+ * resolved absolute against `baseUrl`. Returns null when absent or unparseable.
+ */
+function parseHtmlCanonical(html, baseUrl) {
+  if (!html) return null
+  const tag = /<link[^>]+rel=["']?canonical["']?[^>]*>/i.exec(html)
+  if (!tag) return null
+  const m = /href=["']([^"']+)["']/i.exec(tag[0])
+  if (!m) return null
+  try {
+    return new URL(decodeEntities(m[1].trim()), baseUrl).toString()
+  } catch {
+    return null
+  }
+}
+
+/**
  * Used by discovery-mode scraping (no llms.txt) to decide whether a nav
  * link is worth importing as a doc page. Filters out cross-origin links,
  * asset file types, build artifacts, and anchors-on-same-page.
@@ -2709,6 +2978,20 @@ function isDiscoverableLink(abs, base) {
   if (/\.(png|jpe?g|gif|svg|webp|ico|css|js|pdf|zip|tar|gz|woff2?|ttf|mp4|mp3)$/i.test(p)) return false
   if (p.startsWith('/_next/') || p.startsWith('/__/') || p.includes('/static/') || p.includes('/assets/')) return false
   return true
+}
+
+// Leading-segment auth routes: /auth, /login, /sign-in, /logout, /sso, /oauth…
+// These are login/account chrome (Stoplight's "Sign in" → /auth, etc.), not
+// docs. NOT filtered at link-discovery time — on some Stoplight sites the
+// bare landing page only exposes the "Sign in" link, which we still need as a
+// crawl seed to reach the real sidebar. Pruned from the tree post-crawl.
+const AUTH_ROUTE_RE = /^\/(?:auth|login|log-?in|sign-?in|sign-?up|signup|logout|log-?out|sign-?out|signout|register|sso|oauth2?)(?:\/|$)/i
+function isAuthChromeUrl(url) {
+  try {
+    return AUTH_ROUTE_RE.test(new URL(url).pathname)
+  } catch {
+    return false
+  }
 }
 
 // Zero-width spaces, direction marks, word joiner, BOM — some docs sites
@@ -2750,20 +3033,7 @@ function decodeEntities(s) {
     .replace(/&rdquo;/g, '”')
 }
 
-/**
- * Reduce a URL to a comparable pathname: lowercase host, strip trailing slash
- * and common suffixes (.md, .html) so `/foo/bar.md` and `/foo/bar` match.
- */
-function normalizePath(url) {
-  try {
-    const u = new URL(url)
-    let p = u.pathname.replace(/\/$/, '').toLowerCase()
-    p = p.replace(/\.(md|mdx|html?)$/i, '')
-    return p
-  } catch {
-    return String(url).toLowerCase()
-  }
-}
+// normalizePath is imported from ../utils/url-segs.js
 
 /**
  * Given a set of scraped categories + orphan pages that didn't match the nav
@@ -2777,7 +3047,8 @@ async function slotOrphansWithClaude(scraped, orphans, model) {
     categories: scraped.categories,
     orphans,
   })
-  const raw = await runJsonQuery({ systemPrompt, userPrompt, model })
+  const result = await runJsonQuery({ systemPrompt, userPrompt, model, schema: slotOrphansOutputSchema })
+  const raw = result.assignments
   if (!Array.isArray(raw)) {
     // If the model didn't cooperate, return all orphans unassigned.
     return orphans
@@ -2807,8 +3078,8 @@ async function iconizeScrapedNav(scraped, _unused, model, siteTitle) {
   const { systemPrompt, userPrompt } = iconizeNavPrompt({
     categories: scraped.categories,
   })
-  const icons = await runJsonQuery({ systemPrompt, userPrompt, model })
-  const iconArr = Array.isArray(icons) ? icons : []
+  const result = await runJsonQuery({ systemPrompt, userPrompt, model, schema: iconizeNavOutputSchema })
+  const iconArr = Array.isArray(result.icons) ? result.icons : []
   return {
     title: siteTitle || null,
     categories: scraped.categories.map((c, i) => ({
@@ -2832,8 +3103,10 @@ function usableSections(sections) {
 }
 
 function sectionsLookUsable(sections) {
-  if (!sections || sections.length > 40) return false
-  return usableSections(sections).length >= 3
+  const usable = usableSections(sections)
+  if (usable.length < 3) return false
+  const avg = usable.reduce((n, s) => n + s.items.length, 0) / usable.length
+  return avg >= 5 && avg <= 100
 }
 
 async function organizeWithClaude(parsed, model) {
@@ -2858,7 +3131,8 @@ async function organizeFromSections(parsed, model) {
     siteTitle: parsed.title,
     sections,
   })
-  const raw = await runJsonQuery({ systemPrompt, userPrompt, model })
+  const result = await runJsonQuery({ systemPrompt, userPrompt, model, schema: organizeFromSectionsOutputSchema })
+  const raw = result.sections
   if (!Array.isArray(raw)) {
     throw new Error('Fast-path expected a JSON array of {title, icon} entries.')
   }
@@ -2893,18 +3167,22 @@ async function organizeFromScratch(parsed, model) {
     siteTitle: parsed.title,
     items,
   })
-  const raw = await runJsonQuery({ systemPrompt, userPrompt, model })
+  const raw = await runJsonQuery({ systemPrompt, userPrompt, model, schema: organizeFromScratchOutputSchema })
 
   // Rehydrate pages from the id references Claude returned.
   const expandedCategories = []
   const usedIds = new Set()
+  const usedUrls = new Set()
   for (const cat of raw.categories || []) {
     const pages = []
     for (const id of cat.pageIds || []) {
       const item = items[id]
       if (!item) continue // ignore out-of-range ids
       if (usedIds.has(id)) continue // ignore dupes
+      const normUrl = normalizePath(item.url)
+      if (usedUrls.has(normUrl)) continue // guard against same URL at different input indexes
       usedIds.add(id)
+      usedUrls.add(normUrl)
       pages.push({
         title: item.title,
         url: item.url,
@@ -2934,11 +3212,13 @@ async function organizeFromScratch(parsed, model) {
 }
 
 /**
- * Shared Claude call for "send a prompt, parse JSON back". Logs the prompts so
- * we can see what went in, runs a heartbeat so silent model latency doesn't
- * look like a hang, and strips stray code fences if the model adds them.
+ * Shared Claude call for "send a prompt, get schema-validated JSON back".
+ * Logs the prompts so we can see what went in, and runs a heartbeat so silent
+ * model latency doesn't look like a hang. The SDK enforces `schema` and
+ * returns parsed data on the result message's `structured_output` field, so
+ * there's no text extraction or JSON.parse on this path.
  */
-async function runJsonQuery({ systemPrompt, userPrompt, model }) {
+async function runJsonQuery({ systemPrompt, userPrompt, model, schema }) {
   console.log()
   console.log(styles.dim('─ system prompt ─'))
   console.log(styles.dim(systemPrompt))
@@ -2952,24 +3232,28 @@ async function runJsonQuery({ systemPrompt, userPrompt, model }) {
   console.log()
 
   const heartbeat = setInterval(() => process.stdout.write(styles.dim('.')), 1000)
-  let text = ''
+  let structured
   try {
     for await (const message of query({
       prompt: userPrompt,
       options: {
         systemPrompt,
         allowedTools: [],
+        outputFormat: { type: 'json_schema', schema },
         ...(model ? { model } : {}),
       },
     })) {
-      if (message.type === 'assistant' && message.message?.content) {
-        for (const block of message.message.content) {
-          if (block.type === 'text' && block.text) text += block.text
+      if (message.type === 'result') {
+        if (message.subtype === 'error_max_structured_output_retries') {
+          throw new Error(
+            'Claude could not produce output matching the schema after retries. ' +
+            'Likely hit the model\'s output limit — try --model sonnet.',
+          )
         }
-      } else if (message.type === 'result') {
         if (message.subtype && message.subtype !== 'success') {
           throw new Error(`Claude failed: ${message.subtype}${message.error?.message ? ' — ' + message.error.message : ''}`)
         }
+        structured = message.structured_output
         break
       }
     }
@@ -2978,18 +3262,10 @@ async function runJsonQuery({ systemPrompt, userPrompt, model }) {
     process.stdout.write('\n')
   }
 
-  const stripped = stripCodeFences(text)
-
-  try {
-    return JSON.parse(stripped)
-  } catch (e) {
-    throw new Error(
-      `Claude returned invalid JSON: ${e.message}\n` +
-        `Output length: ${stripped.length} chars. Likely hit the model's output limit — try --model sonnet.\n\n` +
-        `First 500 chars:\n${stripped.slice(0, 500)}\n\n` +
-        `Last 500 chars:\n${stripped.slice(-500)}`,
-    )
+  if (!structured || typeof structured !== 'object') {
+    throw new Error('Claude returned no structured output')
   }
+  return structured
 }
 
 /**
@@ -3188,23 +3464,127 @@ function dropAssetItemsFromParsed(parsed) {
   return dropped
 }
 
-function buildLlmsCandidates(sourceUrl) {
+
+/**
+ * Build the ordered list of well-known docs locations to probe. For each route
+ * we emit a subdomain candidate (stripping a leading `www.` first) and, unless
+ * the route is subdomain-only, a path candidate. Base URLs end in `/` so
+ * `${url.href}llms.txt` is well-formed.
+ */
+function buildWellKnownDocRoutes(sourceUrl) {
   const out = []
   const seen = new Set()
-  const add = (url) => {
-    if (!seen.has(url)) {
-      seen.add(url)
-      out.push(url)
+  const add = (kind, href) => {
+    if (seen.has(href)) return
+    seen.add(href)
+    out.push({ kind, url: new URL(href) })
+  }
+
+  const apexHost = sourceUrl.hostname.replace(/^www\./i, '')
+  for (const route of WELL_KNOWN_DOC_ROUTES) {
+    const subHost = `${route}.${apexHost}`
+    if (subHost !== sourceUrl.hostname) add('subdomain', `${sourceUrl.protocol}//${subHost}/`)
+    if (!SUBDOMAIN_ONLY_DOC_ROUTES.has(route)) add('path', `${sourceUrl.origin}/${route}/`)
+  }
+  return out
+}
+
+/**
+ * Follow redirects on the source URL itself and return the final URL when the
+ * site has moved (different origin or path), or null to keep the original.
+ * Trailing-slash and query/hash-only redirects don't count as a move.
+ */
+async function resolveRedirectedSourceUrl(sourceUrl) {
+  try {
+    const res = await fetch(sourceUrl.href, { redirect: 'follow', headers: { 'User-Agent': 'readme-cli-import' } })
+    if (!res.ok || !res.url) return null
+    const final = new URL(res.url)
+    final.search = ''
+    final.hash = ''
+    const norm = (u) => u.origin + u.pathname.replace(/\/+$/, '')
+    if (norm(final) === norm(sourceUrl)) return null
+    return final
+  } catch {
+    return null
+  }
+}
+
+/**
+ * For a bare homepage, probe well-known docs routes and return the best base to
+ * adopt, or null to leave the source untouched. A route serving a usable
+ * llms.txt always beats one that merely resolves. Returns `{ url, kind, hasLlms }`.
+ */
+async function resolveDocsBaseUrl(sourceUrl) {
+  if (sourceUrl.pathname && sourceUrl.pathname !== '/') return null
+  if (WELL_KNOWN_DOC_ROUTES.includes(sourceUrl.hostname.split('.')[0].toLowerCase())) return null
+
+  const candidates = buildWellKnownDocRoutes(sourceUrl)
+  if (candidates.length === 0) return null
+
+  styles.info(`Probing ${styles.bold(String(candidates.length))} well-known docs routes from ${styles.bold(sourceUrl.toString())}...`)
+
+  const llmsHits = await Promise.all(candidates.map(async (c) => ({ c, res: await fetchLlmsTxt(`${c.url.href}llms.txt`) })))
+  for (const { c, res } of llmsHits) {
+    const url = `${c.url.href}llms.txt`
+    if (res.ok && res.usable && (res.stats?.linkItems ?? 0) > 0) {
+      if (inCandidateScope(c, res.finalUrl)) {
+        styles.info(styles.dim(`  ${url} → valid llms.txt (${res.stats.linkItems} links)`))
+        return { url: c.url, kind: c.kind, hasLlms: true }
+      }
+      styles.info(styles.dim(`  ${url} → llms.txt redirects to ${new URL(res.finalUrl).host} (alias) — skipping`))
+    } else if (res.ok) {
+      styles.info(styles.dim(`  ${url} → no usable llms.txt`))
+    } else {
+      styles.info(styles.dim(`  ${url} → ${res.status ? `HTTP ${res.status}` : res.error || 'no llms.txt'}`))
     }
   }
 
-  const origin = sourceUrl.origin
-  const segs = sourceUrl.pathname.split('/').filter(Boolean)
-  for (let i = segs.length; i >= 0; i--) {
-    const prefix = segs.slice(0, i).join('/')
-    add(`${origin}${prefix ? '/' + prefix : ''}/llms.txt`)
+  const existence = await Promise.all(
+    llmsHits.map(async ({ c, res }) => {
+      if (res.error && c.kind === 'subdomain') return { c, exists: false }
+      return { c, exists: await docsRouteResolves(c) }
+    }),
+  )
+  for (const { c, exists } of existence) {
+    if (exists) {
+      styles.info(styles.dim(`  ${c.url.href} → resolves (no llms.txt)`))
+      return { url: c.url, kind: c.kind, hasLlms: false }
+    }
   }
-  return out
+
+  styles.info(styles.dim(`  no well-known docs route matched — keeping ${sourceUrl.toString()}`))
+  return null
+}
+
+/**
+ * Is `finalUrl` (where a fetch landed after following redirects) still within
+ * the candidate's scope? Subdomain candidates must keep their host; path
+ * candidates must keep their path prefix. A cross-scope redirect means the
+ * route is just an alias to somewhere else (usually the marketing apex).
+ */
+function inCandidateScope(candidate, finalUrl) {
+  let final
+  try {
+    final = new URL(finalUrl || candidate.url.href)
+  } catch {
+    return false
+  }
+  if (candidate.kind === 'subdomain') return final.hostname === candidate.url.hostname
+  return final.pathname.toLowerCase().startsWith(candidate.url.pathname.toLowerCase())
+}
+
+/**
+ * Does a well-known docs route exist and stay in scope? Follows redirects and
+ * rejects anything that lands outside the candidate (a `docs.` subdomain that
+ * bounces to marketing, a `/docs/` that 302s home). DNS failures → false.
+ */
+async function docsRouteResolves(candidate) {
+  try {
+    const res = await fetch(candidate.url.href, { redirect: 'follow', headers: { 'User-Agent': 'readme-cli-import' } })
+    return res.ok && inCandidateScope(candidate, res.url)
+  } catch {
+    return false
+  }
 }
 
 // Hard cap on total probes during BFS discovery — protects against
@@ -3232,6 +3612,10 @@ const LLMS_INDEX_RE = /\/llms\.txt$/i
 function pathToLlmsUrl(origin, path) {
   if (!path || path === '/') return `${origin}/llms.txt`
   return `${origin}${path}/llms.txt`
+}
+
+function llmsParseOptionsForUrl(llmsUrl) {
+  return { rootRelativeResolution: llmsPathFromUrl(llmsUrl) === '/' ? 'origin' : 'llms-dir' }
 }
 
 /**
@@ -3341,7 +3725,7 @@ async function discoverLlmsTxt(sourceUrl) {
     const results = await Promise.all(
       ring.map(async (path) => {
         const llmsUrl = pathToLlmsUrl(sourceUrl.origin, path)
-        const res = await fetchLlmsTxt(llmsUrl)
+        const res = await fetchLlmsTxt(llmsUrl, llmsParseOptionsForUrl(llmsUrl))
         return { path, llmsUrl, res }
       }),
     )
@@ -3397,7 +3781,7 @@ async function discoverLlmsTxt(sourceUrl) {
     }
     if (ring.length === 0) break
 
-    const results = await Promise.all(ring.map(async (llmsUrl) => ({ llmsUrl, res: await fetchLlmsTxt(llmsUrl) })))
+    const results = await Promise.all(ring.map(async (llmsUrl) => ({ llmsUrl, res: await fetchLlmsTxt(llmsUrl, llmsParseOptionsForUrl(llmsUrl)) })))
 
     const next = []
     for (const { llmsUrl, res } of results) {
@@ -3436,15 +3820,19 @@ function mergeValidHits(hits) {
   const deepestFirst = [...valid].sort((a, b) => b.path.length - a.path.length)
   const shallowestFirst = [...valid].sort((a, b) => a.path.length - b.path.length)
 
-  const claimed = new Set()
+  const claimed = new Map()
   const sections = []
   for (const hit of deepestFirst) {
     for (const section of hit.parsed.sections) {
       const items = []
       for (const item of section.items) {
-        const key = normalizePath(item.url)
-        if (claimed.has(key)) continue
-        claimed.add(key)
+        const key = llmsPageDedupeKey(item.url)
+        const existing = claimed.get(key)
+        if (existing) {
+          if (compareCanonicalUrlPreference(item.url, existing.url) < 0) existing.url = item.url
+          continue
+        }
+        claimed.set(key, item)
         items.push(item)
       }
       if (items.length > 0) sections.push({ title: section.title, items })
@@ -3478,7 +3866,7 @@ function mergeValidHits(hits) {
 /**
  * Best-effort fetch of a site's /llms.txt plus a simple structural usability check.
  */
-async function fetchLlmsTxt(llmsUrl) {
+async function fetchLlmsTxt(llmsUrl, options = {}) {
   try {
     const res = await fetch(llmsUrl, {
       redirect: 'follow',
@@ -3486,10 +3874,12 @@ async function fetchLlmsTxt(llmsUrl) {
     })
     if (!res.ok) return { ok: false, status: res.status }
     const text = await res.text()
-    const analysis = analyzeLlmsTxt(text, llmsUrl)
+    const finalUrl = res.url || String(llmsUrl)
+    const analysis = analyzeLlmsTxt(text, finalUrl, finalUrl === String(llmsUrl) ? options : llmsParseOptionsForUrl(finalUrl))
     return {
       ok: true,
       status: res.status,
+      finalUrl: res.url,
       parsed: analysis.parsed,
       usable: analysis.usable,
       reason: analysis.reason,
@@ -3714,6 +4104,36 @@ function collapseRedundantLayers(container) {
   }
 }
 
+// Some sites serve regular guides under an /api/docs/* path (e.g. /api/docs/guides/*,
+// /api/docs/pricing). Treat a URL as real docs when it has both `api` and `docs` segments 
+// and the segment right after `docs` is not itself a reference/api slug.
+function isDocsUnderApiPath(url) {
+  try {
+    const segs = new URL(url).pathname.split('/').filter(Boolean).map((s) => s.toLowerCase())
+    const docsIdx = segs.findIndex((s) => s === 'docs' || s === 'doc')
+    if (!segs.includes('api') || docsIdx === -1) return false
+    const afterDocs = segs[docsIdx + 1]
+    return !afterDocs || !/^(api|api[-_]?reference|reference)$/.test(afterDocs)
+  } catch {
+    return false
+  }
+}
+
+// Prune a page tree, keeping only URL pages whose url passes `predicate` plus
+// empty-parent nodes that still have surviving descendants. Nesting preserved.
+function filterUrlPagesTree(pages, predicate) {
+  const out = []
+  for (const p of pages || []) {
+    const keptKids = filterUrlPagesTree(p.pages, predicate)
+    if (p.url) {
+      if (predicate(p.url)) out.push({ ...p, pages: keptKids })
+    } else if (keptKids.length > 0) {
+      out.push({ ...p, pages: keptKids })
+    }
+  }
+  return out
+}
+
 /**
  * Write the organized hierarchy to disk as git-format markdown stubs — just
  * frontmatter, no body yet. docs/ pages go under docs/<Category>/<slug>.md;
@@ -3727,14 +4147,25 @@ function stageOrganized(organized, stagingDir, opts = {}) {
   const subDirsByTopDir = new Map()
   const counts = { fileCount: 0, skippedApiRef: 0 }
   const skipApiReference = !!opts.skipApiReference
+  const llmsPaths = opts.llmsPaths || new Set()
 
-  const eligibleCategories = (organized.categories || []).filter((cat) => {
+  const eligibleCategories = []
+  for (const cat of organized.categories || []) {
     if (skipApiReference && routeCategory(cat.title).topDir === 'reference') {
-      counts.skippedApiRef += countPagesDeep(cat.pages || [])
-      return false
+      // A reference-routed cluster can mix genuine OAS pages (/api/reference/*)
+      // with real guides served under /api/docs/*. Rescue the docs subtree —
+      // retitled so it routes to docs/ instead of the dropped reference/
+      const rescuedPages = filterUrlPagesTree(cat.pages || [], isDocsUnderApiPath)
+      const totalDeep = collectUrlPagesDeep(cat.pages || []).length
+      const rescuedDeep = collectUrlPagesDeep(rescuedPages).length
+      if (rescuedDeep > 0) {
+        eligibleCategories.push({ ...cat, title: 'API Docs', pages: rescuedPages })
+      }
+      counts.skippedApiRef += totalDeep - rescuedDeep
+      continue
     }
-    return true
-  })
+    eligibleCategories.push(cat)
+  }
 
   // TODO: Remove after readme/gitto handles better
   for (const cat of eligibleCategories) collapseRedundantLayers(cat)
@@ -3785,6 +4216,9 @@ function stageOrganized(organized, stagingDir, opts = {}) {
         // step reads it to fetch the page body. x-prefixed custom field is the
         // git-format convention for metadata the schema doesn't know about.
         frontmatter['x-import'] = toBrowsableUrl(page.url)
+        // Pages sourced from llms.txt serve raw markdown at `<url>.md`; flag them
+        // so the runner knows it can append `.md` when fetching the body.
+        if (llmsPaths.has(normalizePath(page.url))) frontmatter['x-from-llms'] = 'true'
         // hide pages that need import
         frontmatter.hidden = 'true'
       }
@@ -3963,27 +4397,7 @@ function buildFrontmatter(topDir, page, slug, pickIcon, opts = {}) {
 }
 
 /**
- * Extract URL path segments for slug planning. Strips file extensions and
- * leading numeric prefixes (e.g. `01-intro` → `intro`) the same way the
- * legacy deriveSlug did, so the depth-1 result is byte-for-byte compatible.
- * Also drops a trailing `index` segment — many SSGs render `/foo/` as
- * `/foo/index.html` and emit either form in their URL lists; we don't want
- * every page collapsing to the same `index` base slug.
- */
-function extractUrlPathSegments(url) {
-  if (!url) return []
-  try {
-    const segs = new URL(url).pathname
-      .split('/')
-      .filter(Boolean)
-      .map((s) => s.replace(/\.(md|mdx|html?)$/i, '').replace(/^\d+[-_.]/, ''))
-      .filter(Boolean)
-    if (segs.length > 0 && segs[segs.length - 1].toLowerCase() === 'index') segs.pop()
-    return segs
-  } catch {
-    return []
-  }
-}
+// extractUrlPathSegments is imported from ../utils/url-segs.js
 
 /**
  * Compute a globally-unique slug for every page in the tree.
@@ -4012,25 +4426,43 @@ function extractUrlPathSegments(url) {
  * //   <Overview (Guides)>          => 'guides-overview',            // expanded (collides)
  * // }
  */
-function ensureUniqueSlugs(categories) {
+export function ensureUniqueSlugs(categories) {
   const entries = []
   const segmentsFor = (p) => {
     if (p._virtualPathSegs && p._virtualPathSegs.length > 0) {
       return p._virtualPathSegs
-        .map((s) => s.replace(/\.(md|mdx|html?)$/i, '').replace(/^\d+[-_.]/, ''))
+        .map((s) => stripSegmentExtensions(s).replace(/^\d+[-_.]/, ''))
         .filter(Boolean)
     }
     return extractUrlPathSegments(p.url)
   }
+  const normalizedSegmentsFor = (p) => {
+    const semanticSegments = segmentsFor(p).filter((seg) => !isGenericDocsSegment(seg))
+    return semanticSegments.length > 0 ? semanticSegments : ['introduction']
+  }
+  const expansionSegmentsFor = (p, categorySeg) => {
+    const pageSegments = normalizedSegmentsFor(p)
+    if (!categorySeg || isGenericDocsSegment(categorySeg)) return pageSegments
+    return [categorySeg, ...pageSegments]
+  }
   const walk = (pages, categorySeg) => {
     for (const p of pages || []) {
-      const urlSegs = segmentsFor(p)
-      const segments = categorySeg ? [categorySeg, ...urlSegs] : urlSegs
-      entries.push({ page: p, segments, fallback: p.title, depth: 1 })
+      const segments = expansionSegmentsFor(p, categorySeg)
+      // Synthetic/empty-parent nodes have no content. Never let one win a bare
+      // single-segment slug (e.g. a placeholder `…/vercel-flags/cli` claiming
+      // `cli`), or it squats the slug a real overview page wants and ReadMe
+      // redirects the content-less parent to its first child. Floor their slug
+      // at 2 trailing segments so they namespace to `vercel-flags-cli` instead.
+      entries.push({ page: p, segments, fallback: p.title, depth: p._emptyParent ? 2 : 1 })
       if (p.pages) walk(p.pages, categorySeg)
     }
   }
-  for (const c of categories || []) {
+  const genericCategoriesFirst = [...(categories || [])].sort((a, b) => {
+    const aGeneric = isGenericDocsSegment(a?.title || '')
+    const bGeneric = isGenericDocsSegment(b?.title || '')
+    return Number(bGeneric) - Number(aGeneric)
+  })
+  for (const c of genericCategoriesFirst) {
     const rawTitle = (c?.title || '').trim()
     const categorySeg = rawTitle ? kebabCase(rawTitle) : ''
     walk(c.pages, categorySeg)
@@ -4077,14 +4509,19 @@ function ensureUniqueSlugs(categories) {
       slug = `${base}-${n}`
       styles.error(
         `Slug collision after segment expansion: ${base} — falling back to ${slug} for ${describe(e)}. ` +
-          `Pages were deduped by path before organize and category title is already part of the slug, ` +
-          `so this indicates the organize step produced duplicates within a single category.`,
+        `Pages were deduped by path before organize and category title is already part of the slug, ` +
+        `so this indicates the organize step produced duplicates within a single category.`,
       )
     }
     used.add(slug)
     result.set(e.page, slug)
   }
   return result
+}
+
+const GENERIC_DOCS_SEGMENTS = new Set(['doc', 'docs', 'documentation', 'documentations'])
+function isGenericDocsSegment(segment) {
+  return GENERIC_DOCS_SEGMENTS.has(kebabCase(segment))
 }
 
 // Values YAML interprets as non-strings need quoting when used as _order entries.
@@ -4194,6 +4631,8 @@ function makeIconPicker() {
     return icon
   }
 }
+
+export const __test__ = { discoverLlmsTxt, mergeValidHits, resolveRedirectedSourceUrl }
 
 function formatDuration(ms) {
   const safe = Math.max(0, ms)
