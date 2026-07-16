@@ -14,12 +14,6 @@ export const description = 'Sync reference pages with OpenAPI specs';
 
 const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'options', 'head', 'trace']);
 
-/**
- * Check if this is a ReadMeConfig spec (internal ReadMe pages — skip title/excerpt updates).
- */
-function isReadMeConfig(spec) {
-  return spec.info?.title === 'ReadMeConfig';
-}
 
 /**
  * Find OAS files at the root of reference/ (JSON or YAML).
@@ -168,18 +162,30 @@ function removeFromOrder(orderPath, slug) {
   }
 }
 
-function buildPageContent({ oasFilename, operationId, summary, description }) {
+/**
+ * Spec-derived values (info.title, tags, operationIds) become directory and
+ * file names. Collapse path separators and dot-only names into a single safe
+ * segment so a crafted spec can't write outside reference/.
+ */
+function safeSegment(value, fallback) {
+  const segment = String(value).replace(/[/\\]/g, '-').trim();
+  return !segment || segment === '.' || segment === '..' ? fallback : segment;
+}
+
+function isWithin(baseDir, target) {
+  const rel = path.relative(baseDir, target);
+  return (
+    rel !== '' && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel)
+  );
+}
+
+function buildPageContent({ oasFilename, operationId }) {
   const frontmatter = {
-    title: summary || operationId,
     api: {
       file: oasFilename,
       operationId,
     },
   };
-
-  if (description) {
-    frontmatter.excerpt = description;
-  }
 
   return matter.stringify('', frontmatter);
 }
@@ -189,8 +195,10 @@ function buildPageContent({ oasFilename, operationId, summary, description }) {
  */
 function syncOneOas(refDir, oasFilename, spec) {
   const specOps = extractOperations(spec);
-  const infoTitle = spec.info?.title || path.basename(oasFilename, path.extname(oasFilename));
-  const skipUpdates = isReadMeConfig(spec);
+  const infoTitle = safeSegment(
+    spec.info?.title || path.basename(oasFilename, path.extname(oasFilename)),
+    'api',
+  );
 
   const existingPages = collectExistingPages(refDir).filter(
     (p) => p.data.api.file === oasFilename,
@@ -201,7 +209,7 @@ function syncOneOas(refDir, oasFilename, spec) {
     pagesByOpId.set(page.data.api.operationId, page);
   }
 
-  const changes = { added: [], deleted: [], updated: [] };
+  const changes = { added: [], deleted: [], skipped: [] };
 
   // Deletes: pages referencing operations that no longer exist.
   for (const [opId, page] of pagesByOpId) {
@@ -216,61 +224,32 @@ function syncOneOas(refDir, oasFilename, spec) {
     }
   }
 
-  // Adds + Updates.
+  // Adds: operations with no page yet. Title/excerpt are owned by the OAS spec
+  // at render time, so generated pages carry only the api reference.
   for (const [opId, op] of specOps) {
-    const existing = pagesByOpId.get(opId);
-    const tag = op.tag || 'Other';
+    if (pagesByOpId.has(opId)) continue;
 
-    if (!existing) {
-      const pageDir = path.join(refDir, infoTitle, tag);
-      fs.mkdirSync(pageDir, { recursive: true });
+    const tag = safeSegment(op.tag || 'Other', 'Other');
+    const slug = safeSegment(opId, 'operation');
+    const pageDir = path.join(refDir, infoTitle, tag);
+    const pagePath = path.join(pageDir, `${slug}.md`);
 
-      const pagePath = path.join(pageDir, `${opId}.md`);
-      const content = buildPageContent({
-        oasFilename,
-        operationId: opId,
-        summary: op.summary,
-        description: op.description,
-      });
-      fs.writeFileSync(pagePath, content);
-
-      addToOrder(path.join(pageDir, '_order.yaml'), opId);
-      addToOrder(path.join(refDir, infoTitle, '_order.yaml'), tag);
-
-      changes.added.push(path.relative(refDir, pagePath));
-    } else if (!skipUpdates) {
-      const expectedTitle = op.summary || opId;
-      const expectedExcerpt = op.description || null;
-      const currentTitle = existing.data.title;
-      const currentExcerpt = existing.data.excerpt || null;
-
-      const titleChanged = currentTitle !== expectedTitle;
-      const excerptChanged = currentExcerpt !== expectedExcerpt;
-
-      if (titleChanged || excerptChanged) {
-        const updated = { ...existing.data };
-        const updateDetails = [];
-
-        if (titleChanged) {
-          updated.title = expectedTitle;
-          updateDetails.push('title');
-        }
-        if (excerptChanged) {
-          if (expectedExcerpt) {
-            updated.excerpt = expectedExcerpt;
-          } else {
-            delete updated.excerpt;
-          }
-          updateDetails.push('excerpt');
-        }
-
-        const body = matter(existing.content).content;
-        const newContent = matter.stringify(body, updated);
-        fs.writeFileSync(existing.filePath, newContent);
-
-        changes.updated.push(`${existing.relativePath} (${updateDetails.join(', ')})`);
-      }
+    // Never overwrite an existing file: it belongs to a manual page, another
+    // spec, or a different operation whose sanitized name collides with this
+    // one. Skipping (rather than clobbering) keeps repeated syncs stable.
+    if (!isWithin(refDir, pagePath) || fs.existsSync(pagePath)) {
+      changes.skipped.push({ path: path.relative(refDir, pagePath), operationId: opId });
+      continue;
     }
+    fs.mkdirSync(pageDir, { recursive: true });
+
+    const content = buildPageContent({ oasFilename, operationId: opId });
+    fs.writeFileSync(pagePath, content);
+
+    addToOrder(path.join(pageDir, '_order.yaml'), slug);
+    addToOrder(path.join(refDir, infoTitle, '_order.yaml'), tag);
+
+    changes.added.push(path.relative(refDir, pagePath));
   }
 
   return changes;
@@ -285,7 +264,7 @@ function syncOneOas(refDir, oasFilename, spec) {
  *
  * @param {string | { cwd?: string }} input  Repo root path, or `{ cwd }` object.
  * @returns {null | Array<{ filename: string, spec: object, opCount: number,
- *   changes: { added: string[], deleted: string[], updated: string[] } }>}
+ *   changes: { added: string[], deleted: string[] } }>}
  *   Returns null if there's no reference/ dir or no specs.
  */
 export function syncOas(input) {
@@ -325,11 +304,12 @@ export async function run(_options, _cmd, ctx) {
 
   let totalAdded = 0;
   let totalDeleted = 0;
-  let totalUpdated = 0;
+  let totalSkipped = 0;
 
   for (const { filename, spec, opCount, changes } of results) {
     const title = spec.info?.title || filename;
-    const hasChanges = changes.added.length + changes.deleted.length + changes.updated.length > 0;
+    const hasChanges =
+      changes.added.length + changes.deleted.length + changes.skipped.length > 0;
 
     const dot = hasChanges ? styles.warn('●') : styles.success('●');
     console.log();
@@ -345,20 +325,25 @@ export async function run(_options, _cmd, ctx) {
     for (const file of changes.deleted) {
       console.log(`    ${styles.err('−')} Deleted ${file}`);
     }
-    for (const file of changes.updated) {
-      console.log(`    ${styles.warn('~')} Updated ${file}`);
+    for (const { path: file, operationId } of changes.skipped) {
+      console.log(
+        `    ${styles.warn('!')} Skipped ${file} for "${operationId}" (destination already exists)`,
+      );
     }
 
     totalAdded += changes.added.length;
     totalDeleted += changes.deleted.length;
-    totalUpdated += changes.updated.length;
+    totalSkipped += changes.skipped.length;
   }
 
   console.log();
-  const total = totalAdded + totalDeleted + totalUpdated;
-  if (total === 0) {
+  const total = totalAdded + totalDeleted;
+  const skippedNote = totalSkipped > 0 ? `, ${totalSkipped} skipped` : '';
+  if (total === 0 && totalSkipped === 0) {
     styles.ok('Reference pages are already in sync.');
+  } else if (total === 0) {
+    styles.warning(`No pages synced; ${totalSkipped} skipped (destination already exists).`);
   } else {
-    styles.ok(`Synced: ${totalAdded} added, ${totalDeleted} deleted, ${totalUpdated} updated.`);
+    styles.ok(`Synced: ${totalAdded} added, ${totalDeleted} deleted${skippedNote}.`);
   }
 }
