@@ -56,7 +56,10 @@ test('entries with inline comments are matched and preserved', () => {
   });
   try {
     const res = validateAll(collectFiles(root), root, {});
-    assert.ok(!res.some((r) => r.message.includes('overview')), 'commented entry is not stale');
+    assert.ok(
+      !res.some((r) => r.message.includes('Stale entry: "overview"')),
+      'commented entry is not stale',
+    );
     assert.ok(res.some((r) => r.message.includes('Stale entry: "ghost"')), 'ghost still flagged');
 
     validateAll(collectFiles(root), root, { fix: true });

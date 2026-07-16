@@ -304,6 +304,7 @@ export async function run(_options, _cmd, ctx) {
 
   let totalAdded = 0;
   let totalDeleted = 0;
+  let totalSkipped = 0;
 
   for (const { filename, spec, opCount, changes } of results) {
     const title = spec.info?.title || filename;
@@ -332,13 +333,17 @@ export async function run(_options, _cmd, ctx) {
 
     totalAdded += changes.added.length;
     totalDeleted += changes.deleted.length;
+    totalSkipped += changes.skipped.length;
   }
 
   console.log();
   const total = totalAdded + totalDeleted;
-  if (total === 0) {
+  const skippedNote = totalSkipped > 0 ? `, ${totalSkipped} skipped` : '';
+  if (total === 0 && totalSkipped === 0) {
     styles.ok('Reference pages are already in sync.');
+  } else if (total === 0) {
+    styles.warning(`No pages synced; ${totalSkipped} skipped (destination already exists).`);
   } else {
-    styles.ok(`Synced: ${totalAdded} added, ${totalDeleted} deleted.`);
+    styles.ok(`Synced: ${totalAdded} added, ${totalDeleted} deleted${skippedNote}.`);
   }
 }
