@@ -57,7 +57,7 @@ export async function main() {
 
   // Auto-discover and register every command in src/commands/
   const commandsDir = path.join(path.dirname(new URL(import.meta.url).pathname), 'commands');
-  const files = fs.readdirSync(commandsDir).filter((f) => f.endsWith('.js'));
+  const files = fs.readdirSync(commandsDir).filter((f) => f.endsWith('.js') && !f.endsWith('.test.js'));
 
   // Load all modules, then sort by order (default 0)
   const mods = [];
