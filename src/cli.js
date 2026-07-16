@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { pathToFileURL, fileURLToPath } from 'node:url';
 import { Command } from 'commander';
 import { createRequire } from 'node:module';
 import updateNotifier from 'update-notifier';
@@ -56,7 +56,7 @@ export async function main() {
   }
 
   // Auto-discover and register every command in src/commands/
-  const commandsDir = path.join(path.dirname(new URL(import.meta.url).pathname), 'commands');
+  const commandsDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'commands');
   const files = fs.readdirSync(commandsDir).filter((f) => f.endsWith('.js') && !f.endsWith('.test.js'));
 
   // Load all modules, then sort by order (default 0)

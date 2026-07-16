@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { pathToFileURL, fileURLToPath } from 'node:url'
 
 const TARGET_PATTERNS = [
   { dir: 'custom_blocks', ext: ['.mdx', '.md'] },
@@ -38,7 +38,7 @@ export function collectFiles(gitRoot) {
  * `validateAll()` for cross-file checks (like ordering).
  */
 async function loadValidators() {
-  const validatorsDir = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'validators')
+  const validatorsDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'validators')
   const files = fs.readdirSync(validatorsDir).filter((f) => f.endsWith('.js'))
   const validators = []
 
