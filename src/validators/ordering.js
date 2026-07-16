@@ -18,10 +18,15 @@ function yamlSafeSlug(slug) {
 }
 
 // Returns the slug a "- entry" line refers to, or null for any other line.
+// Handles quoted slugs and trailing inline comments (`- overview # comment`).
 function parseOrderEntry(line) {
   const trimmed = line.trim();
   if (!trimmed.startsWith('- ')) return null;
-  return trimmed.slice(2).trim().replace(/^(['"])(.*)\1$/, '$2');
+  const value = trimmed.slice(2).trim();
+  const quoted = value.match(/^(['"])(.*)\1\s*(?:#.*)?$/);
+  if (quoted) return quoted[2];
+  const slug = value.replace(/(?:^|\s)#.*$/, '').trim();
+  return slug === '' ? null : slug;
 }
 
 function parseOrderYaml(content) {

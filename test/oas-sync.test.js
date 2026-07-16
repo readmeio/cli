@@ -60,6 +60,51 @@ test('spec-derived names cannot escape the reference directory', () => {
   }
 });
 
+test('operations whose sanitized names collide do not overwrite each other', () => {
+  const spec = JSON.stringify({
+    openapi: '3.0.0',
+    info: { title: 'Pets' },
+    paths: {
+      '/a': { get: { operationId: 'foo/bar', tags: ['Other'] } },
+      '/b': { get: { operationId: 'foo\\bar', tags: ['Other'] } },
+    },
+  });
+  const root = makeRepo({ 'reference/pets.json': spec });
+  try {
+    const [first] = syncOas(root);
+    assert.equal(first.changes.added.length, 1);
+    assert.equal(first.changes.skipped.length, 1);
+
+    const page = path.join(root, 'reference/Pets/Other/foo-bar.md');
+    const opIdOnDisk = matter(fs.readFileSync(page, 'utf-8')).data.api.operationId;
+
+    // Re-running must not flip the page to the other colliding operation.
+    const [second] = syncOas(root);
+    assert.equal(second.changes.added.length, 0);
+    assert.equal(second.changes.skipped.length, 1);
+    assert.equal(matter(fs.readFileSync(page, 'utf-8')).data.api.operationId, opIdOnDisk);
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('sync does not overwrite an existing page from another spec or author', () => {
+  const root = makeRepo({
+    'reference/pets.json': SPEC,
+    'reference/Pets/Other/listPets.md': '---\ntitle: Hand-written page\n---\n\nCustom content.\n',
+  });
+  try {
+    const [result] = syncOas(root);
+    assert.equal(result.changes.added.length, 0);
+    assert.equal(result.changes.skipped.length, 1);
+    const content = fs.readFileSync(path.join(root, 'reference/Pets/Other/listPets.md'), 'utf-8');
+    assert.match(content, /Hand-written page/);
+    assert.match(content, /Custom content/);
+  } finally {
+    rmRepo(root);
+  }
+});
+
 test('existing reference page title is not overwritten by sync', () => {
   const root = makeRepo({
     'reference/pets.json': SPEC,

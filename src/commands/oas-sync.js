@@ -209,7 +209,7 @@ function syncOneOas(refDir, oasFilename, spec) {
     pagesByOpId.set(page.data.api.operationId, page);
   }
 
-  const changes = { added: [], deleted: [] };
+  const changes = { added: [], deleted: [], skipped: [] };
 
   // Deletes: pages referencing operations that no longer exist.
   for (const [opId, page] of pagesByOpId) {
@@ -233,7 +233,14 @@ function syncOneOas(refDir, oasFilename, spec) {
     const slug = safeSegment(opId, 'operation');
     const pageDir = path.join(refDir, infoTitle, tag);
     const pagePath = path.join(pageDir, `${slug}.md`);
-    if (!isWithin(refDir, pagePath)) continue;
+
+    // Never overwrite an existing file: it belongs to a manual page, another
+    // spec, or a different operation whose sanitized name collides with this
+    // one. Skipping (rather than clobbering) keeps repeated syncs stable.
+    if (!isWithin(refDir, pagePath) || fs.existsSync(pagePath)) {
+      changes.skipped.push({ path: path.relative(refDir, pagePath), operationId: opId });
+      continue;
+    }
     fs.mkdirSync(pageDir, { recursive: true });
 
     const content = buildPageContent({ oasFilename, operationId: opId });
@@ -300,7 +307,8 @@ export async function run(_options, _cmd, ctx) {
 
   for (const { filename, spec, opCount, changes } of results) {
     const title = spec.info?.title || filename;
-    const hasChanges = changes.added.length + changes.deleted.length > 0;
+    const hasChanges =
+      changes.added.length + changes.deleted.length + changes.skipped.length > 0;
 
     const dot = hasChanges ? styles.warn('●') : styles.success('●');
     console.log();
@@ -315,6 +323,11 @@ export async function run(_options, _cmd, ctx) {
     }
     for (const file of changes.deleted) {
       console.log(`    ${styles.err('−')} Deleted ${file}`);
+    }
+    for (const { path: file, operationId } of changes.skipped) {
+      console.log(
+        `    ${styles.warn('!')} Skipped ${file} for "${operationId}" (destination already exists)`,
+      );
     }
 
     totalAdded += changes.added.length;

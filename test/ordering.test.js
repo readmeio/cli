@@ -49,6 +49,24 @@ test('--fix removals preserve comments and blank lines', () => {
   }
 });
 
+test('entries with inline comments are matched and preserved', () => {
+  const root = makeRepo({
+    'docs/overview.md': '---\ntitle: Overview\n---\n',
+    'docs/_order.yaml': '- overview # keep this first\n- ghost # stale\n',
+  });
+  try {
+    const res = validateAll(collectFiles(root), root, {});
+    assert.ok(!res.some((r) => r.message.includes('overview')), 'commented entry is not stale');
+    assert.ok(res.some((r) => r.message.includes('Stale entry: "ghost"')), 'ghost still flagged');
+
+    validateAll(collectFiles(root), root, { fix: true });
+    const after = fs.readFileSync(path.join(root, 'docs/_order.yaml'), 'utf-8');
+    assert.equal(after, '- overview # keep this first\n');
+  } finally {
+    rmRepo(root);
+  }
+});
+
 test('--fix adds missing entries in sorted order', () => {
   const root = makeRepo({
     'docs/b.md': '---\ntitle: B\n---\n',
