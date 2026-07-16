@@ -162,6 +162,23 @@ function removeFromOrder(orderPath, slug) {
   }
 }
 
+/**
+ * Spec-derived values (info.title, tags, operationIds) become directory and
+ * file names. Collapse path separators and dot-only names into a single safe
+ * segment so a crafted spec can't write outside reference/.
+ */
+function safeSegment(value, fallback) {
+  const segment = String(value).replace(/[/\\]/g, '-').trim();
+  return !segment || segment === '.' || segment === '..' ? fallback : segment;
+}
+
+function isWithin(baseDir, target) {
+  const rel = path.relative(baseDir, target);
+  return (
+    rel !== '' && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel)
+  );
+}
+
 function buildPageContent({ oasFilename, operationId }) {
   const frontmatter = {
     api: {
@@ -178,7 +195,10 @@ function buildPageContent({ oasFilename, operationId }) {
  */
 function syncOneOas(refDir, oasFilename, spec) {
   const specOps = extractOperations(spec);
-  const infoTitle = spec.info?.title || path.basename(oasFilename, path.extname(oasFilename));
+  const infoTitle = safeSegment(
+    spec.info?.title || path.basename(oasFilename, path.extname(oasFilename)),
+    'api',
+  );
 
   const existingPages = collectExistingPages(refDir).filter(
     (p) => p.data.api.file === oasFilename,
@@ -209,15 +229,17 @@ function syncOneOas(refDir, oasFilename, spec) {
   for (const [opId, op] of specOps) {
     if (pagesByOpId.has(opId)) continue;
 
-    const tag = op.tag || 'Other';
+    const tag = safeSegment(op.tag || 'Other', 'Other');
+    const slug = safeSegment(opId, 'operation');
     const pageDir = path.join(refDir, infoTitle, tag);
+    const pagePath = path.join(pageDir, `${slug}.md`);
+    if (!isWithin(refDir, pagePath)) continue;
     fs.mkdirSync(pageDir, { recursive: true });
 
-    const pagePath = path.join(pageDir, `${opId}.md`);
     const content = buildPageContent({ oasFilename, operationId: opId });
     fs.writeFileSync(pagePath, content);
 
-    addToOrder(path.join(pageDir, '_order.yaml'), opId);
+    addToOrder(path.join(pageDir, '_order.yaml'), slug);
     addToOrder(path.join(refDir, infoTitle, '_order.yaml'), tag);
 
     changes.added.push(path.relative(refDir, pagePath));

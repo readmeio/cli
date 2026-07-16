@@ -17,12 +17,18 @@ function yamlSafeSlug(slug) {
   return YAML_UNSAFE.test(slug) ? `"${slug}"` : slug;
 }
 
+// Returns the slug a "- entry" line refers to, or null for any other line.
+function parseOrderEntry(line) {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith('- ')) return null;
+  return trimmed.slice(2).trim().replace(/^(['"])(.*)\1$/, '$2');
+}
+
 function parseOrderYaml(content) {
   return content
     .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith('- '))
-    .map((line) => line.slice(2).trim().replace(/^(['"])(.*)\1$/, '$2'));
+    .map(parseOrderEntry)
+    .filter((entry) => entry !== null);
 }
 
 function isIndex(name) {
@@ -80,7 +86,7 @@ export function validateAll(files, gitRoot, { fix } = {}) {
       // No _order.yaml at all: only required dirs need one.
       if (orderEntries === null) {
         if (requireOrder && onDisk.size > 0) {
-          const missing = [...onDisk];
+          const missing = [...onDisk].sort();
           results.push({
             file: relOrder,
             rule: name,
@@ -97,7 +103,7 @@ export function validateAll(files, gitRoot, { fix } = {}) {
 
       // On disk but not ordered.
       if (requireOrder) {
-        const missing = [...onDisk].filter((slug) => !ordered.has(slug));
+        const missing = [...onDisk].filter((slug) => !ordered.has(slug)).sort();
         if (missing.length > 0) {
           results.push({
             file: relOrder,
@@ -164,9 +170,17 @@ export function validateAll(files, gitRoot, { fix } = {}) {
   }
   for (const [orderPath, toRemove] of removalsByPath) {
     if (!fs.existsSync(orderPath)) continue;
-    const kept = parseOrderYaml(fs.readFileSync(orderPath, 'utf-8')).filter((e) => !toRemove.has(e));
-    if (kept.length > 0) {
-      fs.writeFileSync(orderPath, kept.map((s) => `- ${yamlSafeSlug(s)}`).join('\n') + '\n');
+    // Drop only the targeted entry lines, keeping comments, blank lines, and
+    // untouched entries exactly as written.
+    const kept = fs
+      .readFileSync(orderPath, 'utf-8')
+      .split('\n')
+      .filter((line) => {
+        const entry = parseOrderEntry(line);
+        return entry === null || !toRemove.has(entry);
+      });
+    if (kept.some((line) => parseOrderEntry(line) !== null)) {
+      fs.writeFileSync(orderPath, kept.join('\n'));
     } else {
       fs.unlinkSync(orderPath);
     }

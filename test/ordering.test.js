@@ -35,6 +35,36 @@ test('--fix removes stale and index entries', () => {
   }
 });
 
+test('--fix removals preserve comments and blank lines', () => {
+  const root = makeRepo({
+    'docs/foo.md': '---\ntitle: Foo\n---\n',
+    'docs/_order.yaml': '# getting started\n- foo\n\n# stale below\n- ghost\n',
+  });
+  try {
+    validateAll(collectFiles(root), root, { fix: true });
+    const after = fs.readFileSync(path.join(root, 'docs/_order.yaml'), 'utf-8');
+    assert.equal(after, '# getting started\n- foo\n\n# stale below\n');
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('--fix adds missing entries in sorted order', () => {
+  const root = makeRepo({
+    'docs/b.md': '---\ntitle: B\n---\n',
+    'docs/a.md': '---\ntitle: A\n---\n',
+    'docs/c.md': '---\ntitle: C\n---\n',
+    'docs/_order.yaml': '- c\n',
+  });
+  try {
+    validateAll(collectFiles(root), root, { fix: true });
+    const after = fs.readFileSync(path.join(root, 'docs/_order.yaml'), 'utf-8');
+    assert.equal(after, '- c\n- a\n- b\n');
+  } finally {
+    rmRepo(root);
+  }
+});
+
 test('stale entries are caught in reference too', () => {
   const root = makeRepo({
     'reference/Pets/Other/listPets.md':

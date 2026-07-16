@@ -32,6 +32,34 @@ test('generated reference page has only api frontmatter (no title/excerpt)', () 
   }
 });
 
+test('spec-derived names cannot escape the reference directory', () => {
+  const spec = JSON.stringify({
+    openapi: '3.0.0',
+    info: { title: '../../escaped-title' },
+    paths: {
+      '/pets': {
+        get: { operationId: '../escaped-op', tags: ['../../escaped-tag'] },
+      },
+    },
+  });
+  const root = makeRepo({ 'reference/evil.json': spec });
+  try {
+    syncOas(root);
+
+    const refDir = path.join(root, 'reference');
+    assert.equal(fs.existsSync(path.join(root, '..', 'escaped-title')), false);
+    assert.equal(fs.existsSync(path.join(root, 'escaped-title')), false);
+
+    // The page is still generated, under sanitized single-segment names.
+    const page = path.join(refDir, '..-..-escaped-title', '..-..-escaped-tag', '..-escaped-op.md');
+    assert.ok(fs.existsSync(page), 'expected sanitized page inside reference/');
+    const { data } = matter(fs.readFileSync(page, 'utf-8'));
+    assert.equal(data.api.operationId, '../escaped-op', 'frontmatter keeps the raw operationId');
+  } finally {
+    rmRepo(root);
+  }
+});
+
 test('existing reference page title is not overwritten by sync', () => {
   const root = makeRepo({
     'reference/pets.json': SPEC,
