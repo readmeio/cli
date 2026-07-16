@@ -9,7 +9,16 @@ import matter from 'gray-matter'
 import * as styles from '../utils/styles.js'
 import { syncOas } from './oas-sync.js'
 import OASNormalize from 'oas-normalize'
-import { slotOrphansPrompt, iconizeNavPrompt, organizeFromSectionsPrompt, organizeFromScratchPrompt, stripCodeFences } from '../prompts/index.js'
+import {
+  slotOrphansPrompt,
+  slotOrphansOutputSchema,
+  iconizeNavPrompt,
+  iconizeNavOutputSchema,
+  organizeFromSectionsPrompt,
+  organizeFromSectionsOutputSchema,
+  organizeFromScratchPrompt,
+  organizeFromScratchOutputSchema,
+} from '../prompts/index.js'
 import { analyzeLlmsTxt } from '../utils/llms.js'
 import { urlTrieSegs, extractUrlPathSegments, normalizePath, stripSegmentExtensions, compareCanonicalUrlPreference, llmsPageDedupeKey } from '../utils/url-segs.js'
 
@@ -19,13 +28,15 @@ export const description = 'Import content from a URL and package it as a ReadMe
 export const hidden = true
 export const skipBootstrap = true
 
+export const DEFAULT_MODEL = 'claude-sonnet-5'
+
 export function args(cmd) {
   cmd.requiredOption(
     '--source <url-or-file...>',
     'One or more URLs to import from (space-separated or repeated), or a single local OpenAPI spec (.json/.yaml/.yml)',
   )
   cmd.option('-o, --output <path>', 'Output zip path (defaults to <basename>-readme.zip in cwd)')
-  cmd.addOption(new Option('-m, --model <name>', 'Claude model alias: haiku, sonnet, opus').choices(['haiku', 'sonnet', 'opus']).default('sonnet'))
+  cmd.addOption(new Option('-m, --model <name>', 'Claude model alias: haiku, sonnet, opus').choices(['haiku', 'sonnet', 'opus']).default(DEFAULT_MODEL))
   cmd.option('--firecrawl-key <key>', 'Firecrawl API key (or set FIRECRAWL_API_KEY env var) — enables JS-rendered sidebar scraping')
   cmd.option('--skip-api-reference', 'Drop pages routed to the API Reference / reference dir. Use when uploading the OAS spec separately.')
   cmd.option(
@@ -70,6 +81,9 @@ const LANDING_PROBE_CAP = 8
  * @returns {Promise<{ source: 'url' | 'oas', outputZip?: string, stagingDir?: string, fileCount: number, duration: number, phases: Array<{ label: string, ms: number }> }>}
  */
 export async function importDocs(options) {
+  const model = options.model || DEFAULT_MODEL
+  options = { ...options, model }
+
   const startedAt = Date.now()
   const phases = []
   const timePhase = async (label, fn) => {
@@ -248,7 +262,13 @@ export async function importDocs(options) {
  * the hostname so parallel runs don't clobber each other.
  */
 async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSnapshots) {
-  // Probe well-known docs routes (docs./developer. subdomains and /docs/, 
+  const redirected = await timePhase('follow source redirects', () => resolveRedirectedSourceUrl(sourceUrl))
+  if (redirected) {
+    styles.info(`${styles.bold(sourceUrl.toString())} redirects to ${styles.bold(redirected.toString())} — rebasing import onto the final URL.`)
+    sourceUrl = redirected
+  }
+
+  // Probe well-known docs routes (docs./developer. subdomains and /docs/,
   // … path prefixes) and adopt the first that resolves as the real base, so everything downstream runs
   const docsBase = await timePhase('probe well-known docs routes', () => resolveDocsBaseUrl(sourceUrl))
   if (docsBase) {
@@ -1645,6 +1665,24 @@ async function scrapeNavFromSite(sourceUrl, knownPages, firecrawlKey, diagnostic
     styles.dim(`  ⏱  scrape breakdown: round0=${formatDuration(r0Ms)} round1=${formatDuration(r1Ms)} (${r1Urls.length} ${isDiscovery ? 'discovery' : 'category rep'} fetches)`),
   )
 
+  // Prune login/account chrome now that crawling is done. On Stoplight sites
+  // the "Sign in" → /auth link is the only seed on the bare landing page, so we
+  // had to keep it discoverable to reach the real sidebar — but it's not a doc.
+  const pruneAuthPages = (pages) => {
+    let removed = 0
+    for (let i = pages.length - 1; i >= 0; i--) {
+      const page = pages[i]
+      if (page.pages && page.pages.length > 0) removed += pruneAuthPages(page.pages)
+      if (isAuthChromeUrl(page.url) && (!page.pages || page.pages.length === 0)) {
+        matched.delete(normalizePath(page.url))
+        pages.splice(i, 1)
+        removed++
+      }
+    }
+    return removed
+  }
+  for (const cat of categoryOrder) pruneAuthPages(cat.pages)
+
   // Accept thresholds — looser in discovery mode (no llms.txt) where even a
   // single flat "Overview" bucket is better than nothing, stricter when we
   // have llms.txt to compare against.
@@ -1689,12 +1727,17 @@ function extractSidebarContainers(html) {
   const SIDEBAR_ATTR_RE =
     /\b(?:id|class|aria-label|data-testid)=(?:"[^"]*sidebar[^"]*"|'[^']*sidebar[^']*'|"[^"]*navigation[^"]*"|'[^']*navigation[^']*')|\brole=(?:"navigation"|'navigation')/i
 
+  // Layout-wrapper modifiers like `Page--with-sidebar` / `has-sidebar` describe
+  // an element that CONTAINS a sidebar, not one that IS a sidebar.
+  const WRAPPER_MODIFIER_RE = /(?:^|[\s"'-])(?:with|has)-sidebar(?=[\s"']|$)/i
+
   const out = []
   for (const tag of SIDEBAR_TAGS) {
     const openRe = new RegExp(`<${tag}\\b([^>]*)>`, 'gi')
     let m
     while ((m = openRe.exec(html)) !== null) {
       if (!SIDEBAR_ATTR_RE.test(m[1])) continue
+      if (WRAPPER_MODIFIER_RE.test(m[1])) continue
       const inner = extractBalancedTag(html, tag, m.index + m[0].length)
       if (inner != null && inner.length > 100) out.push(inner)
     }
@@ -2937,6 +2980,20 @@ function isDiscoverableLink(abs, base) {
   return true
 }
 
+// Leading-segment auth routes: /auth, /login, /sign-in, /logout, /sso, /oauth…
+// These are login/account chrome (Stoplight's "Sign in" → /auth, etc.), not
+// docs. NOT filtered at link-discovery time — on some Stoplight sites the
+// bare landing page only exposes the "Sign in" link, which we still need as a
+// crawl seed to reach the real sidebar. Pruned from the tree post-crawl.
+const AUTH_ROUTE_RE = /^\/(?:auth|login|log-?in|sign-?in|sign-?up|signup|logout|log-?out|sign-?out|signout|register|sso|oauth2?)(?:\/|$)/i
+function isAuthChromeUrl(url) {
+  try {
+    return AUTH_ROUTE_RE.test(new URL(url).pathname)
+  } catch {
+    return false
+  }
+}
+
 // Zero-width spaces, direction marks, word joiner, BOM — some docs sites
 // inject these into sidebar headings (docs.greenflash.ai prefixes
 // "API Reference" with U+200B), which otherwise defeats downstream
@@ -2990,7 +3047,8 @@ async function slotOrphansWithClaude(scraped, orphans, model) {
     categories: scraped.categories,
     orphans,
   })
-  const raw = await runJsonQuery({ systemPrompt, userPrompt, model })
+  const result = await runJsonQuery({ systemPrompt, userPrompt, model, schema: slotOrphansOutputSchema })
+  const raw = result.assignments
   if (!Array.isArray(raw)) {
     // If the model didn't cooperate, return all orphans unassigned.
     return orphans
@@ -3020,8 +3078,8 @@ async function iconizeScrapedNav(scraped, _unused, model, siteTitle) {
   const { systemPrompt, userPrompt } = iconizeNavPrompt({
     categories: scraped.categories,
   })
-  const icons = await runJsonQuery({ systemPrompt, userPrompt, model })
-  const iconArr = Array.isArray(icons) ? icons : []
+  const result = await runJsonQuery({ systemPrompt, userPrompt, model, schema: iconizeNavOutputSchema })
+  const iconArr = Array.isArray(result.icons) ? result.icons : []
   return {
     title: siteTitle || null,
     categories: scraped.categories.map((c, i) => ({
@@ -3073,7 +3131,8 @@ async function organizeFromSections(parsed, model) {
     siteTitle: parsed.title,
     sections,
   })
-  const raw = await runJsonQuery({ systemPrompt, userPrompt, model })
+  const result = await runJsonQuery({ systemPrompt, userPrompt, model, schema: organizeFromSectionsOutputSchema })
+  const raw = result.sections
   if (!Array.isArray(raw)) {
     throw new Error('Fast-path expected a JSON array of {title, icon} entries.')
   }
@@ -3108,7 +3167,7 @@ async function organizeFromScratch(parsed, model) {
     siteTitle: parsed.title,
     items,
   })
-  const raw = await runJsonQuery({ systemPrompt, userPrompt, model })
+  const raw = await runJsonQuery({ systemPrompt, userPrompt, model, schema: organizeFromScratchOutputSchema })
 
   // Rehydrate pages from the id references Claude returned.
   const expandedCategories = []
@@ -3153,11 +3212,13 @@ async function organizeFromScratch(parsed, model) {
 }
 
 /**
- * Shared Claude call for "send a prompt, parse JSON back". Logs the prompts so
- * we can see what went in, runs a heartbeat so silent model latency doesn't
- * look like a hang, and strips stray code fences if the model adds them.
+ * Shared Claude call for "send a prompt, get schema-validated JSON back".
+ * Logs the prompts so we can see what went in, and runs a heartbeat so silent
+ * model latency doesn't look like a hang. The SDK enforces `schema` and
+ * returns parsed data on the result message's `structured_output` field, so
+ * there's no text extraction or JSON.parse on this path.
  */
-async function runJsonQuery({ systemPrompt, userPrompt, model }) {
+async function runJsonQuery({ systemPrompt, userPrompt, model, schema }) {
   console.log()
   console.log(styles.dim('─ system prompt ─'))
   console.log(styles.dim(systemPrompt))
@@ -3171,24 +3232,28 @@ async function runJsonQuery({ systemPrompt, userPrompt, model }) {
   console.log()
 
   const heartbeat = setInterval(() => process.stdout.write(styles.dim('.')), 1000)
-  let text = ''
+  let structured
   try {
     for await (const message of query({
       prompt: userPrompt,
       options: {
         systemPrompt,
         allowedTools: [],
+        outputFormat: { type: 'json_schema', schema },
         ...(model ? { model } : {}),
       },
     })) {
-      if (message.type === 'assistant' && message.message?.content) {
-        for (const block of message.message.content) {
-          if (block.type === 'text' && block.text) text += block.text
+      if (message.type === 'result') {
+        if (message.subtype === 'error_max_structured_output_retries') {
+          throw new Error(
+            'Claude could not produce output matching the schema after retries. ' +
+            'Likely hit the model\'s output limit — try --model sonnet.',
+          )
         }
-      } else if (message.type === 'result') {
         if (message.subtype && message.subtype !== 'success') {
           throw new Error(`Claude failed: ${message.subtype}${message.error?.message ? ' — ' + message.error.message : ''}`)
         }
+        structured = message.structured_output
         break
       }
     }
@@ -3197,18 +3262,10 @@ async function runJsonQuery({ systemPrompt, userPrompt, model }) {
     process.stdout.write('\n')
   }
 
-  const stripped = stripCodeFences(text)
-
-  try {
-    return JSON.parse(stripped)
-  } catch (e) {
-    throw new Error(
-      `Claude returned invalid JSON: ${e.message}\n` +
-      `Output length: ${stripped.length} chars. Likely hit the model's output limit — try --model sonnet.\n\n` +
-      `First 500 chars:\n${stripped.slice(0, 500)}\n\n` +
-      `Last 500 chars:\n${stripped.slice(-500)}`,
-    )
+  if (!structured || typeof structured !== 'object') {
+    throw new Error('Claude returned no structured output')
   }
+  return structured
 }
 
 /**
@@ -3430,6 +3487,26 @@ function buildWellKnownDocRoutes(sourceUrl) {
     if (!SUBDOMAIN_ONLY_DOC_ROUTES.has(route)) add('path', `${sourceUrl.origin}/${route}/`)
   }
   return out
+}
+
+/**
+ * Follow redirects on the source URL itself and return the final URL when the
+ * site has moved (different origin or path), or null to keep the original.
+ * Trailing-slash and query/hash-only redirects don't count as a move.
+ */
+async function resolveRedirectedSourceUrl(sourceUrl) {
+  try {
+    const res = await fetch(sourceUrl.href, { redirect: 'follow', headers: { 'User-Agent': 'readme-cli-import' } })
+    if (!res.ok || !res.url) return null
+    const final = new URL(res.url)
+    final.search = ''
+    final.hash = ''
+    const norm = (u) => u.origin + u.pathname.replace(/\/+$/, '')
+    if (norm(final) === norm(sourceUrl)) return null
+    return final
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -3797,7 +3874,8 @@ async function fetchLlmsTxt(llmsUrl, options = {}) {
     })
     if (!res.ok) return { ok: false, status: res.status }
     const text = await res.text()
-    const analysis = analyzeLlmsTxt(text, llmsUrl, options)
+    const finalUrl = res.url || String(llmsUrl)
+    const analysis = analyzeLlmsTxt(text, finalUrl, finalUrl === String(llmsUrl) ? options : llmsParseOptionsForUrl(finalUrl))
     return {
       ok: true,
       status: res.status,
@@ -4554,7 +4632,7 @@ function makeIconPicker() {
   }
 }
 
-export const __test__ = { discoverLlmsTxt, mergeValidHits }
+export const __test__ = { discoverLlmsTxt, mergeValidHits, resolveRedirectedSourceUrl }
 
 function formatDuration(ms) {
   const safe = Math.max(0, ms)

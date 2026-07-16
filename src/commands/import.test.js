@@ -22,6 +22,14 @@ function mockLlmsFetch(files) {
   return seen
 }
 
+function mockRedirectFetch(files) {
+  globalThis.fetch = async (url) => {
+    const entry = files[String(url)]
+    if (!entry) return { ok: false, status: 404, url: String(url), text: async () => '' }
+    return { ok: true, status: 200, url: entry.finalUrl || String(url), text: async () => entry.body || '' }
+  }
+}
+
 function mergedItems(merged) {
   return merged.parsed.sections.flatMap((section) => section.items.map((item) => ({ text: item.text, url: item.url })))
 }
@@ -53,4 +61,76 @@ test('llms discovery and merge resolve nested files, dedupe canonical pages, and
 
   assert(!urls.some((url) => url.includes('%zz')))
   assert(!urls.some((url) => url.startsWith('mailto:') || url.startsWith('javascript:')))
+})
+
+test('llms.txt fetched through a cross-origin redirect resolves links against the final URL', async () => {
+  mockRedirectFetch({
+    'https://docs.example.com/llms.txt': {
+      finalUrl: 'https://example.com/docs/llms.txt',
+      body: `# Docs\n\n## Guides\n- [Sample APIs](/docs/sample-apis.md)\n- [Policies](/policies.md)\n`,
+    },
+  })
+
+  const discovery = await __test__.discoverLlmsTxt(new URL('https://docs.example.com'))
+  const merged = __test__.mergeValidHits(discovery.hits)
+  const urls = mergedItems(merged).map((item) => item.url)
+
+  assert(urls.includes('https://example.com/docs/sample-apis.md'))
+  assert(urls.includes('https://example.com/docs/policies.md'))
+  assert(!urls.some((url) => url.startsWith('https://docs.example.com/')))
+})
+
+test('nested llms.txt with its own redirect resolves links on its final path', async () => {
+  mockRedirectFetch({
+    'https://example.com/llms.txt': {
+      body: `# Root\n\n## Index\n- [Guide llms](/guide/llms.txt)\n`,
+    },
+    'https://example.com/guide/llms.txt': {
+      finalUrl: 'https://example.com/docs/guide/llms.txt',
+      body: `# Guide\n\n## Guides\n- [Intro](intro.md)\n- [Setup](setup.md)\n`,
+    },
+  })
+
+  const discovery = await __test__.discoverLlmsTxt(new URL('https://example.com'))
+  const merged = __test__.mergeValidHits(discovery.hits)
+  const urls = mergedItems(merged).map((item) => item.url)
+
+  assert(urls.includes('https://example.com/docs/guide/intro.md'))
+  assert(urls.includes('https://example.com/docs/guide/setup.md'))
+  assert(!urls.includes('https://example.com/guide/intro.md'))
+  assert(!urls.includes('https://example.com/guide/setup.md'))
+})
+
+test('resolveRedirectedSourceUrl adopts cross-origin path redirects', async () => {
+  mockRedirectFetch({
+    'https://docs.example.com/': { finalUrl: 'https://example.com/docs' },
+  })
+  const final = await __test__.resolveRedirectedSourceUrl(new URL('https://docs.example.com/'))
+  assert.equal(final?.href, 'https://example.com/docs')
+})
+
+test('resolveRedirectedSourceUrl ignores trailing-slash redirects', async () => {
+  mockRedirectFetch({
+    'https://example.com/docs': { finalUrl: 'https://example.com/docs/' },
+  })
+  assert.equal(await __test__.resolveRedirectedSourceUrl(new URL('https://example.com/docs')), null)
+})
+
+test('resolveRedirectedSourceUrl ignores query and hash-only redirects', async () => {
+  mockRedirectFetch({
+    'https://example.com/docs': { finalUrl: 'https://example.com/docs?lang=en#top' },
+  })
+  assert.equal(await __test__.resolveRedirectedSourceUrl(new URL('https://example.com/docs')), null)
+})
+
+test('resolveRedirectedSourceUrl returns null on non-ok responses', async () => {
+  globalThis.fetch = async (url) => ({ ok: false, status: 500, url: String(url), text: async () => '' })
+  assert.equal(await __test__.resolveRedirectedSourceUrl(new URL('https://example.com/')), null)
+})
+
+test('resolveRedirectedSourceUrl returns null when fetch throws', async () => {
+  globalThis.fetch = async () => {
+    throw new Error('network down')
+  }
+  assert.equal(await __test__.resolveRedirectedSourceUrl(new URL('https://example.com/')), null)
 })
