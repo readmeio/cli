@@ -26,8 +26,8 @@ test('generated reference page has only api frontmatter (no title/excerpt)', () 
     const { data } = matter(fs.readFileSync(page, 'utf-8'));
     assert.equal(data.api.file, 'pets.json');
     assert.equal(data.api.operationId, 'listPets');
-    // hidden is left to the backend default rather than written explicitly.
-    assert.equal('hidden' in data, false);
+    // Mirrors upload: new pages are always stamped hidden: false.
+    assert.equal(data.hidden, false);
     assert.equal('title' in data, false);
     assert.equal('excerpt' in data, false);
   } finally {
@@ -52,7 +52,7 @@ test('sync generates a tag index.md with the tag description from the spec', () 
     const { data } = matter(fs.readFileSync(indexPath, 'utf-8'));
     assert.equal(data.title, 'users');
     assert.equal(data.excerpt, 'User management operations');
-    assert.equal('hidden' in data, false);
+    assert.equal(data.hidden, false);
 
     // index must not be listed in the tag's _order.yaml.
     const order = fs.readFileSync(path.join(root, 'reference/Sample API/users/_order.yaml'), 'utf-8');
@@ -70,6 +70,43 @@ test('sync maintains the root reference/_order.yaml', () => {
     const rootOrder = path.join(root, 'reference/_order.yaml');
     assert.ok(fs.existsSync(rootOrder), 'expected root _order.yaml');
     assert.match(fs.readFileSync(rootOrder, 'utf-8'), /- Pets/);
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('sync backfills a missing tag index.md even when all op pages already exist', () => {
+  // Simulates a reference synced by an older CLI: op pages exist, no index.md.
+  const spec = JSON.stringify({
+    openapi: '3.0.0',
+    info: { title: 'API' },
+    tags: [{ name: 'widgets', description: 'Widget operations' }],
+    paths: {
+      '/1': { get: { operationId: 'listWidgets', tags: ['widgets'] } },
+      '/2': { get: { operationId: 'getWidget', tags: ['widgets'] } },
+    },
+  });
+  const root = makeRepo({
+    'reference/api.json': spec,
+    'reference/API/widgets/listwidgets.md':
+      '---\napi:\n  file: api.json\n  operationId: listWidgets\n---\n',
+    'reference/API/widgets/getwidget.md':
+      '---\napi:\n  file: api.json\n  operationId: getWidget\n---\n',
+  });
+  try {
+    const indexPath = path.join(root, 'reference/API/widgets/index.md');
+    assert.equal(fs.existsSync(indexPath), false, 'precondition: no index.md yet');
+
+    syncOas(root);
+
+    assert.ok(fs.existsSync(indexPath), 'expected the category index.md to be backfilled');
+    const { data } = matter(fs.readFileSync(indexPath, 'utf-8'));
+    assert.equal(data.title, 'widgets');
+    assert.equal(data.excerpt, 'Widget operations');
+
+    // A second run is a no-op (index now present).
+    const [second] = syncOas(root);
+    assert.equal(second.changes.added.length, 0);
   } finally {
     rmRepo(root);
   }
@@ -165,7 +202,7 @@ test('spec-derived names cannot escape the reference directory', () => {
   }
 });
 
-test('operations whose sanitized names collide do not overwrite each other', () => {
+test('operations whose sanitized names collide get distinct suffixed slugs', () => {
   const spec = JSON.stringify({
     openapi: '3.0.0',
     info: { title: 'Pets' },
@@ -177,37 +214,92 @@ test('operations whose sanitized names collide do not overwrite each other', () 
   const root = makeRepo({ 'reference/pets.json': spec });
   try {
     const [first] = syncOas(root);
-    // added = the op page plus the tag's generated index.md.
-    const addedPages = first.changes.added.filter((p) => !p.endsWith('index.md'));
-    assert.equal(addedPages.length, 1);
-    assert.equal(first.changes.skipped.length, 1);
+    // Both operations get their own page; the second collides and is suffixed.
+    const opPages = first.changes.added.filter((p) => !p.endsWith('index.md'));
+    assert.equal(opPages.length, 2);
+    assert.equal(first.changes.skipped.length, 0);
 
-    const page = path.join(root, 'reference/Pets/Other/foo-bar.md');
-    const opIdOnDisk = matter(fs.readFileSync(page, 'utf-8')).data.api.operationId;
+    const base = path.join(root, 'reference/Pets/Other/foo-bar.md');
+    const suffixed = path.join(root, 'reference/Pets/Other/foo-bar-1.md');
+    assert.ok(fs.existsSync(base) && fs.existsSync(suffixed), 'expected foo-bar.md and foo-bar-1.md');
+    const ops = [base, suffixed].map((p) => matter(fs.readFileSync(p, 'utf-8')).data.api.operationId);
+    assert.deepEqual([...ops].sort(), ['foo/bar', 'foo\\bar']);
 
-    // Re-running must not flip the page to the other colliding operation.
+    // Re-running is stable: both pages already exist (matched by operationId).
     const [second] = syncOas(root);
     assert.equal(second.changes.added.length, 0);
-    assert.equal(second.changes.skipped.length, 1);
-    assert.equal(matter(fs.readFileSync(page, 'utf-8')).data.api.operationId, opIdOnDisk);
+    assert.equal(second.changes.skipped.length, 0);
   } finally {
     rmRepo(root);
   }
 });
 
-test('sync does not overwrite an existing page from another spec or author', () => {
+test('sync gives an operation a unique slug rather than overwriting a hand-written page', () => {
   const root = makeRepo({
     'reference/pets.json': SPEC,
-    // The sync targets the lowercased slug.
+    // A hand-written page (no api frontmatter) already occupies the slug.
     'reference/Pets/Other/listpets.md': '---\ntitle: Hand-written page\n---\n\nCustom content.\n',
   });
   try {
-    const [result] = syncOas(root);
-    assert.equal(result.changes.added.length, 0);
-    assert.equal(result.changes.skipped.length, 1);
-    const content = fs.readFileSync(path.join(root, 'reference/Pets/Other/listpets.md'), 'utf-8');
-    assert.match(content, /Hand-written page/);
-    assert.match(content, /Custom content/);
+    syncOas(root);
+    // The hand-written page is untouched...
+    const hand = fs.readFileSync(path.join(root, 'reference/Pets/Other/listpets.md'), 'utf-8');
+    assert.match(hand, /Hand-written page/);
+    assert.match(hand, /Custom content/);
+    // ...and the operation gets its own suffixed page.
+    const opPage = path.join(root, 'reference/Pets/Other/listpets-1.md');
+    assert.ok(fs.existsSync(opPage), 'expected listpets-1.md for the operation');
+    assert.equal(matter(fs.readFileSync(opPage, 'utf-8')).data.api.operationId, 'listPets');
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('reference slugs are unique across tags (flat namespace), not per-folder', () => {
+  const spec = JSON.stringify({
+    openapi: '3.0.0',
+    info: { title: 'Pets' },
+    paths: {
+      '/a': { get: { operationId: 'thing', tags: ['alpha'] } },
+      '/b': { get: { operationId: 'Thing', tags: ['beta'] } },
+    },
+  });
+  const root = makeRepo({ 'reference/pets.json': spec });
+  try {
+    syncOas(root);
+    // Same base slug in two different tags: the second is suffixed even though
+    // it's in a different folder, because reference slugs share one namespace.
+    assert.ok(fs.existsSync(path.join(root, 'reference/Pets/alpha/thing.md')));
+    assert.ok(fs.existsSync(path.join(root, 'reference/Pets/beta/thing-1.md')));
+    assert.equal(fs.existsSync(path.join(root, 'reference/Pets/beta/thing.md')), false);
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('a slug taken by a category folder (folder/index.md) is not reused by an operation', () => {
+  const spec = JSON.stringify({
+    openapi: '3.0.0',
+    info: { title: 'Pets' },
+    paths: {
+      '/a': { get: { operationId: 'guides', tags: ['Other'] } },
+    },
+  });
+  const root = makeRepo({
+    'reference/pets.json': spec,
+    // A category folder whose slug is its folder name: "guides".
+    'reference/Pets/Other/guides/index.md': '---\ntitle: Guides\n---\n\nA sub-category.\n',
+  });
+  try {
+    syncOas(root);
+    // The operation slug "guides" is taken by the folder, so it is suffixed.
+    assert.ok(fs.existsSync(path.join(root, 'reference/Pets/Other/guides-1.md')));
+    assert.equal(fs.existsSync(path.join(root, 'reference/Pets/Other/guides.md')), false);
+    // The category folder's index.md is untouched.
+    assert.match(
+      fs.readFileSync(path.join(root, 'reference/Pets/Other/guides/index.md'), 'utf-8'),
+      /A sub-category/,
+    );
   } finally {
     rmRepo(root);
   }

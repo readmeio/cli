@@ -185,6 +185,19 @@ function buildPageContent({ oasFilename, operationId }) {
       file: oasFilename,
       operationId,
     },
+    // Mirror the platform's OAS-upload behavior: a newly added endpoint is
+    // always written `hidden: false`, even when its tag and siblings are
+    // `hidden: true`. The backend does not infer this from a missing field, so
+    // it must be written explicitly.
+    //
+    // @todo Honor the `x-internal` OpenAPI extension for page visibility, to
+    // match gitto#2095 (RM-4616 / CX-3303): resolve `hidden` from operation-level
+    // `x-internal`, falling back to root-level, else false; and hide a tag's
+    // index page when all of its operations are `x-internal: true`. Deferred to
+    // keep oas:sync create-only — the resync-side rules (re-applying x-internal
+    // to existing pages, parent hide-ratchet) would require mutating existing
+    // pages, which this command intentionally never does.
+    hidden: false,
   };
 
   return matter.stringify('', frontmatter);
@@ -198,27 +211,70 @@ function buildPageContent({ oasFilename, operationId }) {
 function buildTagIndexContent(tagName, description) {
   const frontmatter = { title: tagName };
   if (description) frontmatter.excerpt = description;
+  // As with operation pages, upload always stamps hidden: false on new pages.
+  frontmatter.hidden = false;
 
   return matter.stringify('', frontmatter);
 }
 
 /**
- * `index.md` in a tag directory is reserved for the tag's category landing
- * page, so an operation whose slug is `index` can't use it. Fall back to the
- * first free `index-N` so it collides with neither the landing page nor another
- * operation (including a second operation that also normalizes to `index`).
+ * Collect every slug already used across the entire reference/ tree. Reference
+ * page slugs share one flat namespace (docs/ is a separate namespace and is not
+ * consulted), so a generated operation slug must be unique against all of them.
+ * A page's slug is its filename without `.md`; a category page's slug (a folder
+ * containing `index.md`) is the folder name. Comparison is case-insensitive.
  */
-function reserveOperationSlug(pageDir, slug) {
-  if (slug !== 'index') return slug;
-  let n = 1;
-  while (fs.existsSync(path.join(pageDir, `index-${n}.md`))) n += 1;
-  return `index-${n}`;
+function collectReferenceSlugs(refDir) {
+  const slugs = new Set();
+
+  function walk(dir) {
+    for (const entry of fs.readdirSync(dir)) {
+      const full = path.join(dir, entry);
+      let stat;
+      try {
+        stat = fs.statSync(full);
+      } catch {
+        continue;
+      }
+      if (stat.isDirectory()) {
+        walk(full);
+      } else if (entry.endsWith('.md')) {
+        // A folder's index.md contributes the folder name as a slug; any other
+        // page contributes its own filename.
+        const slug = entry === 'index.md' ? path.basename(dir) : path.basename(entry, '.md');
+        slugs.add(slug.toLowerCase());
+      }
+    }
+  }
+
+  walk(refDir);
+  return slugs;
+}
+
+/**
+ * Reserve a unique reference slug. `index` is never usable by an operation (it's
+ * reserved for the tag category page), and any slug already present in the
+ * reference namespace gets a numeric suffix (`-1`, `-2`, ...) until it's free.
+ * The chosen slug is added to `takenSlugs` so later operations see it.
+ */
+function reserveSlug(takenSlugs, base) {
+  let chosen = base;
+  if (base === 'index' || takenSlugs.has(base)) {
+    let n = 1;
+    while (takenSlugs.has(`${base}-${n}`)) n += 1;
+    chosen = `${base}-${n}`;
+  }
+  takenSlugs.add(chosen);
+  return chosen;
 }
 
 /**
  * Run the sync for a single OAS file. Returns changes for that file.
+ *
+ * `takenSlugs` is the reference-wide set of slugs already in use; it is read and
+ * mutated so slugs stay unique across every spec processed in one sync run.
  */
-function syncOneOas(refDir, oasFilename, spec) {
+function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
   const specOps = extractOperations(spec);
   const infoTitle = safeSegment(
     spec.info?.title || path.basename(oasFilename, path.extname(oasFilename)),
@@ -252,46 +308,63 @@ function syncOneOas(refDir, oasFilename, spec) {
       const pageDir = path.dirname(page.filePath);
       const slug = path.basename(page.filePath, '.md');
       removeFromOrder(path.join(pageDir, '_order.yaml'), slug);
+      takenSlugs.delete(slug.toLowerCase());
 
       changes.deleted.push(page.relativePath);
     }
   }
 
-  // Adds: operations with no page yet. Title/excerpt are owned by the OAS spec
-  // at render time, so generated pages carry only the api reference. Slugs are
-  // lowercased to match the platform's OAS-upload output.
+  // Ensure every tag present in the spec has its category landing page (index.md)
+  // and is ordered — independent of whether its operation pages are new. Doing
+  // this as its own pass (rather than only when creating a new op page) backfills
+  // category pages for references first synced by a CLI version that didn't
+  // generate them, and recreates one that was deleted.
+  const specTags = new Set([...specOps.values()].map((op) => op.tag || 'Other'));
+  for (const rawTag of specTags) {
+    const tag = safeSegment(rawTag, 'Other');
+    const pageDir = path.join(refDir, infoTitle, tag);
+    if (!isWithin(refDir, pageDir)) continue;
+
+    const indexPath = path.join(pageDir, 'index.md');
+    if (!fs.existsSync(indexPath)) {
+      // Never overwrite an existing index.md — it may be a hand-written category.
+      fs.mkdirSync(pageDir, { recursive: true });
+      fs.writeFileSync(indexPath, buildTagIndexContent(rawTag, tagDescriptions.get(rawTag)));
+      changes.added.push(path.relative(refDir, indexPath));
+    }
+    // The category page's slug is the tag folder name; reserve it so no operation
+    // takes it. Ordering entries are idempotent, so this is a no-op when present.
+    takenSlugs.add(tag.toLowerCase());
+    addToOrder(path.join(refDir, infoTitle, '_order.yaml'), tag);
+    addToOrder(path.join(refDir, '_order.yaml'), infoTitle);
+  }
+
+  // Adds: operation pages with no page yet. Title/excerpt are owned by the OAS
+  // spec at render time, so generated pages carry only the api reference. Slugs
+  // are lowercased to match the platform's OAS-upload output.
   for (const [opId, op] of specOps) {
     if (pagesByOpId.has(opId)) continue;
 
-    const rawTag = op.tag || 'Other';
-    const tag = safeSegment(rawTag, 'Other');
+    const tag = safeSegment(op.tag || 'Other', 'Other');
     const pageDir = path.join(refDir, infoTitle, tag);
-    const slug = reserveOperationSlug(pageDir, safeSegment(opId, 'operation').toLowerCase());
+    // Reference slugs share one flat namespace, so uniquify against every slug
+    // already in reference/ — a collision (or the reserved `index` slug) gets a
+    // numeric suffix rather than being skipped.
+    const slug = reserveSlug(takenSlugs, safeSegment(opId, 'operation').toLowerCase());
     const pagePath = path.join(pageDir, `${slug}.md`);
 
-    // Never overwrite an existing file: it belongs to a manual page, another
-    // spec, or a different operation whose sanitized name collides with this
-    // one. Skipping (rather than clobbering) keeps repeated syncs stable.
+    // Guard against a spec-crafted name escaping reference/, or a stale slug set
+    // vs. disk. reserveSlug already prevents slug collisions.
     if (!isWithin(refDir, pagePath) || fs.existsSync(pagePath)) {
       changes.skipped.push({ path: path.relative(refDir, pagePath), operationId: opId });
       continue;
     }
     fs.mkdirSync(pageDir, { recursive: true });
 
-    // The tag's category landing page (index.md), like the platform generates
-    // on upload. Never overwrite one that already exists.
-    const indexPath = path.join(pageDir, 'index.md');
-    if (!fs.existsSync(indexPath)) {
-      fs.writeFileSync(indexPath, buildTagIndexContent(rawTag, tagDescriptions.get(rawTag)));
-      changes.added.push(path.relative(refDir, indexPath));
-    }
-
     const content = buildPageContent({ oasFilename, operationId: opId });
     fs.writeFileSync(pagePath, content);
 
     addToOrder(path.join(pageDir, '_order.yaml'), slug);
-    addToOrder(path.join(refDir, infoTitle, '_order.yaml'), tag);
-    addToOrder(path.join(refDir, '_order.yaml'), infoTitle);
 
     changes.added.push(path.relative(refDir, pagePath));
   }
@@ -319,11 +392,14 @@ export function syncOas(input) {
   const oasFiles = findOasFiles(refDir);
   if (oasFiles.length === 0) return null;
 
+  // Reference slugs share one flat namespace across every spec, so build the set
+  // of in-use slugs once and let each spec read/extend it.
+  const takenSlugs = collectReferenceSlugs(refDir);
   const allChanges = [];
 
   for (const { filename, spec } of oasFiles) {
     const ops = extractOperations(spec);
-    const changes = syncOneOas(refDir, filename, spec);
+    const changes = syncOneOas(refDir, filename, spec, takenSlugs);
     allChanges.push({ filename, spec, opCount: ops.size, changes });
   }
 
