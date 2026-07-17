@@ -185,7 +185,21 @@ function buildPageContent({ oasFilename, operationId }) {
       file: oasFilename,
       operationId,
     },
+    hidden: false,
   };
+
+  return matter.stringify('', frontmatter);
+}
+
+/**
+ * Build the category landing page for a tag (mirrors what the ReadMe platform
+ * generates on OAS upload): title from the tag name, excerpt from the tag's
+ * description in the spec's top-level `tags` array.
+ */
+function buildTagIndexContent(tagName, description) {
+  const frontmatter = { title: tagName };
+  if (description) frontmatter.excerpt = description;
+  frontmatter.hidden = false;
 
   return matter.stringify('', frontmatter);
 }
@@ -211,6 +225,14 @@ function syncOneOas(refDir, oasFilename, spec) {
 
   const changes = { added: [], deleted: [], skipped: [] };
 
+  // Tag descriptions from the spec's top-level `tags` array, used for the
+  // per-tag category landing page (index.md).
+  const tagDescriptions = new Map(
+    (Array.isArray(spec.tags) ? spec.tags : [])
+      .filter((t) => t && t.name)
+      .map((t) => [t.name, t.description || null]),
+  );
+
   // Deletes: pages referencing operations that no longer exist.
   for (const [opId, page] of pagesByOpId) {
     if (!specOps.has(opId)) {
@@ -225,12 +247,14 @@ function syncOneOas(refDir, oasFilename, spec) {
   }
 
   // Adds: operations with no page yet. Title/excerpt are owned by the OAS spec
-  // at render time, so generated pages carry only the api reference.
+  // at render time, so generated pages carry only the api reference. Slugs are
+  // lowercased to match the platform's OAS-upload output.
   for (const [opId, op] of specOps) {
     if (pagesByOpId.has(opId)) continue;
 
-    const tag = safeSegment(op.tag || 'Other', 'Other');
-    const slug = safeSegment(opId, 'operation');
+    const rawTag = op.tag || 'Other';
+    const tag = safeSegment(rawTag, 'Other');
+    const slug = safeSegment(opId, 'operation').toLowerCase();
     const pageDir = path.join(refDir, infoTitle, tag);
     const pagePath = path.join(pageDir, `${slug}.md`);
 
@@ -243,11 +267,20 @@ function syncOneOas(refDir, oasFilename, spec) {
     }
     fs.mkdirSync(pageDir, { recursive: true });
 
+    // The tag's category landing page (index.md), like the platform generates
+    // on upload. Never overwrite one that already exists.
+    const indexPath = path.join(pageDir, 'index.md');
+    if (!fs.existsSync(indexPath)) {
+      fs.writeFileSync(indexPath, buildTagIndexContent(rawTag, tagDescriptions.get(rawTag)));
+      changes.added.push(path.relative(refDir, indexPath));
+    }
+
     const content = buildPageContent({ oasFilename, operationId: opId });
     fs.writeFileSync(pagePath, content);
 
     addToOrder(path.join(pageDir, '_order.yaml'), slug);
     addToOrder(path.join(refDir, infoTitle, '_order.yaml'), tag);
+    addToOrder(path.join(refDir, '_order.yaml'), infoTitle);
 
     changes.added.push(path.relative(refDir, pagePath));
   }
