@@ -4185,9 +4185,12 @@ function stageOrganized(organized, stagingDir, opts = {}) {
 
   /**
    * Write a page (and its descendants) into `dir`. A page with children gets
-   * its own subfolder named after its slug; the parent page lives at
-   * `<dir>/<slug>.md` while children live at `<dir>/<slug>/<childSlug>.md`.
-   * This matches git-format's on-disk convention for nested sidebars.
+   * its own subfolder named after its slug; its content lives at
+   * `<dir>/<slug>/index.md` while children live at `<dir>/<slug>/<childSlug>.md`.
+   * A leaf page (no children) lives at `<dir>/<slug>.md`. This matches
+   * git-format's on-disk convention: gitto backs a folder's sidebar node with
+   * its `index.md`; a sibling `<slug>.md` next to the folder instead leaves the
+   * folder a contentless placeholder parent and the sibling a stray page.
    */
   function writePage(page, dir, topDir, isSubPage = false) {
     const slug = slugFor.get(page)
@@ -4198,9 +4201,13 @@ function stageOrganized(organized, stagingDir, opts = {}) {
     // right subdirectory.
     const isEmptyParent = !!page._emptyParent
     const isGroupOnly = !page.url && !isEmptyParent
+    const children = page.pages || []
+    const hasChildren = children.length > 0
 
     if (!isGroupOnly) {
-      const relFilePath = `${dir}/${slug}.md`
+      // Parents-with-children store their content INSIDE the folder as
+      // `index.md`; leaf pages stay as `<slug>.md`.
+      const relFilePath = hasChildren ? `${dir}/${slug}/index.md` : `${dir}/${slug}.md`
       let frontmatter
       if (isEmptyParent) {
         // Synthetic parent page: covers a missing URL segment so descendants
@@ -4228,26 +4235,81 @@ function stageOrganized(organized, stagingDir, opts = {}) {
       fs.writeFileSync(absPath, matter.stringify('', frontmatter))
       counts.fileCount++
 
+      // The sidebar entry is `slug` for both leaves (`<slug>.md`) and parents
+      // (the `<slug>/` folder) — `index` is never listed, it's implicit.
       if (!byDir.has(dir)) byDir.set(dir, [])
       byDir.get(dir).push(slug)
     }
 
-    const children = page.pages || []
-    if (children.length > 0) {
+    if (hasChildren) {
       const subDir = `${dir}/${slug}`
       for (const child of children) writePage(child, subDir, topDir, true)
     }
   }
 
+  // gitto derives a page's slug from the folder BASENAME alone (getSlugFromPath),
+  // so two category folders that share a basename — e.g. docs/Fundamentals and
+  // docs/cockroach/Fundamentals — both slug to `fundamentals` and collide. The
+  // deeper one renders as an unnamed, content-less placeholder parent.
+  // Namespace every NESTED category folder by its ancestor path so its basename
+  // (and thus slug) is globally unique, and back it with an `index.md` so it's a
+  // real titled parent. Top-level categories are matched by title, not slug, so
+  // their folders are left untouched.
+  const usedContainerSlugs = new Set(slugFor.values())
+  const segRename = new Map() // original path prefix -> unique folder name
+  const nestedContainers = new Map() // renamed dir (rel to stagingDir) -> display title
+  const uniqueContainerName = (base) => {
+    let name = base || 'section'
+    if (usedContainerSlugs.has(name)) {
+      let n = 2
+      while (usedContainerSlugs.has(`${name}-${n}`)) n++
+      name = `${name}-${n}`
+    }
+    usedContainerSlugs.add(name)
+    return name
+  }
+  const namespaceSubDir = (topDir, subDir) => {
+    const segs = subDir.split('/').filter(Boolean)
+    const out = []
+    for (let i = 0; i < segs.length; i++) {
+      if (i === 0) {
+        out.push(segs[0])
+        continue
+      }
+      const origPrefix = segs.slice(0, i + 1).join('/')
+      let name = segRename.get(origPrefix)
+      if (!name) {
+        name = uniqueContainerName(kebabCase(segs.slice(0, i + 1).join('-')))
+        segRename.set(origPrefix, name)
+        nestedContainers.set(`${topDir}/${[...out, name].join('/')}`, segs[i])
+      }
+      out.push(name)
+    }
+    return out.join('/')
+  }
+
   for (const cat of eligibleCategories) {
     const { topDir, subDir } = routeCategory(cat.title)
-    const dir = subDir ? `${topDir}/${subDir}` : topDir
-    if (subDir) {
+    const routedSubDir = subDir ? namespaceSubDir(topDir, subDir) : subDir
+    const dir = routedSubDir ? `${topDir}/${routedSubDir}` : topDir
+    if (routedSubDir) {
       if (!subDirsByTopDir.has(topDir)) subDirsByTopDir.set(topDir, [])
-      if (!subDirsByTopDir.get(topDir).includes(subDir)) subDirsByTopDir.get(topDir).push(subDir)
+      if (!subDirsByTopDir.get(topDir).includes(routedSubDir)) subDirsByTopDir.get(topDir).push(routedSubDir)
     }
 
     for (const page of cat.pages || []) writePage(page, dir, topDir, false)
+  }
+
+  // Back each namespaced nested-category folder with a titled parent page so
+  // gitto renders it named instead of as an empty placeholder. No x-import —
+  // these are pure nav containers, so the body stays empty and format skips them.
+  for (const [relDir, title] of nestedContainers) {
+    const idxPath = path.join(stagingDir, relDir, 'index.md')
+    if (fs.existsSync(idxPath)) continue
+    fs.mkdirSync(path.dirname(idxPath), { recursive: true })
+    const fm = { title, icon: formatIconClass(pickIcon(path.basename(relDir), title)) }
+    fs.writeFileSync(idxPath, matter.stringify('', fm))
+    counts.fileCount++
   }
 
   // Per-directory _order.yaml preserves input order in the sidebar.
