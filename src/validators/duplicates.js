@@ -15,9 +15,21 @@ export function validateAll(files) {
     if (!CHECKED_DIRS.includes(topDir)) continue;
 
     const filename = path.basename(relPath);
-    if (filename === 'index.md' || filename === 'index.mdx') continue;
+    const isIndex = filename === 'index.md' || filename === 'index.mdx';
 
-    const slug = filename.replace(/\.(md|mdx)$/, '');
+    // A folder's index.md is a category page whose slug is the folder name, so
+    // it competes for a slug just like a `<slug>.md` file does. Any other file's
+    // slug is its own filename. Skip a section-root index (docs/index.md,
+    // reference/index.md) — it has no competing leaf slug.
+    let slug;
+    if (isIndex) {
+      const parent = path.basename(path.dirname(relPath));
+      if (parent === topDir) continue;
+      slug = parent;
+    } else {
+      slug = filename.replace(/\.(md|mdx)$/, '');
+    }
+
     const key = `${topDir}:${slug}`;
     if (!slugMap.has(key)) slugMap.set(key, []);
     slugMap.get(key).push(relPath);
