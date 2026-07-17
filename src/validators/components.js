@@ -135,19 +135,22 @@ export function validate({ content, relativePath }) {
 
   const results = [];
 
-  // .md snippet files: filename must be PascalCase (it becomes the component tag).
+  // .md snippet files: the filename becomes a component tag <Name />, so it must
+  // be a valid JS identifier starting with an uppercase letter. Underscores and
+  // digits are fine (<Helm_v4_error /> is valid); hyphens and a lowercase initial
+  // are not.
   if (isMd) {
     const slug = filename.replace(/\.md$/, "");
-    const pascalCase = slug
-      .split(/[-_]/)
-      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-      .join("");
-    if (slug !== pascalCase) {
+    if (!/^[A-Z][A-Za-z0-9_$]*$/.test(slug)) {
+      const suggestion = slug
+        .split(/[-_]/)
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+        .join("");
       results.push({
         file: relativePath,
         rule: name,
         severity: "warning",
-        message: `Bad filename: should be PascalCase — rename to "${pascalCase}.md" so it can be used as <${pascalCase} />`,
+        message: `Bad filename: "${slug}" can't be used as a component tag — rename to "${suggestion}.md" so it can be used as <${suggestion} />`,
       });
     }
     return results.length > 0 ? results : null;
