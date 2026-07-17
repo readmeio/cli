@@ -2,6 +2,7 @@ import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 import ora from "ora";
 import * as styles from "./styles.js";
 import { hasClaude } from "./claude.js";
@@ -177,7 +178,7 @@ export function createHumanReporter() {
       // When running inside Claude, output instructions and structured issue list.
       if (isRunningInClaude && unfixed.length > 0) {
         const cliRoot = path.join(
-          path.dirname(new URL(import.meta.url).pathname),
+          path.dirname(fileURLToPath(import.meta.url)),
           "../..",
         );
 
