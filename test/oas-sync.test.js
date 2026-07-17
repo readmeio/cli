@@ -26,7 +26,8 @@ test('generated reference page has only api frontmatter (no title/excerpt)', () 
     const { data } = matter(fs.readFileSync(page, 'utf-8'));
     assert.equal(data.api.file, 'pets.json');
     assert.equal(data.api.operationId, 'listPets');
-    assert.equal(data.hidden, false);
+    // hidden is left to the backend default rather than written explicitly.
+    assert.equal('hidden' in data, false);
     assert.equal('title' in data, false);
     assert.equal('excerpt' in data, false);
   } finally {
@@ -51,7 +52,7 @@ test('sync generates a tag index.md with the tag description from the spec', () 
     const { data } = matter(fs.readFileSync(indexPath, 'utf-8'));
     assert.equal(data.title, 'users');
     assert.equal(data.excerpt, 'User management operations');
-    assert.equal(data.hidden, false);
+    assert.equal('hidden' in data, false);
 
     // index must not be listed in the tag's _order.yaml.
     const order = fs.readFileSync(path.join(root, 'reference/Sample API/users/_order.yaml'), 'utf-8');
@@ -92,6 +93,45 @@ test('sync does not overwrite an existing tag index.md', () => {
     const content = fs.readFileSync(path.join(root, 'reference/Pets/Other/index.md'), 'utf-8');
     assert.match(content, /Hand-written category/);
     assert.match(content, /Custom intro/);
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('an operation named "index" does not clobber the tag index.md', () => {
+  const spec = JSON.stringify({
+    openapi: '3.0.0',
+    info: { title: 'Pets' },
+    tags: [{ name: 'pets', description: 'Pet ops' }],
+    paths: {
+      // Two operations that both normalize to the reserved slug "index".
+      '/a': { get: { operationId: 'index', tags: ['pets'] } },
+      '/b': { get: { operationId: 'INDEX', tags: ['pets'] } },
+    },
+  });
+  const root = makeRepo({ 'reference/pets.json': spec });
+  try {
+    syncOas(root);
+    const dir = path.join(root, 'reference/Pets/pets');
+
+    // index.md is the category page, never an operation.
+    const indexData = matter(fs.readFileSync(path.join(dir, 'index.md'), 'utf-8')).data;
+    assert.equal(indexData.title, 'pets');
+    assert.equal('api' in indexData, false);
+
+    // Each colliding operation gets a distinct numeric slug.
+    assert.ok(fs.existsSync(path.join(dir, 'index-1.md')), 'expected index-1.md');
+    assert.ok(fs.existsSync(path.join(dir, 'index-2.md')), 'expected index-2.md');
+    const opIds = ['index-1', 'index-2'].map(
+      (s) => matter(fs.readFileSync(path.join(dir, `${s}.md`), 'utf-8')).data.api.operationId,
+    );
+    assert.deepEqual([...opIds].sort(), ['INDEX', 'index']);
+
+    // _order.yaml lists the operation slugs but not the reserved index page.
+    const order = fs.readFileSync(path.join(dir, '_order.yaml'), 'utf-8');
+    assert.match(order, /- index-1/);
+    assert.match(order, /- index-2/);
+    assert.equal(/^- index$/m.test(order), false);
   } finally {
     rmRepo(root);
   }

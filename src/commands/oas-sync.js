@@ -185,7 +185,6 @@ function buildPageContent({ oasFilename, operationId }) {
       file: oasFilename,
       operationId,
     },
-    hidden: false,
   };
 
   return matter.stringify('', frontmatter);
@@ -199,9 +198,21 @@ function buildPageContent({ oasFilename, operationId }) {
 function buildTagIndexContent(tagName, description) {
   const frontmatter = { title: tagName };
   if (description) frontmatter.excerpt = description;
-  frontmatter.hidden = false;
 
   return matter.stringify('', frontmatter);
+}
+
+/**
+ * `index.md` in a tag directory is reserved for the tag's category landing
+ * page, so an operation whose slug is `index` can't use it. Fall back to the
+ * first free `index-N` so it collides with neither the landing page nor another
+ * operation (including a second operation that also normalizes to `index`).
+ */
+function reserveOperationSlug(pageDir, slug) {
+  if (slug !== 'index') return slug;
+  let n = 1;
+  while (fs.existsSync(path.join(pageDir, `index-${n}.md`))) n += 1;
+  return `index-${n}`;
 }
 
 /**
@@ -254,8 +265,8 @@ function syncOneOas(refDir, oasFilename, spec) {
 
     const rawTag = op.tag || 'Other';
     const tag = safeSegment(rawTag, 'Other');
-    const slug = safeSegment(opId, 'operation').toLowerCase();
     const pageDir = path.join(refDir, infoTitle, tag);
+    const slug = reserveOperationSlug(pageDir, safeSegment(opId, 'operation').toLowerCase());
     const pagePath = path.join(pageDir, `${slug}.md`);
 
     // Never overwrite an existing file: it belongs to a manual page, another
