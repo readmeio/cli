@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import matter from 'gray-matter';
+import { slugForEntry } from '../utils/slug-for-entry.js';
 
 export const name = 'links';
 
@@ -19,14 +20,7 @@ function collectSlugs(gitRoot) {
     const entries = fs.readdirSync(dirPath, { recursive: true });
     for (const entry of entries) {
       if (!/\.(md|mdx)$/.test(entry)) continue;
-      const filename = path.basename(entry);
-      if (filename === 'index.md' || filename === 'index.mdx') {
-        // index.md represents the parent directory, e.g. plans-and-pricing/index.md -> slug "plans-and-pricing"
-        const parentDir = path.basename(path.dirname(entry));
-        if (parentDir && parentDir !== '.') slugs.add(parentDir);
-      } else {
-        slugs.add(filename.replace(/\.(md|mdx)$/, ''));
-      }
+      slugs.add(slugForEntry(entry));
     }
   }
 
