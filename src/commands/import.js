@@ -4372,6 +4372,10 @@ function relocateChangelogDir(stagingDir) {
       if (!entry.name.endsWith('.md')) continue
       const parsed = matter(fs.readFileSync(full, 'utf-8'))
       if (!parsed.data || !parsed.data['x-import']) continue
+      if (entry.name === 'index.md' && ancestors.length > 0) {
+        pages.push({ ancestors: ancestors.slice(0, -1), slug: ancestors.at(-1), content: parsed.content, data: parsed.data })
+        continue
+      }
       const slug = entry.name.replace(/\.md$/, '')
       pages.push({ ancestors, slug, content: parsed.content, data: parsed.data })
     }

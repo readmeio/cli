@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { slugForEntry } from '../utils/slug-for-entry.js';
 
 export const name = 'duplicates';
 
@@ -14,10 +15,7 @@ export function validateAll(files) {
     const topDir = relPath.split('/')[0];
     if (!CHECKED_DIRS.includes(topDir)) continue;
 
-    const filename = path.basename(relPath);
-    if (filename === 'index.md' || filename === 'index.mdx') continue;
-
-    const slug = filename.replace(/\.(md|mdx)$/, '');
+    const slug = slugForEntry(relPath);
     const key = `${topDir}:${slug}`;
     if (!slugMap.has(key)) slugMap.set(key, []);
     slugMap.get(key).push(relPath);
