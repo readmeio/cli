@@ -134,3 +134,59 @@ test('resolveRedirectedSourceUrl returns null when fetch throws', async () => {
   }
   assert.equal(await __test__.resolveRedirectedSourceUrl(new URL('https://example.com/')), null)
 })
+
+function mockDocsProbeFetch(files, { catchAllBody } = {}) {
+  globalThis.fetch = async (url) => {
+    const href = String(url)
+    if (new URL(href).hostname !== 'example.com') throw new Error('getaddrinfo ENOTFOUND')
+    const entry = files[href]
+    if (entry) return { ok: true, status: 200, url: entry.finalUrl || href, text: async () => entry.body || '' }
+    if (catchAllBody && !href.endsWith('/llms.txt')) return { ok: true, status: 200, url: href, text: async () => catchAllBody }
+    return { ok: false, status: 404, url: href, text: async () => '' }
+  }
+}
+
+test('resolveDocsBaseUrl adopts a path route whose trailing slash gets stripped by a redirect', async () => {
+  mockDocsProbeFetch({
+    'https://example.com/docs/': { finalUrl: 'https://example.com/docs', body: '<title>API Docs</title>' },
+  })
+  const result = await __test__.resolveDocsBaseUrl(new URL('https://example.com'))
+  assert.equal(result?.url.href, 'https://example.com/docs/')
+  assert.equal(result?.kind, 'path')
+  assert.equal(result?.hasLlms, false)
+})
+
+test('resolveDocsBaseUrl rejects a path route that redirects to the homepage', async () => {
+  mockDocsProbeFetch({
+    'https://example.com/docs/': { finalUrl: 'https://example.com/' },
+  })
+  assert.equal(await __test__.resolveDocsBaseUrl(new URL('https://example.com')), null)
+})
+
+test('resolveDocsBaseUrl skips SPA catch-all routes and adopts the route with distinct content', async () => {
+  mockDocsProbeFetch(
+    {
+      'https://example.com/developers/': { finalUrl: 'https://example.com/developers', body: '<title>API Documentation</title>' },
+    },
+    { catchAllBody: '<title>Example - Empowering</title>' },
+  )
+  const result = await __test__.resolveDocsBaseUrl(new URL('https://example.com'))
+  assert.equal(result?.url.href, 'https://example.com/developers/')
+  assert.equal(result?.kind, 'path')
+  assert.equal(result?.hasLlms, false)
+})
+
+test('resolveDocsBaseUrl returns null when every candidate fails', async () => {
+  mockDocsProbeFetch({})
+  assert.equal(await __test__.resolveDocsBaseUrl(new URL('https://example.com')), null)
+})
+
+test('inCandidateScope normalizes trailing slashes and enforces segment boundaries', () => {
+  const candidate = { kind: 'path', url: new URL('https://example.com/docs/') }
+  assert.equal(__test__.inCandidateScope(candidate, 'https://example.com/docs'), true)
+  assert.equal(__test__.inCandidateScope(candidate, 'https://www.example.com/docs'), true)
+  assert.equal(__test__.inCandidateScope(candidate, 'https://example.com/docs/llms.txt'), true)
+  assert.equal(__test__.inCandidateScope(candidate, 'https://example.com/DOCS//'), true)
+  assert.equal(__test__.inCandidateScope(candidate, 'https://example.com/docsomething'), false)
+  assert.equal(__test__.inCandidateScope(candidate, 'https://example.com/'), false)
+})

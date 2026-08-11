@@ -3539,13 +3539,18 @@ async function resolveDocsBaseUrl(sourceUrl) {
     }
   }
 
+  const soft404Title = candidates.some((c) => c.kind === 'path') ? await fetchSoft404Title(sourceUrl.origin) : null
   const existence = await Promise.all(
     llmsHits.map(async ({ c, res }) => {
       if (res.error && c.kind === 'subdomain') return { c, exists: false }
-      return { c, exists: await docsRouteResolves(c) }
+      return { c, ...(await docsRouteResolves(c, soft404Title)) }
     }),
   )
-  for (const { c, exists } of existence) {
+  for (const { c, exists, soft404 } of existence) {
+    if (soft404) {
+      styles.info(styles.dim(`  ${c.url.href} → indistinguishable from a nonexistent path (SPA catch-all) — skipping`))
+      continue
+    }
     if (exists) {
       styles.info(styles.dim(`  ${c.url.href} → resolves (no llms.txt)`))
       return { url: c.url, kind: c.kind, hasLlms: false }
@@ -3570,20 +3575,54 @@ function inCandidateScope(candidate, finalUrl) {
     return false
   }
   if (candidate.kind === 'subdomain') return final.hostname === candidate.url.hostname
-  return final.pathname.toLowerCase().startsWith(candidate.url.pathname.toLowerCase())
+  const strip = (p) => p.toLowerCase().replace(/\/+$/, '')
+  const finalPath = strip(final.pathname)
+  const candidatePath = strip(candidate.url.pathname)
+  return finalPath === candidatePath || finalPath.startsWith(`${candidatePath}/`)
+}
+
+function extractHtmlTitle(html) {
+  const match = /<title[^>]*>([^<]*)<\/title>/i.exec(html)
+  if (!match) return null
+  const title = match[1].replace(/\s+/g, ' ').trim().toLowerCase()
+  return title || null
+}
+
+/**
+ * Fetch a guaranteed-nonexistent path and capture its page title. On SPA
+ * catch-all sites every unknown path returns 200 with the same shell page;
+ * that title becomes the soft-404 baseline. Returns null when the site 404s
+ * properly (no baseline needed) or on any fetch failure.
+ */
+async function fetchSoft404Title(origin) {
+  const probeUrl = `${origin}/readme-cli-nonexistent-${Math.random().toString(36).slice(2)}`
+  try {
+    const res = await fetch(probeUrl, { redirect: 'follow', headers: { 'User-Agent': 'readme-cli-import' } })
+    if (!res.ok) return null
+    return extractHtmlTitle(await res.text())
+  } catch {
+    return null
+  }
 }
 
 /**
  * Does a well-known docs route exist and stay in scope? Follows redirects and
  * rejects anything that lands outside the candidate (a `docs.` subdomain that
- * bounces to marketing, a `/docs/` that 302s home). DNS failures → false.
+ * bounces to marketing, a `/docs/` that 302s home). When a soft-404 baseline
+ * title is known, a path candidate serving that same title is a catch-all
+ * response, not real docs. DNS failures → `{ exists: false }`.
  */
-async function docsRouteResolves(candidate) {
+async function docsRouteResolves(candidate, soft404Title) {
   try {
     const res = await fetch(candidate.url.href, { redirect: 'follow', headers: { 'User-Agent': 'readme-cli-import' } })
-    return res.ok && inCandidateScope(candidate, res.url)
+    if (!res.ok || !inCandidateScope(candidate, res.url)) return { exists: false }
+    if (candidate.kind === 'path' && soft404Title) {
+      const title = extractHtmlTitle(await res.text())
+      if (title === soft404Title) return { exists: false, soft404: true }
+    }
+    return { exists: true }
   } catch {
-    return false
+    return { exists: false }
   }
 }
 
@@ -4698,7 +4737,7 @@ function makeIconPicker() {
   }
 }
 
-export const __test__ = { discoverLlmsTxt, mergeValidHits, resolveRedirectedSourceUrl }
+export const __test__ = { discoverLlmsTxt, mergeValidHits, resolveRedirectedSourceUrl, resolveDocsBaseUrl, inCandidateScope }
 
 function formatDuration(ms) {
   const safe = Math.max(0, ms)
