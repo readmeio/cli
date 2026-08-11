@@ -157,6 +157,8 @@ export async function importDocs(options) {
     for (const p of o.llmsPaths || []) llmsPaths.add(p)
   }
 
+  const sources = perSourceOrganized.map((o) => o.resolution).filter(Boolean)
+
   if (debugSnapshots) {
     debugSnapshots['05-organized.json'] = organized
     const debugDir = path.join(os.tmpdir(), `readme-import-debug-${hostnameJoined}-${Date.now()}`)
@@ -228,12 +230,12 @@ export async function importDocs(options) {
       styles.info('Starting the dev server for preview...')
       console.log()
       await runDevPreview(stagingDir)
-      return { source: 'url', stagingDir, fileCount: staged.fileCount, duration: Date.now() - startedAt, phases }
+      return { source: 'url', stagingDir, fileCount: staged.fileCount, duration: Date.now() - startedAt, phases, sources }
     }
 
     if (staged.fileCount === 0) {
       styles.warning('Staging directory is empty — skipping zip.')
-      return { source: 'url', fileCount: 0, duration: Date.now() - startedAt, phases }
+      return { source: 'url', fileCount: 0, duration: Date.now() - startedAt, phases, sources }
     }
 
     styles.info(`Packaging ${styles.bold(String(staged.fileCount))} files into ${styles.bold(outputZip)}...`)
@@ -242,7 +244,7 @@ export async function importDocs(options) {
     console.log()
     styles.ok(`Done in ${styles.bold(formatDuration(Date.now() - startedAt))}! Your ReadMe import is ready at ${styles.bold(outputZip)}`)
     console.log(styles.dim(`  ⏱  ${phases.map((p) => `${p.label} ${formatDuration(p.ms)}`).join(' · ')}`))
-    result = { source: 'url', outputZip, fileCount: staged.fileCount, duration: Date.now() - startedAt, phases }
+    result = { source: 'url', outputZip, fileCount: staged.fileCount, duration: Date.now() - startedAt, phases, sources }
   } finally {
     if (!options.test) {
       fs.rmSync(stagingDir, { recursive: true, force: true })
@@ -262,6 +264,7 @@ export async function importDocs(options) {
  * the hostname so parallel runs don't clobber each other.
  */
 async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSnapshots) {
+  const requestedUrl = sourceUrl.toString()
   const redirected = await timePhase('follow source redirects', () => resolveRedirectedSourceUrl(sourceUrl))
   if (redirected) {
     styles.info(`${styles.bold(sourceUrl.toString())} redirects to ${styles.bold(redirected.toString())} — rebasing import onto the final URL.`)
@@ -816,6 +819,15 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
     }
   }
   organized.llmsPaths = llmsPaths
+
+  organized.resolution = {
+    requestedUrl,
+    redirectedUrl: redirected ? redirected.toString() : null,
+    docsBaseUrl: docsBase ? docsBase.url.toString() : null,
+    finalUrl: sourceUrl.toString(),
+    route: llms ? 'llms' : mintlifyNav ? 'mintlify' : archbeeNav ? 'archbee' : scraped ? 'scrape' : sitemapUrl ? 'sitemap' : 'none',
+    ...(scrapeDiscardedForCoverage ? { scrapeDiscarded: true } : {}),
+  }
   return organized
 }
 
