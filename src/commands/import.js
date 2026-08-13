@@ -823,7 +823,14 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
   // nestByUrlHierarchy renders it as the real parent of its children.
   await injectSectionLandingPages(organized, sourceUrl)
 
+  // A Fern tree is the authored sidebar: re-nesting by URL invents parent
+  // folders the source site renders flat (a section landing absorbing its
+  // path-descendant siblings, e.g. vapi's /server-url under Webhooks). Only
+  // the sweep-synthesized categories still nest — their pages were moved in
+  // flat and have no authored structure.
+  const sweepCategories = new Set(['API Reference', 'Changelog'])
   for (const cat of organized.categories || []) {
+    if (fernNav && !sweepCategories.has(cat.title)) continue
     cat.pages = nestByUrlHierarchy(cat.pages)
   }
 
