@@ -1683,10 +1683,11 @@ function addFernCategories(categories, nodes, ctx) {
     if (FERN_SECTION_NODE_TYPES.has(root.type)) {
       const section = fernPageFromNode(root, ctx)
       if (!section) continue
-      const pages = section.pages || []
-      if (section.url && !pages.some((p) => p.url && normalizePath(p.url) === normalizePath(section.url))) {
-        pages.unshift({ title: section.title, url: section.url })
-      }
+      // A section owning an overview page renders as a clickable parent on
+      // the source site — keep the overview as the category's parent page
+      // with the section's children nested under it. Page-less sections
+      // spread their children directly under the category header.
+      const pages = section.url ? [section] : section.pages || []
       const deduped = dedupeFernPages(pages, ctx.seenPaths)
       if (deduped.length > 0) categories.push({ title: section.title, pages: deduped })
     } else {

@@ -286,6 +286,28 @@ test('tryFernNav keeps the sidebar title but takes urls and descriptions from ll
   assert.deepEqual(nav.categories[0].pages[0], { title: 'Introduction', url: 'https://fern.example/intro.md', description: 'Start here' })
 })
 
+test('tryFernNav renders a top-level section with an overview page as the category parent page', async () => {
+  const tree =
+    '7a:["$","$L7b",null,{"children":[' +
+    '{"type":"sidebarGroup","id":"sidebar-group:section:webhooks","children":[' +
+    '{"type":"section","id":"section:webhooks","title":"Webhooks","slug":"server-url","hidden":false,"pointsTo":"$undefined","overviewPageId":"server-url.mdx","children":[' +
+    '{"type":"page","id":"page:server-url/events","title":"Server events","slug":"server-url/events","hidden":false}]}]}]}]'
+  mockHtmlFetch({ 'https://fern.example/intro': fernHtml([tree]) })
+  const nav = await __test__.tryFernNav('https://fern.example/intro', [])
+  assert.deepEqual(nav.categories, [
+    {
+      title: 'Webhooks',
+      pages: [
+        {
+          title: 'Webhooks',
+          url: 'https://fern.example/server-url',
+          pages: [{ title: 'Server events', url: 'https://fern.example/server-url/events' }],
+        },
+      ],
+    },
+  ])
+})
+
 test('tryFernNav treats section pointsTo as an alias: the first child keeps its page and the section becomes a titled group', async () => {
   const tree =
     '7a:["$","$L7b",null,{"children":[' +
