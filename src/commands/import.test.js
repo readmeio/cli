@@ -278,12 +278,12 @@ test('tryFernNav returns null when the page has no flight chunks', async () => {
   assert.equal(await __test__.tryFernNav('https://fern.example/intro', []), null)
 })
 
-test('tryFernNav prefers llms.txt titles, urls, and descriptions over payload fields', async () => {
+test('tryFernNav keeps the sidebar title but takes urls and descriptions from llms.txt', async () => {
   mockHtmlFetch({ 'https://fern.example/intro': fernHtml([GEN1_TREE]) })
   const nav = await __test__.tryFernNav('https://fern.example/intro', [
     { title: 'Welcome', url: 'https://fern.example/intro.md', description: 'Start here' },
   ])
-  assert.deepEqual(nav.categories[0].pages[0], { title: 'Welcome', url: 'https://fern.example/intro.md', description: 'Start here' })
+  assert.deepEqual(nav.categories[0].pages[0], { title: 'Introduction', url: 'https://fern.example/intro.md', description: 'Start here' })
 })
 
 test('tryFernNav treats section pointsTo as an alias: the first child keeps its page and the section becomes a titled group', async () => {

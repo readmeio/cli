@@ -1652,7 +1652,9 @@ function fernPageFromNode(node, ctx) {
     const url = `${ctx.origin}/${slug}`
     const known = ctx.byPath.get(normalizePath(url))
     return {
-      title: known?.title || fernField(node.title) || slug,
+      // The payload title is the sidebar label as rendered; llms.txt titles
+      // come from page headings, which can differ from the nav.
+      title: fernField(node.title) || known?.title || slug,
       url: known?.url || url,
       ...(known?.description ? { description: known.description } : {}),
       ...(children.length > 0 ? { pages: children } : {}),
