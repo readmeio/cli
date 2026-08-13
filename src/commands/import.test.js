@@ -222,7 +222,7 @@ const GEN2_TREE =
   '{"type":"section","id":"28eaf69e90e0a08edb3d6840439eeacb0b9dbdb3","title":"Get started","slug":"docs/get-started","hidden":false,"pointsTo":"$undefined","children":[' +
   '{"type":"page","id":"bc59f5966f28f9f0c31ac71f02619db1e70e8c65","title":"Introduction","slug":"intro","hidden":false},' +
   '{"type":"page","id":"3d9a0da0ad64e4f360afee1dee83e4ae1b848dff","title":"Secret","slug":"secret","hidden":true},' +
-  '{"type":"section","id":"75861c60edfc32eefed7d2a77f7d1b9563a7bb74","title":"Nested","slug":"docs/nested","hidden":false,"pointsTo":"nested/overview","children":[' +
+  '{"type":"section","id":"75861c60edfc32eefed7d2a77f7d1b9563a7bb74","title":"Nested","slug":"nested/overview","hidden":false,"pointsTo":"$undefined","overviewPageId":"nested/overview.mdx","children":[' +
   '{"type":"page","id":"03b7470af4ce00f9a9dc979ba32fec3fd1c4a7bd","title":"Deep page","slug":"nested/deep","hidden":false}]}]}]}]}]'
 
 function assertGetStartedTree(nav) {
@@ -284,6 +284,30 @@ test('tryFernNav prefers llms.txt titles, urls, and descriptions over payload fi
     { title: 'Welcome', url: 'https://fern.example/intro.md', description: 'Start here' },
   ])
   assert.deepEqual(nav.categories[0].pages[0], { title: 'Welcome', url: 'https://fern.example/intro.md', description: 'Start here' })
+})
+
+test('tryFernNav treats section pointsTo as an alias: the first child keeps its page and the section becomes a titled group', async () => {
+  const tree =
+    '7a:["$","$L7b",null,{"children":[' +
+    '{"type":"sidebarGroup","id":"sidebar-group:section:docs/guides","children":[' +
+    '{"type":"section","id":"section:docs/guides","title":"Guides","slug":"docs/guides","hidden":false,"pointsTo":"$undefined","overviewPageId":"$undefined","children":[' +
+    '{"type":"section","id":"section:docs/guides/billing","title":"Billing","slug":"docs/guides/billing","hidden":false,"pointsTo":"billing/manage","overviewPageId":"$undefined","children":[' +
+    '{"type":"page","id":"page:billing/manage","title":"Manage billing","slug":"billing/manage","hidden":false},' +
+    '{"type":"page","id":"page:billing/limits","title":"Billing limits","slug":"billing/limits","hidden":false}]}]}]}]}]'
+  mockHtmlFetch({ 'https://fern.example/intro': fernHtml([tree]) })
+  const nav = await __test__.tryFernNav('https://fern.example/intro', [])
+  const [category] = nav.categories
+  assert.equal(category.title, 'Guides')
+  const billing = category.pages[0]
+  assert.equal(billing.title, 'Billing')
+  assert.equal(billing.url, null)
+  assert.deepEqual(
+    billing.pages.map((p) => [p.title, p.url]),
+    [
+      ['Manage billing', 'https://fern.example/billing/manage'],
+      ['Billing limits', 'https://fern.example/billing/limits'],
+    ],
+  )
 })
 
 const TAB_LIST =

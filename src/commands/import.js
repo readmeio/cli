@@ -1630,15 +1630,20 @@ function fernPageFromNode(node, ctx) {
   if (FERN_SKIP_NODE_TYPES.has(node.type)) return null
   const children = Array.isArray(node.children) ? node.children.map((c) => fernPageFromNode(c, ctx)).filter(Boolean) : []
   if (FERN_SECTION_NODE_TYPES.has(node.type)) {
-    // Sections with their own overview page render it at the section slug;
-    // pointsTo is absent there (it otherwise names the first child).
-    const landing = fernField(node.pointsTo) || (fernField(node.overviewPageId) ? fernField(node.slug) : null)
-    if (children.length === 0 && !landing) return null
-    const landingUrl = landing ? `${ctx.origin}/${landing}` : null
-    const known = landingUrl ? ctx.byPath.get(normalizePath(landingUrl)) : null
+    // A section owns a page only when overviewPageId is set — it then renders
+    // at the section's own slug. pointsTo is a navigation alias to the
+    // section's first descendant page, never a page of the section itself.
+    const landing = fernField(node.overviewPageId) ? fernField(node.slug) : null
+    const title = fernField(node.title) || 'Untitled'
+    if (!landing) {
+      if (children.length === 0) return null
+      return { title, url: null, _emptyParent: true, _virtualPathSegs: [kebabCase(title) || 'group'], pages: children }
+    }
+    const landingUrl = `${ctx.origin}/${landing}`
+    const known = ctx.byPath.get(normalizePath(landingUrl))
     return {
-      title: fernField(node.title) || 'Untitled',
-      url: landingUrl ? known?.url || landingUrl : null,
+      title,
+      url: known?.url || landingUrl,
       ...(children.length > 0 ? { pages: children } : {}),
     }
   }
