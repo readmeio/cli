@@ -278,6 +278,24 @@ test('tryFernNav returns null when the page has no flight chunks', async () => {
   assert.equal(await __test__.tryFernNav('https://fern.example/intro', []), null)
 })
 
+test('tryFernNav retries from a known page when the entry URL is dead', async () => {
+  mockHtmlFetch({ 'https://fern.example/nested/deep': fernHtml([GEN1_TREE]) })
+  const nav = await __test__.tryFernNav('https://fern.example/dead-slug', [
+    { title: 'Deep page', url: 'https://fern.example/nested/deep.md', description: undefined },
+  ])
+  assert.equal(nav.categories.length, 1)
+  assert.equal(nav.categories[0].title, 'Get started')
+  assert.deepEqual(nav.categories[0].pages[1].pages, [{ title: 'Deep page', url: 'https://fern.example/nested/deep.md' }])
+})
+
+test('tryFernNav returns null when the entry URL is dead and the known page is not Fern', async () => {
+  mockHtmlFetch({ 'https://fern.example/nested/deep': fernHtml([GEN1_TREE], { aside: false }) })
+  assert.equal(
+    await __test__.tryFernNav('https://fern.example/dead-slug', [{ title: 'Deep page', url: 'https://fern.example/nested/deep.md', description: undefined }]),
+    null,
+  )
+})
+
 test('tryFernNav keeps the sidebar title but takes urls and descriptions from llms.txt', async () => {
   mockHtmlFetch({ 'https://fern.example/intro': fernHtml([GEN1_TREE]) })
   const nav = await __test__.tryFernNav('https://fern.example/intro', [
@@ -334,6 +352,23 @@ test('tryFernNav fetches non-active tabs once and merges their trees', async () 
   assert.deepEqual(
     nav.categories[1].pages.map((p) => p.url),
     ['https://fern.example/api/start', 'https://fern.example/api/pets/create'],
+  )
+})
+
+test('tryFernNav names an untitled tab-tree root after its tab', async () => {
+  const untitledTabTree =
+    '9c:["$","$L9d",null,{"children":[' +
+    '{"type":"apiPackage","id":"api-pkg:api","title":"$undefined","slug":"api","hidden":false,"pointsTo":"api/start","children":[' +
+    '{"type":"endpoint","id":"api-leaf:api/start","title":"List pets","slug":"api/start","hidden":false,"method":"GET"},' +
+    '{"type":"endpoint","id":"api-leaf:api/pets/create","title":"Create pet","slug":"api/pets/create","hidden":false,"method":"POST"}]}]}]'
+  mockHtmlFetch({
+    'https://fern.example/intro': fernHtml([GEN1_TREE, TAB_LIST]),
+    'https://fern.example/api/start': fernHtml([untitledTabTree]),
+  })
+  const nav = await __test__.tryFernNav('https://fern.example/intro', [])
+  assert.deepEqual(
+    nav.categories.map((c) => c.title),
+    ['Get started', 'API Reference'],
   )
 })
 

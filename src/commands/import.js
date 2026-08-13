@@ -565,13 +565,18 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
   // node because that's the one /docs page the scrape saw). Discard the
   // scrape and fall through to the llms.txt path, which uses URL-based
   // clustering when multiple files were merged.
+  // API-reference pages are excluded from the denominator: sidebars routinely
+  // omit generated endpoint stubs, and those pages are swept into reference/
+  // regardless of nav quality, so they say nothing about the nav's fitness as
+  // the import's spine.
   let scrapeDiscardedForCoverage = false
   if (scraped && llms && knownUrls.length > 0) {
     const scrapedPages = scraped.categories.reduce((n, c) => n + countUrlPagesDeep(c.pages), 0)
-    const coverage = scrapedPages / knownUrls.length
+    const nonReferenceKnown = knownUrls.filter((p) => !urlIsApiReference(p.url))
+    const coverage = nonReferenceKnown.length > 0 ? scrapedPages / nonReferenceKnown.length : 1
     if (coverage < 0.75) {
       styles.info(
-        `Scrape covered ${styles.bold(Math.round(coverage * 100) + '%')} of llms.txt pages (need ≥75%) — discarding scrape and organizing from llms.txt.`,
+        `Scrape covered ${styles.bold(Math.round(coverage * 100) + '%')} of llms.txt pages (need ≥75%${nonReferenceKnown.length < knownUrls.length ? `, ${knownUrls.length - nonReferenceKnown.length} api-reference pages excluded` : ''}) — discarding scrape and organizing from llms.txt.`,
       )
       scraped = null
       scrapeDiscardedForCoverage = true
@@ -1499,6 +1504,8 @@ const FERN_SKIP_NODE_TYPES = new Set(['link', 'changelog', 'tab'])
  *
  * Always fetches directly (never Firecrawl): the flight chunks are only
  * guaranteed present in the raw SSR HTML, not in a rendered/processed DOM.
+ * A dead entry URL (moved slug) is retried once from a known page, since
+ * Fern soft-404s stale deep links.
  *
  * Returns { title, categories } or null if the site is not Fern or the
  * payload yields no usable tree. Any parse failure returns null so the
@@ -1507,10 +1514,18 @@ const FERN_SKIP_NODE_TYPES = new Set(['link', 'changelog', 'tab'])
 async function tryFernNav(sourceUrl, knownPages) {
   try {
     const origin = new URL(sourceUrl).origin
-    const entryHtml = await fetchHtmlDirect(toBrowsableUrl(sourceUrl))
-    if (!entryHtml) return null
-    const isFern = /<aside[^>]*id="fern-sidebar"/.test(entryHtml) || /<meta[^>]+name="generator"[^>]+content="[^"]*buildwithfern/i.test(entryHtml)
-    if (!isFern) return null
+    const looksFern = (html) => /<aside[^>]*id="fern-sidebar"/.test(html) || /<meta[^>]+name="generator"[^>]+content="[^"]*buildwithfern/i.test(html)
+    let entryUrl = toBrowsableUrl(sourceUrl)
+    let entryHtml = await fetchHtmlDirect(entryUrl)
+    if (!looksFern(entryHtml)) {
+      // A stale entry deep link 404s on Fern (the not-found boundary renders
+      // with a truncated tree), so retry once from a known live page.
+      const retry = knownPages.find((p) => normalizePath(p.url) !== normalizePath(sourceUrl))
+      if (!retry) return null
+      entryUrl = toBrowsableUrl(retry.url)
+      entryHtml = await fetchHtmlDirect(entryUrl)
+      if (!looksFern(entryHtml)) return null
+    }
 
     const byPath = new Map()
     for (const p of knownPages) byPath.set(normalizePath(p.url), p)
@@ -1524,7 +1539,7 @@ async function tryFernNav(sourceUrl, knownPages) {
     }
 
     const entryBlob = collect(entryHtml, null)
-    const entryPath = normalizePath(sourceUrl)
+    const entryPath = normalizePath(entryUrl)
     const seenTabTargets = new Set()
     let tabFetches = 0
     for (const tab of extractFernTabs(entryBlob)) {
@@ -1666,9 +1681,11 @@ function fernPageFromNode(node, ctx) {
 }
 
 /**
- * Top-level sections become categories; loose top-level pages (tabs without
- * sections, e.g. a two-page MCP tab) collapse into one category named after
- * the tab. Pages already claimed by an earlier category are dropped — the
+ * Top-level sections become categories; untitled ones adopt the tab title so
+ * two tabs' unnamed roots don't merge into one "Untitled" category with
+ * colliding group slugs. Loose top-level pages (tabs without sections, e.g. a
+ * two-page MCP tab) collapse into one category named after the tab. Pages
+ * already claimed by an earlier category are dropped — the
  * payload repeats trees across fetches, and multi-product sites nest the
  * same API groups under both a product tab and the API-reference tab.
  */
@@ -1683,6 +1700,7 @@ function addFernCategories(categories, nodes, ctx) {
     if (FERN_SECTION_NODE_TYPES.has(root.type)) {
       const section = fernPageFromNode(root, ctx)
       if (!section) continue
+      if (!fernField(root.title) && ctx.tabTitle) section.title = ctx.tabTitle
       const pages = section.pages || []
       if (section.url && !pages.some((p) => p.url && normalizePath(p.url) === normalizePath(section.url))) {
         pages.unshift({ title: section.title, url: section.url })
@@ -2437,9 +2455,20 @@ function reclassifyPagesByUrlSegment(scraped, { segmentRe, categoryRe, defaultTi
  * live under a separate API Reference section — this lands them all in
  * `reference/` after staging. Returns the number of pages relocated.
  */
+const API_REFERENCE_URL_SEGMENT_RE = /^(api[-_]?reference|endpoints?)$/i
+
+function urlIsApiReference(url) {
+  try {
+    const segs = new URL(url).pathname.split('/').filter(Boolean)
+    return segs.some((s) => API_REFERENCE_URL_SEGMENT_RE.test(s))
+  } catch {
+    return false
+  }
+}
+
 function reclassifyReferencePages(scraped) {
   return reclassifyPagesByUrlSegment(scraped, {
-    segmentRe: /^(api[-_]?reference|endpoints?)$/i,
+    segmentRe: API_REFERENCE_URL_SEGMENT_RE,
     categoryRe: /^(api[ -]?reference|reference|api|endpoints?)$/i,
     defaultTitle: 'API Reference',
   })
