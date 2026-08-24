@@ -62,6 +62,27 @@ const SUBDOMAIN_ONLY_DOC_ROUTES = new Set(['platform'])
 // Max concurrent HTTP probes when checking whether a section's landing URL
 // (e.g. /docs/cli) really exists before importing it as a real overview page.
 const LANDING_PROBE_CAP = 8
+// Well-known spec locations probed on every import. Tried under the
+// post-adoption origin, the pre-adoption origin when the docs-route probe
+// switched hosts, and (first three only) under a path-kind docs base.
+const WELL_KNOWN_OAS_PATHS = [
+  'openapi.json',
+  'openapi.yaml',
+  'openapi.yml',
+  'swagger.json',
+  'swagger.yaml',
+  '.well-known/openapi.json',
+  '.well-known/openapi.yaml',
+  'api/openapi.json',
+  'docs/openapi.json',
+  'v3/api-docs',
+  'api-docs',
+  'swagger/v1/swagger.json',
+]
+// Per-source cap on candidate specs. Candidates are sorted by discovery-source
+// confidence first, so the cap trims the least trusted ones.
+const MAX_OAS_CANDIDATES_PER_SOURCE = 10
+const OAS_SOURCE_CONFIDENCE = ['llms', 'mintlify', 'probe', 'html', 'sitemap', 'link-sweep']
 
 /**
  * Run the importer programmatically. Mirrors the CLI command but throws on
@@ -161,8 +182,12 @@ export async function importDocs(options) {
     debugSnapshots['05-organized.json'] = organized
     const debugDir = path.join(os.tmpdir(), `readme-import-debug-${hostnameJoined}-${Date.now()}`)
     fs.mkdirSync(debugDir, { recursive: true })
+    // Probe-hit candidates carry prefetched spec bytes — summarize instead of
+    // dumping megabytes of serialized Buffer into the snapshot.
+    const bufferSummary = (key, value) =>
+      value && value.type === 'Buffer' && Array.isArray(value.data) ? `<Buffer ${value.data.length} bytes>` : value
     for (const [name, data] of Object.entries(debugSnapshots)) {
-      fs.writeFileSync(path.join(debugDir, name), JSON.stringify(data, null, 2))
+      fs.writeFileSync(path.join(debugDir, name), JSON.stringify(data, bufferSummary, 2))
     }
     styles.info(`${styles.dim(`Debug snapshots → ${debugDir}`)}`)
   }
@@ -210,7 +235,7 @@ export async function importDocs(options) {
       styles.info(`Skipped ${styles.bold(String(staged.skippedApiRef))} API reference page${staged.skippedApiRef === 1 ? '' : 's'} (--skip-api-reference)`)
     }
 
-    // Download captured `.json` specs into <stagingDir>/oas/. Raw bytes only —
+    // Download captured candidate specs into <stagingDir>/oas/. Raw bytes only —
     // validation + OpenAPI detection + upload all happen in the runner. Staged
     // here (not in docs/ or reference/) so it rides the zip but is invisible to
     // the docs build. Non-fatal: a failed download is logged and skipped.
@@ -270,6 +295,7 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
 
   // Probe well-known docs routes (docs./developer. subdomains and /docs/,
   // … path prefixes) and adopt the first that resolves as the real base, so everything downstream runs
+  const preAdoptionOrigin = sourceUrl.origin
   const docsBase = await timePhase('probe well-known docs routes', () => resolveDocsBaseUrl(sourceUrl))
   if (docsBase) {
     styles.info(
@@ -277,6 +303,10 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
     )
     sourceUrl = docsBase.url
   }
+
+  // Fired here so the spec-path probe fully overlaps llms/scrape/organize;
+  // awaited just before the candidates are attached to `organized`.
+  const oasProbePromise = probeWellKnownOasPaths(sourceUrl, docsBase, preAdoptionOrigin).catch(() => [])
 
   // Discover llms.txt files by BFS walking parents AND children. Seed the
   // frontier with the walk-up paths (source → root). Any "hit" (file exists
@@ -303,22 +333,33 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
   let llmsUrl = llms?.llmsUrl || null
   const skippedLlms = discovery.skipped
 
-  // Capture `.json` links (candidate OpenAPI specs) BEFORE anything else sees
-  // the parsed tree. They're removed in place here, downloaded into the staged
-  // `oas/` dir by importDocs, and validated + uploaded by the runner. Stub
-  // generation never sees them.
-  let oasJsonUrls = []
+  // Capture spec-shaped links (.json/.yaml/.yml — candidate OpenAPI specs)
+  // BEFORE anything else sees the parsed tree. They're removed in place here,
+  // downloaded into the staged `oas/` dir by importDocs, and validated +
+  // uploaded by the runner. Stub generation never sees them.
+  const oasCandidates = []
+  const seenOasCandidateUrls = new Set()
+  const addOasCandidates = (items) => {
+    for (const item of items || []) {
+      if (!item || !item.url) continue
+      const url = item.url.split('#')[0]
+      if (seenOasCandidateUrls.has(url)) continue
+      seenOasCandidateUrls.add(url)
+      oasCandidates.push({ ...item, url })
+    }
+  }
   if (llms) {
-    oasJsonUrls = extractOasJsonUrlsFromParsed(llms.parsed)
-    if (oasJsonUrls.length > 0) {
-      styles.info(styles.dim(`Captured ${oasJsonUrls.length} .json link${oasJsonUrls.length === 1 ? '' : 's'} as candidate OpenAPI spec${oasJsonUrls.length === 1 ? '' : 's'} → oas/.`))
+    const llmsSpecUrls = extractOasSpecUrlsFromParsed(llms.parsed)
+    if (llmsSpecUrls.length > 0) {
+      styles.info(styles.dim(`Captured ${llmsSpecUrls.length} spec link${llmsSpecUrls.length === 1 ? '' : 's'} as candidate OpenAPI spec${llmsSpecUrls.length === 1 ? '' : 's'} → oas/.`))
+      addOasCandidates(llmsSpecUrls)
     }
   }
 
-  // Drop the remaining asset/meta items (llms-full.txt, .yaml specs, …) from
+  // Drop the remaining asset/meta items (llms-full.txt, .xml, …) from
   // the merged parsed result up-front, so every downstream consumer — knownUrls
   // AND the "use llms.txt sections directly" organize path — sees a clean URL
-  // list. `.json` items were already pulled out above.
+  // list. Spec-shaped items were already pulled out above.
   if (llms) {
     const dropped = dropAssetItemsFromParsed(llms.parsed)
     if (dropped > 0) {
@@ -380,7 +421,9 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
     console.log()
     if (sitemapResult) {
       sitemapUrl = sitemapResult.url
-      sitemapKnownUrls = sitemapUrlsToKnownUrls(sitemapResult.urls)
+      const sitemapOasSink = []
+      sitemapKnownUrls = sitemapUrlsToKnownUrls(sitemapResult.urls, sitemapOasSink)
+      addOasCandidates(sitemapOasSink)
       styles.ok(`Found sitemap.xml at ${styles.bold(sitemapUrl)} — ${styles.bold(String(sitemapKnownUrls.length))} URL${sitemapKnownUrls.length === 1 ? '' : 's'} in scope.`)
     } else {
       styles.warning(`No llms.txt or sitemap.xml found — falling back to sidebar discovery via scrape.`)
@@ -489,7 +532,9 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
   // HTML parsing, so try it before falling back to generic nav scraping.
   styles.info(`Probing for Mintlify config (docs.json, mint.json)...`)
   const mintlifyStart = Date.now()
-  const mintlifyNav = await timePhase('mintlify probe', () => tryMintlifyNav(sourceUrl.toString(), knownUrls, firecrawlKey))
+  const mintlifyOasSink = []
+  const mintlifyNav = await timePhase('mintlify probe', () => tryMintlifyNav(sourceUrl.toString(), knownUrls, firecrawlKey, mintlifyOasSink))
+  addOasCandidates(mintlifyOasSink)
   if (debugSnapshots) {
     debugSnapshots[`02a-mintlify-nav${dbgSuffix}.json`] = mintlifyNav ? JSON.parse(JSON.stringify(mintlifyNav)) : null
   }
@@ -528,7 +573,9 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
   if (!mintlifyNav && !fernNav) {
     styles.info(`Probing for Archbee document tree...`)
     const archbeeStart = Date.now()
-    archbeeNav = await timePhase('archbee probe', () => tryArchbeeNav(sourceUrl.toString(), knownUrls, firecrawlKey))
+    const archbeeOasSink = []
+    archbeeNav = await timePhase('archbee probe', () => tryArchbeeNav(sourceUrl.toString(), knownUrls, firecrawlKey, archbeeOasSink))
+    addOasCandidates(archbeeOasSink)
     if (archbeeNav) {
       const pageCount = archbeeNav.categories.reduce((n, c) => n + countUrlPagesDeep(c.pages), 0)
       styles.ok(
@@ -550,7 +597,9 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
   } else {
     styles.info(`Scraping sidebar nav from ${styles.bold(sourceUrl.toString())}${firecrawlKey ? ' ' + styles.dim('(via Firecrawl)') : ''}...`)
     scrapeStart = Date.now()
-    scraped = await timePhase('scrape nav', () => scrapeNavFromSite(sourceUrl.toString(), knownUrls, firecrawlKey, scrapeDiagnostics))
+    const scrapeOasSink = []
+    scraped = await timePhase('scrape nav', () => scrapeNavFromSite(sourceUrl.toString(), knownUrls, firecrawlKey, scrapeDiagnostics, scrapeOasSink))
+    addOasCandidates(scrapeOasSink)
     if (!scraped) scrapeDiagnostics.reason ??= 'unknown'
   }
   if (debugSnapshots) {
@@ -656,12 +705,14 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
           // category the sweep pass just built, if any) and nest it by resource
           // segment so routeCategory() maps the whole thing to ReadMe's
           // `reference/` top-level dir.
-          const apiResult = collectApiReferencePages(slotted, scraped)
+          const linkSweepOasSink = []
+          const apiResult = collectApiReferencePages(slotted, scraped, linkSweepOasSink)
           const otherOrphans = apiResult.nonApiOrphans
           if (apiResult.category) scraped.categories.push(apiResult.category)
 
-          const buckets = bucketOrphansByPathType(otherOrphans, scraped)
+          const buckets = bucketOrphansByPathType(otherOrphans, scraped, linkSweepOasSink)
           for (const b of buckets) scraped.categories.push(b)
+          addOasCandidates(linkSweepOasSink)
           if (debugSnapshots) {
             debugSnapshots[`04-after-orphan-buckets${dbgSuffix}.json`] = {
               apiReferenceCollected: apiResult.category
@@ -840,7 +891,20 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
   }
 
   styles.ok(`Organized in ${styles.bold(formatDuration(Date.now() - organizeStart))}.`)
-  organized.oasJsonUrls = oasJsonUrls
+
+  addOasCandidates(await oasProbePromise)
+  oasCandidates.sort((a, b) => OAS_SOURCE_CONFIDENCE.indexOf(a.source) - OAS_SOURCE_CONFIDENCE.indexOf(b.source))
+  const cappedOasCandidates = oasCandidates.slice(0, MAX_OAS_CANDIDATES_PER_SOURCE)
+  if (oasCandidates.length > 0) {
+    const bySource = new Map()
+    for (const c of cappedOasCandidates) bySource.set(c.source, (bySource.get(c.source) || 0) + 1)
+    const summary = Array.from(bySource, ([source, n]) => `${n} ${source}`).join(', ')
+    const overCap = oasCandidates.length - cappedOasCandidates.length
+    styles.info(
+      styles.dim(`OAS candidates: ${summary}${overCap > 0 ? `; dropped ${overCap} over the cap of ${MAX_OAS_CANDIDATES_PER_SOURCE}` : ''}.`),
+    )
+  }
+  organized.oasJsonUrls = cappedOasCandidates
 
   // Record which page URLs came from llms.txt
   const llmsPaths = new Set()
@@ -1284,7 +1348,7 @@ function createZip(sourceDir, outputZip) {
  * Returns { source, title, categories } or null if no Mintlify config is
  * found or parseable.
  */
-async function tryMintlifyNav(sourceUrl, knownPages, firecrawlKey) {
+async function tryMintlifyNav(sourceUrl, knownPages, firecrawlKey, oasSink) {
   const origin = new URL(sourceUrl).origin
   const fetchHtml = firecrawlKey ? makeFirecrawlFetcher(firecrawlKey) : fetchHtmlDirect
 
@@ -1296,7 +1360,9 @@ async function tryMintlifyNav(sourceUrl, knownPages, firecrawlKey) {
     const body = await fetchHtml(configUrl)
     if (!body) continue
     const config = extractMintlifyConfig(body)
-    if (!config || !config.navigation) continue
+    if (!config) continue
+    if (oasSink) oasSink.push(...extractMintlifyOasCandidates(config, origin))
+    if (!config.navigation) continue
     const parsed = parseMintlifyConfig(config, origin, byPath)
     if (parsed.categories.length > 0) {
       return { source: configUrl, title: parsed.title, categories: parsed.categories }
@@ -1331,6 +1397,51 @@ function extractMintlifyConfig(body) {
     start = body.lastIndexOf('{', start - 1)
   }
   return null
+}
+
+/**
+ * Collect candidate spec URLs from a Mintlify config's `openapi` fields —
+ * `string | string[] | { source }` at the top level and on any navigation
+ * node. Relative values resolve against the origin. Pushed before the
+ * navigation guard so a config with `openapi` but unusable nav still yields
+ * specs.
+ */
+function extractMintlifyOasCandidates(config, origin) {
+  const candidates = []
+  const seen = new Set()
+  const addUrl = (raw) => {
+    if (typeof raw !== 'string' || !raw.trim()) return
+    let abs
+    try {
+      abs = new URL(raw, origin)
+    } catch {
+      return
+    }
+    if (abs.protocol !== 'http:' && abs.protocol !== 'https:') return
+    const href = abs.toString()
+    if (seen.has(href)) return
+    seen.add(href)
+    candidates.push({ url: href, text: null, source: 'mintlify' })
+  }
+  const addValue = (value) => {
+    if (typeof value === 'string') addUrl(value)
+    else if (Array.isArray(value)) for (const v of value) addValue(v)
+    else if (value && typeof value === 'object') addUrl(value.source)
+  }
+  const NAV_KEYS = ['navigation', 'tabs', 'groups', 'anchors', 'versions', 'languages', 'pages', 'dropdowns']
+  const walk = (node) => {
+    if (Array.isArray(node)) {
+      for (const n of node) walk(n)
+      return
+    }
+    if (!node || typeof node !== 'object') return
+    if (node.openapi !== undefined) addValue(node.openapi)
+    for (const key of NAV_KEYS) {
+      if (node[key] !== undefined) walk(node[key])
+    }
+  }
+  walk(config)
+  return candidates
 }
 
 function parseMintlifyConfig(config, origin, byPath) {
@@ -1421,10 +1532,13 @@ function parseMintlifyConfig(config, origin, byPath) {
  * Returns { title, categories } or null if the page is not Archbee or the
  * embedded tree is unavailable.
  */
-async function tryArchbeeNav(sourceUrl, knownPages, firecrawlKey) {
+async function tryArchbeeNav(sourceUrl, knownPages, firecrawlKey, oasSink) {
   const origin = new URL(sourceUrl).origin
   const fetchHtml = firecrawlKey ? makeFirecrawlFetcher(firecrawlKey) : fetchHtmlDirect
   const html = await fetchHtml(toBrowsableUrl(sourceUrl))
+  if (html && oasSink) {
+    oasSink.push(...extractOasUrlsFromHtml(html, sourceUrl).map((url) => ({ url, text: null, source: 'html' })))
+  }
   if (!html || !/publicDocsTree|Archbee/i.test(html)) return null
 
   const nextData = extractNextData(html)
@@ -1766,6 +1880,63 @@ function isMonotonicAlpha(titles) {
 }
 
 /**
+ * Scan a rendered docs page for spec URLs embedded by the common API-reference
+ * renderers — Swagger UI, Redoc, Scalar, Stoplight Elements. Returns absolute
+ * http(s) URLs resolved against the page URL. Pure string scanning on HTML we
+ * already fetched — zero extra requests.
+ */
+function extractOasUrlsFromHtml(html, pageUrl) {
+  const doc = String(html)
+  const raws = []
+
+  // Swagger UI: `SwaggerUIBundle({ url: "…" })` or `urls: [{ url: "…" }, …]`.
+  // Scanning a bounded window after each init call handles both shapes
+  // without catastrophic backtracking.
+  const swaggerInitRe = /SwaggerUI(?:Bundle)?\s*\(/g
+  let m
+  while ((m = swaggerInitRe.exec(doc)) !== null) {
+    const windowText = doc.slice(m.index, m.index + 3000)
+    const urlRe = /["']?\burl["']?\s*:\s*["']([^"']+)["']/g
+    let u
+    while ((u = urlRe.exec(windowText)) !== null) raws.push(u[1])
+  }
+
+  const redocAttrRe = /<redoc\b[^>]*?\bspec-url\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/gi
+  while ((m = redocAttrRe.exec(doc)) !== null) raws.push(m[1] ?? m[2] ?? m[3])
+  const redocInitRe = /Redoc\.init\s*\(\s*["']([^"']+)["']/g
+  while ((m = redocInitRe.exec(doc)) !== null) raws.push(m[1])
+
+  // Scalar: <script id="api-reference" data-url="…"> — attr-order agnostic.
+  const scriptTagRe = /<script\b[^>]*>/gi
+  while ((m = scriptTagRe.exec(doc)) !== null) {
+    const tag = m[0]
+    if (!/\bid\s*=\s*["']api-reference["']/i.test(tag)) continue
+    const u = /\bdata-url\s*=\s*["']([^"']+)["']/i.exec(tag)
+    if (u) raws.push(u[1])
+  }
+
+  const stoplightRe = /apiDescriptionUrl\s*=\s*"([^"]+)"/g
+  while ((m = stoplightRe.exec(doc)) !== null) raws.push(m[1])
+
+  const out = []
+  const seen = new Set()
+  for (const raw of raws) {
+    let abs
+    try {
+      abs = new URL(raw, pageUrl)
+    } catch {
+      continue
+    }
+    if (abs.protocol !== 'http:' && abs.protocol !== 'https:') continue
+    const href = abs.toString()
+    if (seen.has(href)) continue
+    seen.add(href)
+    out.push(href)
+  }
+  return out
+}
+
+/**
  * Fetch the source URL, find the `<nav>` or `<aside>` that contains the most
  * links matching our known llms.txt URLs, and extract its heading/link
  * structure into { title, categories: [{ title, pages: [...] }] }.
@@ -1774,7 +1945,7 @@ function isMonotonicAlpha(titles) {
  * renders its sidebar server-side as <nav>/<aside> with <h*> section headers.
  * Returns null if coverage is too low to be useful.
  */
-async function scrapeNavFromSite(sourceUrl, knownPages, firecrawlKey, diagnostics = {}) {
+async function scrapeNavFromSite(sourceUrl, knownPages, firecrawlKey, diagnostics = {}, oasSink) {
   // Index known pages by normalized pathname so we can match nav hrefs against them.
   const byPath = new Map()
   for (const p of knownPages) byPath.set(normalizePath(p.url), p)
@@ -1798,6 +1969,9 @@ async function scrapeNavFromSite(sourceUrl, knownPages, firecrawlKey, diagnostic
 
     const html = await fetchHtml(url)
     if (!html) return 0
+    if (oasSink) {
+      oasSink.push(...extractOasUrlsFromHtml(html, url).map((u) => ({ url: u, text: null, source: 'html' })))
+    }
 
     const base = new URL(url)
     let best = { score: -Infinity, count: 0, tree: null }
@@ -2164,7 +2338,7 @@ function parseNavBlock(blockHtml, base, byPath) {
  *
  * Returns { category, nonApiOrphans, mergedScrapedTitles }.
  */
-function collectApiReferencePages(orphans, scraped) {
+function collectApiReferencePages(orphans, scraped, oasSink) {
   const API_PREFIX_RE = /^\/(api[-_]?reference|api|reference)(\/|$)/i
   const isApiUrl = (url) => {
     try {
@@ -2180,9 +2354,12 @@ function collectApiReferencePages(orphans, scraped) {
   const seenUrls = new Set()
   const push = (p) => {
     if (!p || !p.url) return
-    // Skip non-page assets like /api-reference/openapi.json that some
-    // llms.txt files list alongside real pages.
-    if (/\.(json|yaml|yml)$/i.test(p.url)) return
+    // Non-page assets like /api-reference/openapi.json that some llms.txt
+    // files list alongside real pages become spec candidates, not doc stubs.
+    if (/\.(json|ya?ml)$/i.test(p.url)) {
+      if (oasSink) oasSink.push({ url: p.url, text: p.title || null, source: 'link-sweep' })
+      return
+    }
     if (seenUrls.has(p.url)) return
     seenUrls.add(p.url)
     apiPages.push(p)
@@ -2272,7 +2449,7 @@ function collectApiReferencePages(orphans, scraped) {
  * Uses distinctive titles — just "Docs" or "Reference" — rather than the raw
  * segment name. Falls back to "Other" when the path has no usable type.
  */
-function bucketOrphansByPathType(orphans, scraped) {
+function bucketOrphansByPathType(orphans, scraped, oasSink) {
   const TYPE_TITLES = {
     reference: 'API Reference',
     api: 'API Reference',
@@ -2320,9 +2497,12 @@ function bucketOrphansByPathType(orphans, scraped) {
       continue
     }
     const pathname = url.pathname
-    // Skip OAS spec endpoints — `/api-reference/openapi.json` etc. aren't
-    // documentation pages and shouldn't become stubs.
-    if (/\.(json|ya?ml)$/i.test(pathname)) continue
+    // OAS spec endpoints — `/api-reference/openapi.json` etc. aren't
+    // documentation pages; capture them as spec candidates instead of stubs.
+    if (/\.(json|ya?ml)$/i.test(pathname)) {
+      if (oasSink) oasSink.push({ url: p.url, text: p.title || null, source: 'link-sweep' })
+      continue
+    }
 
     const segs = pathname.split('/').filter(Boolean)
     let type = null
@@ -2863,14 +3043,17 @@ async function fetchHtmlDirect(url) {
 }
 
 /**
- * Download a `.json` URL as raw bytes. Returns a Buffer, or null on non-OK /
- * network error. No parsing or validation — the runner is the OAS gate.
+ * Download a candidate spec URL as raw bytes. Returns a Buffer, or null on
+ * non-OK / network error. No parsing or validation — the runner is the OAS gate.
  */
-async function fetchJsonSpec(url) {
+async function fetchSpecBytes(url) {
   try {
     const res = await fetch(url, {
       redirect: 'follow',
-      headers: { 'User-Agent': 'readme-cli-import', Accept: 'application/json' },
+      headers: {
+        'User-Agent': 'readme-cli-import',
+        Accept: 'application/json, application/x-yaml, application/yaml, text/yaml, text/plain',
+      },
     })
     if (!res.ok) return null
     return Buffer.from(await res.arrayBuffer())
@@ -2879,36 +3062,55 @@ async function fetchJsonSpec(url) {
   }
 }
 
+// Extension for an extensionless candidate (e.g. /v3/api-docs), sniffed from
+// the body. Defaults to .json — the runner tolerates a mislabeled extension.
+function sniffSpecExtension(text) {
+  try {
+    JSON.parse(text)
+    return '.json'
+  } catch {
+    return OAS_TOP_LEVEL_KEY_RE.test(String(text).slice(0, 64 * 1024)) ? '.yaml' : '.json'
+  }
+}
+
 /**
- * Download the captured candidate-spec URLs into `<stagingDir>/oas/<name>.json`.
- * Filenames come from the URL basename (collisions get a numeric suffix); the
- * runner de-dups by content, so identical bytes under different names are
- * handled there. Returns the count of files written.
+ * Download the captured candidate-spec URLs into `<stagingDir>/oas/`. Probe
+ * hits carry their prefetched bytes in `item.body`; everything else is
+ * fetched here. Bodies that look like HTML are skipped so the runner's
+ * user-visible candidate count stays honest — all other validation happens in
+ * the runner. Filenames come from the URL basename, keeping a .json/.yaml/.yml
+ * extension when present and sniffing one otherwise (collisions get a numeric
+ * suffix); the runner de-dups by content, so identical bytes under different
+ * names are handled there. Returns the count of files written.
  */
 async function downloadOasSpecs(oasJsonUrls, stagingDir) {
   const oasDir = path.join(stagingDir, 'oas')
   fs.mkdirSync(oasDir, { recursive: true })
   const usedNames = new Set()
   let written = 0
-  for (const { url } of oasJsonUrls) {
-    const buf = await fetchJsonSpec(url)
+  for (const item of oasJsonUrls) {
+    const buf = item.body || (await fetchSpecBytes(item.url))
     if (!buf) {
-      styles.info(styles.dim(`  oas: skipped ${url} (download failed)`))
+      styles.info(styles.dim(`  oas: skipped ${item.url} (download failed)`))
       continue
     }
-    // Derive a safe, unique *.json filename from the URL basename.
+    const text = buf.toString('utf8')
+    if (/^\s*</.test(text)) {
+      styles.info(styles.dim(`  oas: skipped ${item.url} (looks like HTML)`))
+      continue
+    }
     let base
     try {
-      base = path.basename(new URL(url).pathname) || 'openapi.json'
+      base = path.basename(new URL(item.url).pathname) || 'openapi'
     } catch {
-      base = 'openapi.json'
+      base = 'openapi'
     }
     base = base.replace(/[^a-zA-Z0-9._-]/g, '-')
-    if (!/\.json$/i.test(base)) base += '.json'
+    if (!/\.(json|ya?ml)$/i.test(base)) base += sniffSpecExtension(text)
     let name = base
     let n = 2
     while (usedNames.has(name)) {
-      name = base.replace(/\.json$/i, `-${n}.json`)
+      name = base.replace(/\.(json|ya?ml)$/i, `-${n}$&`)
       n++
     }
     usedNames.add(name)
@@ -3574,10 +3776,10 @@ async function runJsonQuery({ systemPrompt, userPrompt, model, schema }) {
 //   - llms.txt, llms-full.txt, llms-ctx.txt, … (other llms.txt variants
 //     that point back at the same index/dump, not real pages)
 //
-// `.json` is deliberately NOT in this list: those links are captured up-front
-// by extractOasJsonUrlsFromParsed (they may be OpenAPI specs we want to
-// download into oas/ and upload separately) and removed from the parsed tree
-// before this drop runs, so a `.json` item never reaches here.
+// `.json`/`.yaml`/`.yml` spec links are captured up-front by
+// extractOasSpecUrlsFromParsed (candidate OpenAPI specs we download into oas/
+// and upload separately) and removed from the parsed tree before this drop
+// runs, so spec-shaped items never reach here — `.yaml` below is a backstop.
 const ASSET_EXT_RE = /\.(ya?ml|xml|toml)$/i
 const LLMS_TXT_RE = /(?:^|\/)llms[^/]*\.txt$/i
 function isAssetOrMetaUrl(url) {
@@ -3589,14 +3791,13 @@ function isAssetOrMetaUrl(url) {
   }
 }
 
-// A llms.txt item whose URL points at a `.json` file. These are pulled out of
-// the parsed tree before organization (so stub generation never sees them) and
-// downloaded into the staged `oas/` dir; the runner validates each as OpenAPI
-// and uploads the valid ones. NOTE: only `.json` is captured — `.yaml`/`.yml`
-// specs are intentionally left to the asset drop above.
-function isOasJsonUrl(url) {
+// A llms.txt item whose URL points at a spec-shaped file (.json/.yaml/.yml).
+// These are pulled out of the parsed tree before organization (so stub
+// generation never sees them) and downloaded into the staged `oas/` dir; the
+// runner validates each as OpenAPI and uploads the valid ones.
+function isOasSpecUrl(url) {
   try {
-    return /\.json$/i.test(new URL(url).pathname)
+    return /\.(json|ya?ml)$/i.test(new URL(url).pathname)
   } catch {
     return false
   }
@@ -3698,21 +3899,22 @@ function narrowToDocsSubtreeIfNeeded(llms, sourceUrl, hits) {
 }
 
 /**
- * Pull `.json` items out of a parsed llms.txt structure IN PLACE, returning the
- * removed items as `[{ url, text }]`. Sections emptied by the removal are
- * pruned too — same shape as dropAssetItemsFromParsed. Run BEFORE
- * dropAssetItemsFromParsed / knownUrls / organize so the captured specs never
- * enter the stub tree (skeleton has zero visibility of OAS files). The caller
- * downloads the returned URLs into the staged `oas/` dir.
+ * Pull spec-shaped items (.json/.yaml/.yml) out of a parsed llms.txt structure
+ * IN PLACE, returning the removed items as `[{ url, text, source }]`. Sections
+ * emptied by the removal are pruned too — same shape as
+ * dropAssetItemsFromParsed. Run BEFORE dropAssetItemsFromParsed / knownUrls /
+ * organize so the captured specs never enter the stub tree (skeleton has zero
+ * visibility of OAS files). The caller downloads the returned URLs into the
+ * staged `oas/` dir.
  */
-function extractOasJsonUrlsFromParsed(parsed) {
+function extractOasSpecUrlsFromParsed(parsed) {
   const captured = []
   const keptSections = []
   for (const section of parsed.sections) {
     const keptItems = []
     for (const item of section.items) {
-      if (isOasJsonUrl(item.url)) {
-        captured.push({ url: item.url, text: item.text || null })
+      if (isOasSpecUrl(item.url)) {
+        captured.push({ url: item.url, text: item.text || null, source: 'llms' })
         continue
       }
       keptItems.push(item)
@@ -3775,6 +3977,78 @@ function buildWellKnownDocRoutes(sourceUrl) {
     if (!SUBDOMAIN_ONLY_DOC_ROUTES.has(route)) add('path', `${sourceUrl.origin}/${route}/`)
   }
   return out
+}
+
+// Content gate for spec candidates — many sites 200 with an HTML shell for
+// any path, so a body only counts as a spec if it parses as JSON with a
+// top-level `openapi`/`swagger` version string, or matches the YAML form of
+// that key. (Pattern mirrors ai-cli-runner/app/lib/oas-sniff.ts — copied,
+// never imported.)
+const OAS_TOP_LEVEL_KEY_RE = /^\s*['"]?(openapi|swagger)['"]?\s*:/m
+function sniffOasContent(text) {
+  const body = String(text)
+  if (/^\s*</.test(body)) return false
+  try {
+    const obj = JSON.parse(body)
+    if (!obj || typeof obj !== 'object') return false
+    return typeof obj.openapi === 'string' || typeof obj.swagger === 'string'
+  } catch {
+    return OAS_TOP_LEVEL_KEY_RE.test(body.slice(0, 64 * 1024))
+  }
+}
+
+function buildWellKnownOasProbeUrls(sourceUrl, docsBase, preAdoptionOrigin) {
+  const urls = []
+  const seen = new Set()
+  const add = (href) => {
+    if (seen.has(href)) return
+    seen.add(href)
+    urls.push(href)
+  }
+  const origins = [sourceUrl.origin]
+  if (preAdoptionOrigin && preAdoptionOrigin !== sourceUrl.origin) origins.push(preAdoptionOrigin)
+  for (const origin of origins) {
+    for (const p of WELL_KNOWN_OAS_PATHS) add(`${origin}/${p}`)
+  }
+  if (docsBase && docsBase.kind === 'path') {
+    const base = docsBase.url.href.replace(/\/+$/, '')
+    for (const p of ['openapi.json', 'openapi.yaml', 'swagger.json']) add(`${base}/${p}`)
+  }
+  return urls
+}
+
+/**
+ * Probe well-known spec paths on the source origins. A hit is an OK response
+ * whose body sniffs as a spec and whose final URL stayed on a probed origin
+ * (redirects to a marketing apex don't count). Returns ALL hits — a site can
+ * serve several specs — with the fetched bytes attached so downloadOasSpecs
+ * never re-downloads them.
+ */
+async function probeWellKnownOasPaths(sourceUrl, docsBase, preAdoptionOrigin) {
+  const probeUrls = buildWellKnownOasProbeUrls(sourceUrl, docsBase, preAdoptionOrigin)
+  const allowedOrigins = new Set([sourceUrl.origin])
+  if (preAdoptionOrigin) allowedOrigins.add(preAdoptionOrigin)
+  const hits = await Promise.all(
+    probeUrls.map(async (url) => {
+      try {
+        const res = await fetch(url, { redirect: 'follow', headers: { 'User-Agent': 'readme-cli-import' } })
+        if (!res.ok) return null
+        let finalOrigin
+        try {
+          finalOrigin = new URL(res.url || url).origin
+        } catch {
+          return null
+        }
+        if (!allowedOrigins.has(finalOrigin)) return null
+        const body = Buffer.from(await res.arrayBuffer())
+        if (!sniffOasContent(body.toString('utf8'))) return null
+        return { url, text: null, source: 'probe', body }
+      } catch {
+        return null
+      }
+    }),
+  )
+  return hits.filter(Boolean)
 }
 
 /**
@@ -4368,9 +4642,10 @@ function urlInScope(urlStr, sitemapUrl, scopePrefix) {
  * Convert a flat sitemap URL list into the `{title, url, description}` shape
  * the rest of the pipeline expects for knownUrls. Title is derived from the
  * last non-empty path segment, with file extensions stripped. Index-style
- * URLs that resolve to the scope root itself are dropped.
+ * URLs that resolve to the scope root itself are dropped. Spec-shaped URLs
+ * (.json/.yaml/.yml) go to `oasSink` instead of becoming pages.
  */
-function sitemapUrlsToKnownUrls(urls) {
+function sitemapUrlsToKnownUrls(urls, oasSink) {
   const out = []
   const seen = new Set()
   for (const url of urls) {
@@ -4383,6 +4658,10 @@ function sitemapUrlsToKnownUrls(urls) {
     const norm = normalizePath(url)
     if (seen.has(norm)) continue
     seen.add(norm)
+    if (/\.(json|ya?ml)$/i.test(pathname)) {
+      if (oasSink) oasSink.push({ url, text: null, source: 'sitemap' })
+      continue
+    }
     const segs = pathname.split('/').filter(Boolean)
     const last = segs[segs.length - 1] || ''
     const slug = last.replace(/\.[a-z0-9]+$/i, '')
@@ -5025,7 +5304,22 @@ function makeIconPicker() {
   }
 }
 
-export const __test__ = { discoverLlmsTxt, mergeValidHits, resolveRedirectedSourceUrl, resolveDocsBaseUrl, inCandidateScope, tryFernNav }
+export const __test__ = {
+  discoverLlmsTxt,
+  mergeValidHits,
+  resolveRedirectedSourceUrl,
+  resolveDocsBaseUrl,
+  inCandidateScope,
+  tryFernNav,
+  sniffOasContent,
+  buildWellKnownOasProbeUrls,
+  probeWellKnownOasPaths,
+  extractOasUrlsFromHtml,
+  extractMintlifyOasCandidates,
+  sitemapUrlsToKnownUrls,
+  extractOasSpecUrlsFromParsed,
+  downloadOasSpecs,
+}
 
 function formatDuration(ms) {
   const safe = Math.max(0, ms)
