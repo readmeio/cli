@@ -546,11 +546,31 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
   }
   console.log()
 
+  // Fern sites ship the canonical sidebar in RSC flight chunks on every
+  // page — deterministic structure where the Firecrawl scrape usually fails
+  // acceptance and llms.txt clustering invents categories.
+  let fernNav = null
+  if (!mintlifyNav) {
+    styles.info(`Probing for Fern nav tree...`)
+    const fernStart = Date.now()
+    fernNav = await timePhase('fern probe', () => tryFernNav(sourceUrl.toString(), knownUrls))
+    if (fernNav) {
+      const pageCount = fernNav.categories.reduce((n, c) => n + countUrlPagesDeep(c.pages), 0)
+      styles.ok(
+        `Found Fern nav tree in ${styles.bold(formatDuration(Date.now() - fernStart))} — ${styles.bold(String(fernNav.categories.length))} categor${fernNav.categories.length === 1 ? 'y' : 'ies'}, ${styles.bold(String(pageCount))} page${pageCount === 1 ? '' : 's'}.`,
+      )
+    }
+    console.log()
+  }
+  if (debugSnapshots) {
+    debugSnapshots[`02a2-fern-nav${dbgSuffix}.json`] = fernNav ? JSON.parse(JSON.stringify(fernNav)) : null
+  }
+
   // Archbee sites embed the canonical document tree in Next.js page data.
   // Their llms.txt export can be a flat, shuffled list, so prefer the tree
   // when present.
   let archbeeNav = null
-  if (!mintlifyNav) {
+  if (!mintlifyNav && !fernNav) {
     styles.info(`Probing for Archbee document tree...`)
     const archbeeStart = Date.now()
     const archbeeOasSink = []
@@ -570,6 +590,8 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
   const scrapeDiagnostics = {}
   if (mintlifyNav) {
     scraped = { title: mintlifyNav.title, categories: mintlifyNav.categories }
+  } else if (fernNav) {
+    scraped = { title: fernNav.title, categories: fernNav.categories }
   } else if (archbeeNav) {
     scraped = { title: archbeeNav.title, categories: archbeeNav.categories }
   } else {
@@ -592,13 +614,18 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
   // node because that's the one /docs page the scrape saw). Discard the
   // scrape and fall through to the llms.txt path, which uses URL-based
   // clustering when multiple files were merged.
+  // API-reference pages are excluded from the denominator: sidebars routinely
+  // omit generated endpoint stubs, and those pages are swept into reference/
+  // regardless of nav quality, so they say nothing about the nav's fitness as
+  // the import's spine.
   let scrapeDiscardedForCoverage = false
   if (scraped && llms && knownUrls.length > 0) {
     const scrapedPages = scraped.categories.reduce((n, c) => n + countUrlPagesDeep(c.pages), 0)
-    const coverage = scrapedPages / knownUrls.length
+    const nonReferenceKnown = knownUrls.filter((p) => !urlIsApiReference(p.url))
+    const coverage = nonReferenceKnown.length > 0 ? scrapedPages / nonReferenceKnown.length : 1
     if (coverage < 0.75) {
       styles.info(
-        `Scrape covered ${styles.bold(Math.round(coverage * 100) + '%')} of llms.txt pages (need ≥75%) — discarding scrape and organizing from llms.txt.`,
+        `Scrape covered ${styles.bold(Math.round(coverage * 100) + '%')} of llms.txt pages (need ≥75%${nonReferenceKnown.length < knownUrls.length ? `, ${knownUrls.length - nonReferenceKnown.length} api-reference pages excluded` : ''}) — discarding scrape and organizing from llms.txt.`,
       )
       scraped = null
       scrapeDiscardedForCoverage = true
@@ -852,7 +879,14 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
   // nestByUrlHierarchy renders it as the real parent of its children.
   await injectSectionLandingPages(organized, sourceUrl)
 
+  // A Fern tree is the authored sidebar: re-nesting by URL invents parent
+  // folders the source site renders flat (a section landing absorbing its
+  // path-descendant siblings, e.g. vapi's /server-url under Webhooks). Only
+  // the sweep-synthesized categories still nest — their pages were moved in
+  // flat and have no authored structure.
+  const sweepCategories = new Set(['API Reference', 'Changelog'])
   for (const cat of organized.categories || []) {
+    if (fernNav && !sweepCategories.has(cat.title)) continue
     cat.pages = nestByUrlHierarchy(cat.pages)
   }
 
@@ -1566,6 +1600,249 @@ function archbeeNodeUrl(origin, urlKey) {
   if (!key || key === '/') return `${origin}/`
   if (/^https?:\/\//i.test(key)) return key
   return `${origin}/${key.replace(/^\/+/, '')}`
+}
+
+// Max page fetches while filling in non-active Fern tab trees (one per tab).
+const FERN_TAB_FETCH_CAP = 8
+
+const FERN_SECTION_NODE_TYPES = new Set(['section', 'apiReference', 'apiPackage'])
+const FERN_SKIP_NODE_TYPES = new Set(['link', 'changelog', 'tab'])
+
+/**
+ * Fern-powered docs sites embed the complete nav tree in Next.js RSC flight
+ * chunks (`self.__next_f.push([1,"..."])`) on every page — titles, slugs,
+ * nesting, and order exactly as the live sidebar renders them. Only the
+ * active tab's tree is populated in a given page's payload; other tabs are
+ * listed with a `pointsTo` entry path, so each one costs a single extra
+ * fetch.
+ *
+ * Always fetches directly (never Firecrawl): the flight chunks are only
+ * guaranteed present in the raw SSR HTML, not in a rendered/processed DOM.
+ * A dead entry URL (moved slug) is retried once from a known page, since
+ * Fern soft-404s stale deep links.
+ *
+ * Returns { title, categories } or null if the site is not Fern or the
+ * payload yields no usable tree. Any parse failure returns null so the
+ * probe chain falls through to the existing routes.
+ */
+async function tryFernNav(sourceUrl, knownPages) {
+  try {
+    const origin = new URL(sourceUrl).origin
+    const looksFern = (html) => /<aside[^>]*id="fern-sidebar"/.test(html) || /<meta[^>]+name="generator"[^>]+content="[^"]*buildwithfern/i.test(html)
+    let entryUrl = toBrowsableUrl(sourceUrl)
+    let entryHtml = await fetchHtmlDirect(entryUrl)
+    if (!looksFern(entryHtml)) {
+      // A stale entry deep link 404s on Fern (the not-found boundary renders
+      // with a truncated tree), so retry once from a known live page.
+      const retry = knownPages.find((p) => normalizePath(p.url) !== normalizePath(sourceUrl))
+      if (!retry) return null
+      entryUrl = toBrowsableUrl(retry.url)
+      entryHtml = await fetchHtmlDirect(entryUrl)
+      if (!looksFern(entryHtml)) return null
+    }
+
+    const byPath = new Map()
+    for (const p of knownPages) byPath.set(normalizePath(p.url), p)
+
+    const ctx = { origin, byPath, seenPaths: new Set() }
+    const categories = []
+    const collect = (html, tabTitle) => {
+      const blob = decodeFernFlightBlob(html)
+      addFernCategories(categories, extractFernNavNodes(blob), { ...ctx, tabTitle })
+      return blob
+    }
+
+    const entryBlob = collect(entryHtml, null)
+    const entryPath = normalizePath(entryUrl)
+    const seenTabTargets = new Set()
+    let tabFetches = 0
+    for (const tab of extractFernTabs(entryBlob)) {
+      if (seenTabTargets.has(tab.pointsTo)) continue
+      seenTabTargets.add(tab.pointsTo)
+      const tabUrl = `${origin}/${tab.pointsTo}`
+      if (normalizePath(tabUrl) === entryPath) continue
+      if (tabFetches >= FERN_TAB_FETCH_CAP) break
+      tabFetches++
+      const tabHtml = await fetchHtmlDirect(tabUrl)
+      if (!tabHtml) continue
+      collect(tabHtml, tab.title)
+    }
+
+    const pageCount = categories.reduce((n, c) => n + countUrlPagesDeep(c.pages), 0)
+    if (pageCount === 0) return null
+    return { title: null, categories }
+  } catch {
+    return null
+  }
+}
+
+function decodeFernFlightBlob(html) {
+  const chunks = []
+  const chunkRe = /self\.__next_f\.push\(\[1,"((?:[^"\\]|\\.)*)"\]\)/g
+  let m
+  while ((m = chunkRe.exec(html)) !== null) {
+    try {
+      chunks.push(JSON.parse(`"${m[1]}"`))
+    } catch { }
+  }
+  return chunks.join('')
+}
+
+function extractBalancedObject(str, start) {
+  let depth = 0
+  let inString = false
+  for (let i = start; i < str.length; i++) {
+    const ch = str[i]
+    if (inString) {
+      if (ch === '\\') i++
+      else if (ch === '"') inString = false
+    } else if (ch === '"') inString = true
+    else if (ch === '{') depth++
+    else if (ch === '}') {
+      depth--
+      if (depth === 0) return str.slice(start, i + 1)
+    }
+  }
+  return null
+}
+
+/**
+ * Pull top-level nav container/section objects out of a decoded flight blob.
+ * The blob as a whole is not JSON — nav nodes are embedded mid-stream — so
+ * each marker hit is balanced-brace extracted and parsed on its own. Matches
+ * that fall inside an already-extracted object are its children and skipped.
+ */
+function extractFernNavNodes(blob) {
+  const nodes = []
+  const markerRe = /\{"type":"(?:sidebarRoot|sidebarGroup|section|apiReference|apiPackage)"/g
+  let consumedUpTo = -1
+  let m
+  while ((m = markerRe.exec(blob)) !== null) {
+    if (m.index < consumedUpTo) continue
+    const raw = extractBalancedObject(blob, m.index)
+    if (!raw) continue
+    consumedUpTo = m.index + raw.length
+    try {
+      nodes.push(JSON.parse(raw))
+    } catch { }
+  }
+  return nodes
+}
+
+function extractFernTabs(blob) {
+  const tabs = []
+  const tabRe = /\{"type":"tab",/g
+  let m
+  while ((m = tabRe.exec(blob)) !== null) {
+    const raw = extractBalancedObject(blob, m.index)
+    if (!raw) continue
+    let tab
+    try {
+      tab = JSON.parse(raw)
+    } catch {
+      continue
+    }
+    const pointsTo = fernField(tab.pointsTo)
+    if (!pointsTo) continue
+    tabs.push({ title: fernField(tab.title), pointsTo })
+  }
+  return tabs
+}
+
+// Absent fields serialize as the literal string "$undefined" in flight payloads.
+function fernField(value) {
+  return typeof value === 'string' && value !== '$undefined' && value !== '' ? value : null
+}
+
+function fernPageFromNode(node, ctx) {
+  if (!node || typeof node !== 'object' || node.hidden === true) return null
+  if (FERN_SKIP_NODE_TYPES.has(node.type)) return null
+  const children = Array.isArray(node.children) ? node.children.map((c) => fernPageFromNode(c, ctx)).filter(Boolean) : []
+  if (FERN_SECTION_NODE_TYPES.has(node.type)) {
+    // A section owns a page only when overviewPageId is set — it then renders
+    // at the section's own slug. pointsTo is a navigation alias to the
+    // section's first descendant page, never a page of the section itself.
+    const landing = fernField(node.overviewPageId) ? fernField(node.slug) : null
+    const title = fernField(node.title) || 'Untitled'
+    if (!landing) {
+      if (children.length === 0) return null
+      return { title, url: null, _emptyParent: true, _virtualPathSegs: [kebabCase(title) || 'group'], pages: children }
+    }
+    const landingUrl = `${ctx.origin}/${landing}`
+    const known = ctx.byPath.get(normalizePath(landingUrl))
+    return {
+      title,
+      url: known?.url || landingUrl,
+      ...(children.length > 0 ? { pages: children } : {}),
+    }
+  }
+  const slug = fernField(node.slug)
+  if (slug) {
+    const url = `${ctx.origin}/${slug}`
+    const known = ctx.byPath.get(normalizePath(url))
+    return {
+      // The payload title is the sidebar label as rendered; llms.txt titles
+      // come from page headings, which can differ from the nav.
+      title: fernField(node.title) || known?.title || slug,
+      url: known?.url || url,
+      ...(known?.description ? { description: known.description } : {}),
+      ...(children.length > 0 ? { pages: children } : {}),
+    }
+  }
+  if (children.length === 1) return children[0]
+  if (children.length > 1) return { title: fernField(node.title) || 'Untitled', url: null, pages: children }
+  return null
+}
+
+/**
+ * Top-level sections become categories; untitled ones adopt the tab title so
+ * two tabs' unnamed roots don't merge into one "Untitled" category with
+ * colliding group slugs. Loose top-level pages (tabs without sections, e.g. a
+ * two-page MCP tab) collapse into one category named after the tab. Pages
+ * already claimed by an earlier category are dropped — the
+ * payload repeats trees across fetches, and multi-product sites nest the
+ * same API groups under both a product tab and the API-reference tab.
+ */
+function addFernCategories(categories, nodes, ctx) {
+  const roots = []
+  for (const node of nodes) {
+    if (node.type === 'sidebarRoot' || node.type === 'sidebarGroup') roots.push(...(node.children || []))
+    else roots.push(node)
+  }
+  const loosePages = []
+  for (const root of roots) {
+    if (FERN_SECTION_NODE_TYPES.has(root.type)) {
+      const section = fernPageFromNode(root, ctx)
+      if (!section) continue
+      if (!fernField(root.title) && ctx.tabTitle) section.title = ctx.tabTitle
+      const pages = section.pages || []
+      if (section.url && !pages.some((p) => p.url && normalizePath(p.url) === normalizePath(section.url))) {
+        pages.unshift({ title: section.title, url: section.url })
+      }
+      const deduped = dedupeFernPages(pages, ctx.seenPaths)
+      if (deduped.length > 0) categories.push({ title: section.title, pages: deduped })
+    } else {
+      const page = fernPageFromNode(root, ctx)
+      if (page) loosePages.push(page)
+    }
+  }
+  const deduped = dedupeFernPages(loosePages, ctx.seenPaths)
+  if (deduped.length > 0) categories.push({ title: ctx.tabTitle || 'Documentation', pages: deduped })
+}
+
+function dedupeFernPages(pages, seenPaths) {
+  const out = []
+  for (const p of pages) {
+    const urlSeen = p.url ? seenPaths.has(normalizePath(p.url)) : false
+    if (p.url && !urlSeen) seenPaths.add(normalizePath(p.url))
+    const kids = p.pages ? dedupeFernPages(p.pages, seenPaths) : []
+    if (kids.length === 0 && (urlSeen || !p.url)) continue
+    const entry = { ...p, url: urlSeen ? null : p.url }
+    if (kids.length > 0) entry.pages = kids
+    else delete entry.pages
+    out.push(entry)
+  }
+  return out
 }
 
 /**
@@ -2358,9 +2635,20 @@ function reclassifyPagesByUrlSegment(scraped, { segmentRe, categoryRe, defaultTi
  * live under a separate API Reference section — this lands them all in
  * `reference/` after staging. Returns the number of pages relocated.
  */
+const API_REFERENCE_URL_SEGMENT_RE = /^(api[-_]?reference|endpoints?)$/i
+
+function urlIsApiReference(url) {
+  try {
+    const segs = new URL(url).pathname.split('/').filter(Boolean)
+    return segs.some((s) => API_REFERENCE_URL_SEGMENT_RE.test(s))
+  } catch {
+    return false
+  }
+}
+
 function reclassifyReferencePages(scraped) {
   return reclassifyPagesByUrlSegment(scraped, {
-    segmentRe: /^(api[-_]?reference|endpoints?)$/i,
+    segmentRe: API_REFERENCE_URL_SEGMENT_RE,
     categoryRe: /^(api[ -]?reference|reference|api|endpoints?)$/i,
     defaultTitle: 'API Reference',
   })
@@ -2651,10 +2939,10 @@ function slotOrphansByPath(scraped, knownPages) {
   const matched = new Set()
   const pathToCategory = new Map() // normalizedPath → category
   for (const cat of scraped.categories) {
-    for (const p of cat.pages) {
+    for (const p of collectUrlPagesDeep(cat.pages)) {
       const norm = normalizePath(p.url)
       matched.add(norm)
-      pathToCategory.set(norm, cat)
+      if (!pathToCategory.has(norm)) pathToCategory.set(norm, cat)
     }
   }
 
@@ -5022,6 +5310,7 @@ export const __test__ = {
   resolveRedirectedSourceUrl,
   resolveDocsBaseUrl,
   inCandidateScope,
+  tryFernNav,
   sniffOasContent,
   buildWellKnownOasProbeUrls,
   probeWellKnownOasPaths,
