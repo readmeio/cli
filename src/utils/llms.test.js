@@ -140,6 +140,51 @@ test('parseLlmsTxt: items with no H2 fall into implicit Resources section', () =
   assert.equal(result.sections[0].title, 'Resources')
 })
 
+test('parseLlmsTxt: strips trailing (section) markers from H2 titles', () => {
+  const body = [
+    '# My Docs',
+    '',
+    '## getting-started (section)',
+    '- [Overview](https://docs.example.com/overview)',
+    '',
+    '## API Reference (SECTION)',
+    '- [Pets](https://docs.example.com/pets)',
+    '',
+    '## Guides (section) extra',
+    '- [Install](https://docs.example.com/install)',
+  ].join('\n')
+
+  const result = parseLlmsTxt(body, BASE)
+  assert.deepEqual(
+    result.sections.map((s) => s.title),
+    ['getting-started', 'API Reference', 'Guides (section) extra'],
+  )
+})
+
+test('parseLlmsTxt: strips (section) markers when falling back to H3 headings', () => {
+  const manyItems = Array.from({ length: 201 }, (_, i) => `- [Page ${i}](https://docs.example.com/page-${i})`).join('\n')
+  const body = [
+    '# Big Site',
+    '',
+    '## Docs',
+    manyItems,
+    '',
+    '### getting-started (section)',
+    '- [A1](https://docs.example.com/a1)',
+    '',
+    '### Reference (section)',
+    '- [B1](https://docs.example.com/b1)',
+  ].join('\n')
+
+  const result = parseLlmsTxt(body, BASE)
+  assert.equal(result.h3Fallback, true)
+  const titles = result.sections.map((s) => s.title)
+  assert.ok(titles.includes('getting-started'))
+  assert.ok(titles.includes('Reference'))
+  assert.ok(!titles.includes('getting-started (section)'))
+  assert.ok(!titles.includes('Reference (section)'))
+})
+
 // ---------------------------------------------------------------------------
 // parseLlmsTxt — H3 fallback
 // ---------------------------------------------------------------------------
