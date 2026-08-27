@@ -180,6 +180,16 @@ function isWithin(baseDir, target) {
   );
 }
 
+/**
+ * Render a frontmatter-only page. `matter.stringify` always appends a blank
+ * body after the closing fence (even for an empty body); the platform's own
+ * generated pages end immediately after the fence with no trailing newline,
+ * so trim it to match.
+ */
+function stringifyFrontmatter(frontmatter) {
+  return matter.stringify('', frontmatter).replace(/\n+$/, '');
+}
+
 function buildPageContent({ oasFilename, operationId }) {
   const frontmatter = {
     api: {
@@ -201,7 +211,7 @@ function buildPageContent({ oasFilename, operationId }) {
     hidden: false,
   };
 
-  return matter.stringify('', frontmatter);
+  return stringifyFrontmatter(frontmatter);
 }
 
 /**
@@ -216,7 +226,7 @@ function buildTagIndexContent(title, description) {
   // As with operation pages, upload always stamps hidden: false on new pages.
   frontmatter.hidden = false;
 
-  return matter.stringify('', frontmatter);
+  return stringifyFrontmatter(frontmatter);
 }
 
 /**
@@ -343,7 +353,23 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
       groupsByFolder.set(folder, { title, description: op.tag ? tagDescriptions.get(op.tag) : null });
     }
   }
-  for (const [folder, { title, description }] of groupsByFolder) {
+
+  // Order groups the way the platform does: a tag keeps the position it's
+  // declared in the spec's own top-level `tags` array, not the order its
+  // operations happen to appear in `paths`. A group with no declared position
+  // (an untagged path-derived group, or a tag used by an operation but never
+  // listed in `tags`) keeps its natural encounter order, appended after every
+  // declared tag.
+  const declaredOrder = (Array.isArray(spec.tags) ? spec.tags : [])
+    .filter((t) => t && t.name)
+    .map((t) => safeSegment(t.name, 'Other'));
+  const orderedFolders = [
+    ...declaredOrder.filter((folder) => groupsByFolder.has(folder)),
+    ...[...groupsByFolder.keys()].filter((folder) => !declaredOrder.includes(folder)),
+  ];
+
+  for (const folder of orderedFolders) {
+    const { title, description } = groupsByFolder.get(folder);
     const pageDir = path.join(refDir, infoTitle, folder);
     if (!isWithin(refDir, pageDir)) continue;
 

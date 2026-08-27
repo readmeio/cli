@@ -397,3 +397,63 @@ test('an operation with a real tag still groups under that tag, not its path', (
     rmRepo(root);
   }
 });
+
+test('generated pages end at the closing fence with no trailing blank line', () => {
+  const root = makeRepo({ 'reference/pets.json': SPEC });
+  try {
+    syncOas(root);
+    // Matches platform-generated pages, which end immediately after "---"
+    // with no trailing newline.
+    const opContent = fs.readFileSync(path.join(root, 'reference/Pets/pets/listpets.md'), 'utf-8');
+    assert.ok(opContent.endsWith('---'), `expected no trailing newline, got: ${JSON.stringify(opContent.slice(-5))}`);
+
+    const indexContent = fs.readFileSync(path.join(root, 'reference/Pets/pets/index.md'), 'utf-8');
+    assert.ok(indexContent.endsWith('---'), `expected no trailing newline, got: ${JSON.stringify(indexContent.slice(-5))}`);
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('tag order follows the spec\'s own `tags` array, not the order operations appear in `paths`', () => {
+  const spec = JSON.stringify({
+    openapi: '3.0.0',
+    info: { title: 'Pets' },
+    // Declared in "beta, alpha" order...
+    tags: [{ name: 'beta' }, { name: 'alpha' }],
+    paths: {
+      // ...even though "alpha"'s operation is declared first in paths.
+      '/a': { get: { operationId: 'aOp', tags: ['alpha'] } },
+      '/b': { get: { operationId: 'bOp', tags: ['beta'] } },
+    },
+  });
+  const root = makeRepo({ 'reference/pets.json': spec });
+  try {
+    syncOas(root);
+    const order = fs.readFileSync(path.join(root, 'reference/Pets/_order.yaml'), 'utf-8');
+    assert.deepEqual(order.trim().split('\n'), ['- beta', '- alpha']);
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('a tag used by an operation but not declared in `tags` is ordered after every declared tag', () => {
+  const spec = JSON.stringify({
+    openapi: '3.0.0',
+    info: { title: 'Pets' },
+    tags: [{ name: 'alpha' }],
+    paths: {
+      // "undeclared" is never listed in the spec's top-level tags array, and
+      // its operation appears before alpha's in paths.
+      '/a': { get: { operationId: 'aOp', tags: ['undeclared'] } },
+      '/b': { get: { operationId: 'bOp', tags: ['alpha'] } },
+    },
+  });
+  const root = makeRepo({ 'reference/pets.json': spec });
+  try {
+    syncOas(root);
+    const order = fs.readFileSync(path.join(root, 'reference/Pets/_order.yaml'), 'utf-8');
+    assert.deepEqual(order.trim().split('\n'), ['- alpha', '- undeclared']);
+  } finally {
+    rmRepo(root);
+  }
+});
