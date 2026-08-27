@@ -57,7 +57,7 @@ function generateOperationId(method, pathStr) {
 
 /**
  * Extract operations from an OAS spec.
- * Returns a Map of operationId -> { summary, description, tag, operationId }.
+ * Returns a Map of operationId -> { summary, description, tag, path, operationId }.
  * For operations without an operationId, a synthetic one is generated from the method and path.
  */
 export function extractOperations(spec) {
@@ -75,6 +75,7 @@ export function extractOperations(spec) {
         summary: operation.summary || null,
         description: operation.description || null,
         tag: (operation.tags && operation.tags[0]) || null,
+        path: pathStr,
       });
     }
   }
@@ -204,17 +205,32 @@ function buildPageContent({ oasFilename, operationId }) {
 }
 
 /**
- * Build the category landing page for a tag (mirrors what the ReadMe platform
- * generates on OAS upload): title from the tag name, excerpt from the tag's
- * description in the spec's top-level `tags` array.
+ * Build a category landing page (mirrors what the ReadMe platform generates on
+ * OAS upload): `title` is the tag name for a tagged group, or the raw path for
+ * an untagged path-derived group (see `operationGroup`); `excerpt`, when given,
+ * is the tag's description from the spec's top-level `tags` array.
  */
-function buildTagIndexContent(tagName, description) {
-  const frontmatter = { title: tagName };
+function buildTagIndexContent(title, description) {
+  const frontmatter = { title };
   if (description) frontmatter.excerpt = description;
   // As with operation pages, upload always stamps hidden: false on new pages.
   frontmatter.hidden = false;
 
   return matter.stringify('', frontmatter);
+}
+
+/**
+ * The category-folder grouping for an operation. A tagged operation groups
+ * under its own tag, as before. An untagged operation groups under a folder
+ * derived from its path, with the raw path as the category page's title — one
+ * folder per unique path, not a single shared bucket. This mirrors the
+ * platform's own OAS-upload output: untagged operations are never lumped into
+ * one "Other" folder.
+ */
+function operationGroup(op) {
+  if (op.tag) return { folder: safeSegment(op.tag, 'Other'), title: op.tag };
+  const folder = safeSegment(op.path.replace(/[/{}]/g, ''), 'operation').toLowerCase();
+  return { folder, title: op.path };
 }
 
 /**
@@ -314,28 +330,34 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
     }
   }
 
-  // Ensure every tag present in the spec has its category landing page (index.md)
+  // Ensure every group (a tag, or a path-derived bucket for untagged
+  // operations) present in the spec has its category landing page (index.md)
   // and is ordered — independent of whether its operation pages are new. Doing
   // this as its own pass (rather than only when creating a new op page) backfills
   // category pages for references first synced by a CLI version that didn't
   // generate them, and recreates one that was deleted.
-  const specTags = new Set([...specOps.values()].map((op) => op.tag || 'Other'));
-  for (const rawTag of specTags) {
-    const tag = safeSegment(rawTag, 'Other');
-    const pageDir = path.join(refDir, infoTitle, tag);
+  const groupsByFolder = new Map();
+  for (const op of specOps.values()) {
+    const { folder, title } = operationGroup(op);
+    if (!groupsByFolder.has(folder)) {
+      groupsByFolder.set(folder, { title, description: op.tag ? tagDescriptions.get(op.tag) : null });
+    }
+  }
+  for (const [folder, { title, description }] of groupsByFolder) {
+    const pageDir = path.join(refDir, infoTitle, folder);
     if (!isWithin(refDir, pageDir)) continue;
 
     const indexPath = path.join(pageDir, 'index.md');
     if (!fs.existsSync(indexPath)) {
       // Never overwrite an existing index.md — it may be a hand-written category.
       fs.mkdirSync(pageDir, { recursive: true });
-      fs.writeFileSync(indexPath, buildTagIndexContent(rawTag, tagDescriptions.get(rawTag)));
+      fs.writeFileSync(indexPath, buildTagIndexContent(title, description));
       changes.added.push(path.relative(refDir, indexPath));
     }
-    // The category page's slug is the tag folder name; reserve it so no operation
+    // The category page's slug is the folder name; reserve it so no operation
     // takes it. Ordering entries are idempotent, so this is a no-op when present.
-    takenSlugs.add(tag.toLowerCase());
-    addToOrder(path.join(refDir, infoTitle, '_order.yaml'), tag);
+    takenSlugs.add(folder.toLowerCase());
+    addToOrder(path.join(refDir, infoTitle, '_order.yaml'), folder);
     addToOrder(path.join(refDir, '_order.yaml'), infoTitle);
   }
 
@@ -345,8 +367,8 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
   for (const [opId, op] of specOps) {
     if (pagesByOpId.has(opId)) continue;
 
-    const tag = safeSegment(op.tag || 'Other', 'Other');
-    const pageDir = path.join(refDir, infoTitle, tag);
+    const { folder } = operationGroup(op);
+    const pageDir = path.join(refDir, infoTitle, folder);
     // Reference slugs share one flat namespace, so uniquify against every slug
     // already in reference/ — a collision (or the reserved `index` slug) gets a
     // numeric suffix rather than being skipped.

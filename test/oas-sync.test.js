@@ -20,8 +20,9 @@ test('generated reference page has only api frontmatter (no title/excerpt)', () 
   const root = makeRepo({ 'reference/pets.json': SPEC });
   try {
     syncOas(root);
-    // Slugs are lowercased to match the platform's OAS-upload output.
-    const page = path.join(root, 'reference/Pets/Other/listpets.md');
+    // Untagged operations group by path ("/pets" -> "pets"), not a shared
+    // "Other" folder. Slugs are lowercased to match the platform's OAS-upload output.
+    const page = path.join(root, 'reference/Pets/pets/listpets.md');
     assert.ok(fs.existsSync(page), 'expected generated page');
     const { data } = matter(fs.readFileSync(page, 'utf-8'));
     assert.equal(data.api.file, 'pets.json');
@@ -237,7 +238,8 @@ test('operations whose sanitized names collide get distinct suffixed slugs', () 
 test('sync gives an operation a unique slug rather than overwriting a hand-written page', () => {
   const root = makeRepo({
     'reference/pets.json': SPEC,
-    // A hand-written page (no api frontmatter) already occupies the slug.
+    // A hand-written page (no api frontmatter) already occupies the slug,
+    // parked in an unrelated folder — slugs are reserved reference-wide.
     'reference/Pets/Other/listpets.md': '---\ntitle: Hand-written page\n---\n\nCustom content.\n',
   });
   try {
@@ -246,8 +248,9 @@ test('sync gives an operation a unique slug rather than overwriting a hand-writt
     const hand = fs.readFileSync(path.join(root, 'reference/Pets/Other/listpets.md'), 'utf-8');
     assert.match(hand, /Hand-written page/);
     assert.match(hand, /Custom content/);
-    // ...and the operation gets its own suffixed page.
-    const opPage = path.join(root, 'reference/Pets/Other/listpets-1.md');
+    // ...and the operation gets its own suffixed page, under its path-derived
+    // group folder ("/pets" -> "pets"), since "listpets" is already taken.
+    const opPage = path.join(root, 'reference/Pets/pets/listpets-1.md');
     assert.ok(fs.existsSync(opPage), 'expected listpets-1.md for the operation');
     assert.equal(matter(fs.readFileSync(opPage, 'utf-8')).data.api.operationId, 'listPets');
   } finally {
@@ -321,6 +324,75 @@ test('existing reference page title is not overwritten by sync', () => {
     assert.equal(data.title, 'My custom title');
     assert.equal(data.api.file, 'pets.json');
     assert.equal(data.api.operationId, 'listPets');
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('untagged operations group by path, one folder per unique path, not a shared "Other" bucket', () => {
+  const spec = JSON.stringify({
+    openapi: '3.0.0',
+    info: { title: 'Pets' },
+    paths: {
+      '/pets': {
+        get: { operationId: 'listPets' },
+        post: { operationId: 'createPet' },
+      },
+      '/pets/{petId}': {
+        get: { operationId: 'getPet' },
+      },
+      '/search': {
+        get: { operationId: 'search' },
+      },
+    },
+  });
+  const root = makeRepo({ 'reference/pets.json': spec });
+  try {
+    syncOas(root);
+    const refDir = path.join(root, 'reference/Pets');
+
+    // No shared "Other" folder — every unique path gets its own group.
+    assert.equal(fs.existsSync(path.join(refDir, 'Other')), false);
+
+    // Operations sharing a path share a folder.
+    assert.ok(fs.existsSync(path.join(refDir, 'pets/listpets.md')));
+    assert.ok(fs.existsSync(path.join(refDir, 'pets/createpet.md')));
+    assert.ok(fs.existsSync(path.join(refDir, 'petspetid/getpet.md')));
+    // The "search" folder itself reserves the slug "search" (it's the category
+    // page's slug), so the operationId "search" collides with its own folder
+    // name and is suffixed — matches real platform-upload output.
+    assert.ok(fs.existsSync(path.join(refDir, 'search/search-1.md')));
+    assert.equal(fs.existsSync(path.join(refDir, 'search/search.md')), false);
+
+    // The category page's title is the raw path, not the sanitized folder name.
+    const petsIndex = matter(fs.readFileSync(path.join(refDir, 'pets/index.md'), 'utf-8')).data;
+    assert.equal(petsIndex.title, '/pets');
+    assert.equal('excerpt' in petsIndex, false);
+
+    const petIdIndex = matter(fs.readFileSync(path.join(refDir, 'petspetid/index.md'), 'utf-8')).data;
+    assert.equal(petIdIndex.title, '/pets/{petId}');
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('an operation with a real tag still groups under that tag, not its path', () => {
+  const spec = JSON.stringify({
+    openapi: '3.0.0',
+    info: { title: 'Pets' },
+    tags: [{ name: 'pets', description: 'Pet operations' }],
+    paths: {
+      '/pets': { get: { operationId: 'listPets', tags: ['pets'] } },
+    },
+  });
+  const root = makeRepo({ 'reference/pets.json': spec });
+  try {
+    syncOas(root);
+    const refDir = path.join(root, 'reference/Pets');
+    assert.ok(fs.existsSync(path.join(refDir, 'pets/listpets.md')));
+    const index = matter(fs.readFileSync(path.join(refDir, 'pets/index.md'), 'utf-8')).data;
+    assert.equal(index.title, 'pets');
+    assert.equal(index.excerpt, 'Pet operations');
   } finally {
     rmRepo(root);
   }
