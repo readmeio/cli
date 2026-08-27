@@ -605,27 +605,26 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
   if (debugSnapshots) {
     debugSnapshots[`02-scraped-raw${dbgSuffix}.json`] = scraped ? JSON.parse(JSON.stringify(scraped)) : null
   }
-  // If the sidebar scrape covers less than 75% of the llms.txt URLs, the
-  // scrape is too thin to trust as the import's spine. Common on multi-tab
-  // docs (Stripe, AWS, Twilio, Xata) where each page only renders its own
-  // tab's sidebar — the visible categories would otherwise absorb hundreds
-  // of orphan URLs via prefix-matching and produce a misleading tree (e.g.
-  // every /docs/* URL dumped under a single "Overview > Xata Documentation"
-  // node because that's the one /docs page the scrape saw). Discard the
-  // scrape and fall through to the llms.txt path, which uses URL-based
-  // clustering when multiple files were merged.
-  // API-reference pages are excluded from the denominator: sidebars routinely
-  // omit generated endpoint stubs, and those pages are swept into reference/
-  // regardless of nav quality, so they say nothing about the nav's fitness as
-  // the import's spine.
+  // HTML sidebar scrapes that cover <75% of llms.txt URLs are too thin to
+  // trust as the import's spine. Common on multi-tab docs (Stripe, AWS,
+  // Twilio, Xata) where each page only renders its own tab's sidebar — the
+  // visible categories would otherwise absorb hundreds of orphan URLs via
+  // prefix-matching and produce a misleading tree. Discard that scrape and
+  // fall through to the llms.txt path.
+  //
+  // Mintlify / Fern / Archbee navs are the authored sidebar, not a scrape.
+  // They routinely list a curated subset of what llms.txt enumerates
+  // (hidden pages, legacy paths, extra API stubs). Applying the same
+  // threshold would throw away the canonical tree we just recovered and
+  // invent categories from llms.txt — the failure mode those probes exist
+  // to prevent. Orphans still get slotted by path below.
+  const canonicalNav = !!(mintlifyNav || fernNav || archbeeNav)
   let scrapeDiscardedForCoverage = false
-  if (scraped && llms && knownUrls.length > 0) {
-    const scrapedPages = scraped.categories.reduce((n, c) => n + countUrlPagesDeep(c.pages), 0)
-    const nonReferenceKnown = knownUrls.filter((p) => !urlIsApiReference(p.url))
-    const coverage = nonReferenceKnown.length > 0 ? scrapedPages / nonReferenceKnown.length : 1
-    if (coverage < 0.75) {
+  if (scraped && llms && knownUrls.length > 0 && !canonicalNav) {
+    const coverage = htmlScrapeCoverage(scraped, knownUrls)
+    if (coverage.ratio < 0.75) {
       styles.info(
-        `Scrape covered ${styles.bold(Math.round(coverage * 100) + '%')} of llms.txt pages (need ≥75%${nonReferenceKnown.length < knownUrls.length ? `, ${knownUrls.length - nonReferenceKnown.length} api-reference pages excluded` : ''}) — discarding scrape and organizing from llms.txt.`,
+        `Scrape covered ${styles.bold(Math.round(coverage.ratio * 100) + '%')} of llms.txt pages (need ≥75%${coverage.excludedApiReference > 0 ? `, ${coverage.excludedApiReference} api-reference pages excluded` : ''}) — discarding scrape and organizing from llms.txt.`,
       )
       scraped = null
       scrapeDiscardedForCoverage = true
@@ -2643,6 +2642,25 @@ function urlIsApiReference(url) {
     return segs.some((s) => API_REFERENCE_URL_SEGMENT_RE.test(s))
   } catch {
     return false
+  }
+}
+
+/**
+ * How completely an HTML-scraped nav covers the llms.txt URL list.
+ * API-reference pages are excluded from the denominator: sidebars routinely
+ * omit generated endpoint stubs, and those pages are swept into reference/
+ * regardless of nav quality, so they say nothing about the nav's fitness as
+ * the import's spine.
+ */
+function htmlScrapeCoverage(scraped, knownUrls) {
+  const scrapedPages = (scraped?.categories || []).reduce((n, c) => n + countUrlPagesDeep(c.pages), 0)
+  const nonReferenceKnown = (knownUrls || []).filter((p) => !urlIsApiReference(p.url))
+  const ratio = nonReferenceKnown.length > 0 ? scrapedPages / nonReferenceKnown.length : 1
+  return {
+    ratio,
+    scrapedPages,
+    nonReferenceKnown: nonReferenceKnown.length,
+    excludedApiReference: (knownUrls || []).length - nonReferenceKnown.length,
   }
 }
 
@@ -5319,6 +5337,7 @@ export const __test__ = {
   sitemapUrlsToKnownUrls,
   extractOasSpecUrlsFromParsed,
   downloadOasSpecs,
+  htmlScrapeCoverage,
 }
 
 function formatDuration(ms) {
