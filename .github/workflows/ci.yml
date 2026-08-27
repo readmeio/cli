@@ -30,23 +30,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # package-lock.json records @readmeio/git-format as git+ssh; rewrite to
-      # HTTPS so npm ci works without an SSH key.
-      - name: Use HTTPS for GitHub git dependencies
-        run: |
-          git config --global --add url."https://github.com/".insteadOf "ssh://git@github.com/"
-          git config --global --add url."https://github.com/".insteadOf "git@github.com:"
-
       - name: Use Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
 
-      # --force: @readmeio/git-format lists darwin-only fsevents as a required
-      # dependency, which otherwise fails npm ci on Linux.
       - name: Install dependencies
-        run: npm ci --force
+        run: npm ci
 
       - name: Run tests
         run: npm test
