@@ -614,10 +614,11 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
   //
   // Mintlify / Fern / Archbee navs are the authored sidebar, not a scrape.
   // They routinely list a curated subset of what llms.txt enumerates
-  // (hidden pages, legacy paths, extra API stubs). Applying the same
-  // threshold would throw away the canonical tree we just recovered and
-  // invent categories from llms.txt — the failure mode those probes exist
-  // to prevent. Orphans still get slotted by path below.
+  // (hidden pages, legacy paths, extra API stubs). Both thin-scrape gates
+  // (this coverage check, and the orphan-ratio recluster below) would
+  // throw away that tree and invent categories from llms.txt — the failure
+  // mode those probes exist to prevent. Orphans still get slotted by path
+  // and leftover ones are bucketed; the authored categories stay.
   const canonicalNav = !!(mintlifyNav || fernNav || archbeeNav)
   let scrapeDiscardedForCoverage = false
   if (scraped && llms && knownUrls.length > 0 && !canonicalNav) {
@@ -664,18 +665,19 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
       }
 
       if (slotted.length > 0) {
-        // When orphans dwarf direct matches, the sidebar scrape was too thin
+        // When orphans dwarf direct matches, an HTML scrape was too thin
         // to trust as the import's spine — keeping it would produce a small
         // "real" tree plus a soup of bucketed-by-URL-type orphan categories.
         // Discard the scrape and cluster every page (scrape + orphans) by
         // its top URL segment instead, so each `/docs/`, `/sdk/`, `/rest-api/`
         // becomes its own category. `nestByUrlHierarchy` (later) handles the
         // empty-parent nesting within each category.
-
-        // Trip when orphans are at least 2× the direct matches: the scrape
-        // accounts for less than a third of the known pages, so its category
-        // labels aren't a trustworthy spine for the remainder.
-        const orphansDwarfDirect = slotted.length >= directMatches * 2
+        //
+        // Canonical Mintlify/Fern/Archbee trees skip this: extra llms.txt
+        // rows are expected, and replacing the authored categories with
+        // URL clusters (then leaving them flat because Fern suppresses
+        // nestByUrlHierarchy) is the bug those probes exist to prevent.
+        const orphansDwarfDirect = orphansDwarfHtmlScrape(slotted.length, directMatches, { canonical: canonicalNav })
         const scrapeAllPages = scraped.categories.flatMap((c) => collectUrlPagesDeep(c.pages))
         let reclustered = null
         if (orphansDwarfDirect) {
@@ -683,7 +685,7 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
         }
         styles.info(
           styles.dim(
-            `  orphan triage: ${slotted.length} orphan${slotted.length === 1 ? '' : 's'} vs ${directMatches} direct match${directMatches === 1 ? '' : 'es'} (ratio ${directMatches === 0 ? '∞' : (slotted.length / directMatches).toFixed(2)}) — gate ${orphansDwarfDirect ? 'tripped' : 'NOT tripped'} (need ≥2.00); URL re-cluster ${reclustered ? `→ ${reclustered.length} categor${reclustered.length === 1 ? 'y' : 'ies'}` : 'skipped'}`,
+            `  orphan triage: ${slotted.length} orphan${slotted.length === 1 ? '' : 's'} vs ${directMatches} direct match${directMatches === 1 ? '' : 'es'} (ratio ${directMatches === 0 ? '∞' : (slotted.length / directMatches).toFixed(2)}) — gate ${orphansDwarfDirect ? 'tripped' : 'NOT tripped'}${canonicalNav ? ' (canonical nav)' : ''} (need ≥2.00); URL re-cluster ${reclustered ? `→ ${reclustered.length} categor${reclustered.length === 1 ? 'y' : 'ies'}` : 'skipped'}`,
           ),
         )
         if (reclustered) {
@@ -2662,6 +2664,18 @@ function htmlScrapeCoverage(scraped, knownUrls) {
     nonReferenceKnown: nonReferenceKnown.length,
     excludedApiReference: (knownUrls || []).length - nonReferenceKnown.length,
   }
+}
+
+/**
+ * HTML scrapes whose leftover orphans are at least 2× the direct matches
+ * account for less than a third of known pages, so their category labels
+ * aren't a trustworthy spine. Canonical Mintlify/Fern/Archbee trees skip
+ * this — extra llms.txt rows are expected and get slotted/bucketed instead
+ * of replacing the authored categories.
+ */
+function orphansDwarfHtmlScrape(orphanCount, directMatches, { canonical } = {}) {
+  if (canonical) return false
+  return orphanCount >= directMatches * 2
 }
 
 function reclassifyReferencePages(scraped) {
@@ -5338,6 +5352,7 @@ export const __test__ = {
   extractOasSpecUrlsFromParsed,
   downloadOasSpecs,
   htmlScrapeCoverage,
+  orphansDwarfHtmlScrape,
 }
 
 function formatDuration(ms) {

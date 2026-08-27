@@ -425,6 +425,19 @@ test('htmlScrapeCoverage ignores api-reference llms.txt rows so endpoint stubs d
   assert.equal(coverage.ratio, 1)
 })
 
+test('orphansDwarfHtmlScrape trips when leftovers are at least twice the direct matches', () => {
+  assert.equal(__test__.orphansDwarfHtmlScrape(6, 3), true)
+  assert.equal(__test__.orphansDwarfHtmlScrape(5, 3), false)
+  assert.equal(__test__.orphansDwarfHtmlScrape(0, 4), false)
+})
+
+test('orphansDwarfHtmlScrape never trips for a canonical Fern/Mintlify/Archbee nav', () => {
+  // Same 6-orphan / 3-direct shape that would discard an HTML scrape — the
+  // authored tree must stay, with leftovers slotted or bucketed instead.
+  assert.equal(__test__.orphansDwarfHtmlScrape(6, 3, { canonical: true }), false)
+  assert.equal(__test__.orphansDwarfHtmlScrape(100, 1, { canonical: true }), false)
+})
+
 test('htmlScrapeCoverage treats a curated Fern-sized sidebar against a larger llms.txt as below the HTML-scrape cutoff', () => {
   // Typical Fern + llms.txt shape: authored sidebar is a subset, llms.txt
   // also lists hidden/legacy/API pages. The HTML-scrape cutoff would discard
