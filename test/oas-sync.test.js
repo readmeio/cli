@@ -575,3 +575,99 @@ test('deleting a legacy operation page literally named index.md releases its fol
     rmRepo(root);
   }
 });
+
+test('sync generates a page for a webhook, marked with api.webhook: true', () => {
+  const spec = JSON.stringify({
+    openapi: '3.1.0',
+    info: { title: 'Payments' },
+    webhooks: {
+      paymentCompleted: {
+        post: { summary: 'Sent when a payment settles' },
+      },
+    },
+  });
+  const root = makeRepo({ 'reference/payments.json': spec });
+  try {
+    syncOas(root);
+    const page = path.join(root, 'reference/Payments/paymentcompleted/post_paymentcompleted.md');
+    assert.ok(fs.existsSync(page), 'expected a generated webhook page');
+    const { data } = matter(fs.readFileSync(page, 'utf-8'));
+    assert.equal(data.api.file, 'payments.json');
+    assert.equal(data.api.operationId, 'post_paymentcompleted');
+    assert.equal(data.api.webhook, true);
+
+    // The category page's title is the webhook's own name, not the folder.
+    const index = matter(
+      fs.readFileSync(path.join(root, 'reference/Payments/paymentcompleted/index.md'), 'utf-8'),
+    ).data;
+    assert.equal(index.title, 'paymentCompleted');
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('a path operation is not stamped api.webhook', () => {
+  const root = makeRepo({ 'reference/pets.json': SPEC });
+  try {
+    syncOas(root);
+    const { data } = matter(
+      fs.readFileSync(path.join(root, 'reference/Pets/pets/listpets.md'), 'utf-8'),
+    );
+    assert.equal('webhook' in data.api, false);
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('sync no longer deletes an existing webhook page on every run', () => {
+  const spec = JSON.stringify({
+    openapi: '3.1.0',
+    info: { title: 'Payments' },
+    webhooks: {
+      paymentCompleted: {
+        post: { summary: 'Sent when a payment settles' },
+      },
+    },
+  });
+  const root = makeRepo({
+    'reference/payments.json': spec,
+    'reference/Payments/paymentcompleted/post_paymentcompleted.md':
+      '---\napi:\n  file: payments.json\n  operationId: post_paymentcompleted\n  webhook: true\nhidden: false\n---\n',
+  });
+  try {
+    const [result] = syncOas(root);
+    assert.deepEqual(result.changes.deleted, []);
+    assert.ok(
+      fs.existsSync(path.join(root, 'reference/Payments/paymentcompleted/post_paymentcompleted.md')),
+    );
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('an untagged webhook and an untagged path operation with the same sanitized name both get pages', () => {
+  // "/orders" and webhook "orders" sanitize to the same untagged group
+  // ("orders"), same as two untagged paths would; each still gets its own
+  // distinct operation page (they have different operationIds).
+  const spec = JSON.stringify({
+    openapi: '3.1.0',
+    info: { title: 'Payments' },
+    paths: {
+      '/orders': { get: { operationId: 'listOrders' } },
+    },
+    webhooks: {
+      orders: {
+        post: { summary: 'Sent when an order changes' },
+      },
+    },
+  });
+  const root = makeRepo({ 'reference/payments.json': spec });
+  try {
+    syncOas(root);
+    const refDir = path.join(root, 'reference/Payments');
+    assert.ok(fs.existsSync(path.join(refDir, 'orders/listorders.md')));
+    assert.ok(fs.existsSync(path.join(refDir, 'orders/post_orders.md')));
+  } finally {
+    rmRepo(root);
+  }
+});

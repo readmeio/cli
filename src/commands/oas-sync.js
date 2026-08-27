@@ -56,29 +56,41 @@ function generateOperationId(method, pathStr) {
 }
 
 /**
- * Extract operations from an OAS spec.
- * Returns a Map of operationId -> { summary, description, tag, path, operationId }.
- * For operations without an operationId, a synthetic one is generated from the method and path.
+ * Extract operations from an OAS spec's `paths`, plus its OAS 3.1 `webhooks`
+ * (callouts the API itself makes to a client-registered URL, not endpoints the
+ * API exposes — a separate top-level sibling of `paths` with the same
+ * Operation Object shape). The platform pages a webhook the same way it pages
+ * a path operation: a synthetic `post_<name>` operationId when none is given,
+ * grouped by its own tag or, absent one, its own category keyed by its raw
+ * name — never merged with `paths` operations of the same name.
+ * Returns a Map of operationId -> { summary, description, tag, path,
+ * operationId, isWebhook }. For operations without an operationId, a synthetic
+ * one is generated from the method and path (or webhook name).
  */
 export function extractOperations(spec) {
   const ops = new Map();
-  const paths = spec.paths || {};
 
-  for (const [pathStr, methods] of Object.entries(paths)) {
-    for (const [method, operation] of Object.entries(methods)) {
-      if (!HTTP_METHODS.has(method)) continue;
+  function collect(entries, isWebhook) {
+    for (const [pathStr, methods] of Object.entries(entries)) {
+      for (const [method, operation] of Object.entries(methods)) {
+        if (!HTTP_METHODS.has(method)) continue;
 
-      const operationId = operation.operationId || generateOperationId(method, pathStr);
+        const operationId = operation.operationId || generateOperationId(method, pathStr);
 
-      ops.set(operationId, {
-        operationId,
-        summary: operation.summary || null,
-        description: operation.description || null,
-        tag: (operation.tags && operation.tags[0]) || null,
-        path: pathStr,
-      });
+        ops.set(operationId, {
+          operationId,
+          summary: operation.summary || null,
+          description: operation.description || null,
+          tag: (operation.tags && operation.tags[0]) || null,
+          path: pathStr,
+          isWebhook,
+        });
+      }
     }
   }
+
+  collect(spec.paths || {}, false);
+  collect(spec.webhooks || {}, true);
 
   return ops;
 }
@@ -190,11 +202,15 @@ function stringifyFrontmatter(frontmatter) {
   return matter.stringify('', frontmatter).replace(/\n+$/, '');
 }
 
-function buildPageContent({ oasFilename, operationId }) {
+function buildPageContent({ oasFilename, operationId, isWebhook }) {
   const frontmatter = {
     api: {
       file: oasFilename,
       operationId,
+      // Marks the page as a webhook (the API calling out to the client)
+      // rather than a path operation (the client calling the API), matching
+      // what the platform stamps on a page generated from `webhooks`.
+      ...(isWebhook ? { webhook: true } : {}),
     },
     // Mirror the platform's OAS-upload behavior: a newly added endpoint is
     // always written `hidden: false`, even when its tag and siblings are
@@ -445,7 +461,7 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
     }
     fs.mkdirSync(pageDir, { recursive: true });
 
-    const content = buildPageContent({ oasFilename, operationId: opId });
+    const content = buildPageContent({ oasFilename, operationId: opId, isWebhook: op.isWebhook });
     fs.writeFileSync(pagePath, content);
 
     addToOrder(path.join(pageDir, '_order.yaml'), slug);
