@@ -71,31 +71,54 @@ function resolvePointer(root, pointer) {
   let current = root;
   for (const part of parts) {
     if (current == null || typeof current !== 'object') return undefined;
-    if (!(part in current)) return undefined;
+    // Own keys only — `in` would treat `__proto__` / `constructor` as hits
+    // and walk off the document into Object.prototype.
+    if (!Object.hasOwn(current, part)) return undefined;
     current = current[part];
   }
   return current;
 }
 
+function ownSiblings(obj) {
+  const siblings = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (key !== '$ref') siblings[key] = value;
+  }
+  return siblings;
+}
+
 /**
  * Follow an internal `#/…` `$ref` (and chains of them). External/file refs
  * (`./paths/pets.yaml`) are left as-is so callers can treat them as unresolved.
+ *
+ * OAS 3.1 Path Item Objects may keep sibling fields next to `$ref`; those
+ * overlay the resolved target (local keys win) instead of being dropped.
  */
 function resolveRefObject(root, obj, seen = new Set()) {
   if (!obj || typeof obj !== 'object' || typeof obj.$ref !== 'string') return obj;
   const ref = obj.$ref;
-  if (!ref.startsWith('#/')) return obj;
-  if (seen.has(ref)) return obj;
+  const siblings = ownSiblings(obj);
+  const hasSiblings = Object.keys(siblings).length > 0;
+
+  if (!ref.startsWith('#/') || seen.has(ref)) return obj;
   seen.add(ref);
   const target = resolvePointer(root, ref);
   if (target == null) return obj;
-  return resolveRefObject(root, target, seen);
+  const resolved = resolveRefObject(root, target, seen);
+  if (!hasSiblings) return resolved;
+  if (!resolved || typeof resolved !== 'object' || Array.isArray(resolved)) return resolved;
+  return { ...resolved, ...siblings };
 }
 
+/**
+ * True when following `$ref` (including chained pointers) still lands on a
+ * `$ref` — external file, cycle, broken pointer, or `#/__proto__`-style miss.
+ * A single hop that lands on `{ $ref: './other.yaml' }` is unresolved.
+ */
 function isUnresolvedRef(root, obj) {
   if (!obj || typeof obj !== 'object' || typeof obj.$ref !== 'string') return false;
-  if (!obj.$ref.startsWith('#/')) return true;
-  return resolvePointer(root, obj.$ref) == null;
+  const resolved = resolveRefObject(root, obj);
+  return !!(resolved && typeof resolved === 'object' && typeof resolved.$ref === 'string');
 }
 
 /**

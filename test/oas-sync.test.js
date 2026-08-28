@@ -186,6 +186,163 @@ test('sync does not delete pages when the spec uses path-item $refs', () => {
   }
 });
 
+test('JSON Pointer does not follow inherited prototype keys', () => {
+  const spec = {
+    openapi: '3.0.0',
+    info: { title: 'Pets' },
+    paths: {
+      '/pets': { $ref: '#/__proto__' },
+    },
+  };
+  assert.equal(extractOperations(spec).size, 0);
+  assert.equal(hasUnresolvedOperationRefs(spec), true);
+
+  const root = makeRepo({
+    'reference/pets.json': JSON.stringify(spec),
+    'reference/Pets/Other/listPets.md':
+      '---\napi:\n  file: pets.json\n  operationId: listPets\n---\n\nCUSTOM BODY\n',
+  });
+  try {
+    const [result] = syncOas(root);
+    assert.deepEqual(result.changes.deleted, []);
+    assert.match(
+      fs.readFileSync(path.join(root, 'reference/Pets/Other/listPets.md'), 'utf-8'),
+      /CUSTOM BODY/,
+    );
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('chained $ref to an external file is unresolved and does not delete pages', () => {
+  const spec = {
+    openapi: '3.0.0',
+    info: { title: 'Pets' },
+    paths: {
+      '/pets': { $ref: '#/components/pathItems/Pets' },
+    },
+    components: {
+      pathItems: {
+        Pets: { $ref: './paths/pets.yaml' },
+      },
+    },
+  };
+  assert.equal(hasUnresolvedOperationRefs(spec), true);
+  assert.equal(extractOperations(spec).size, 0);
+
+  const root = makeRepo({
+    'reference/pets.json': JSON.stringify(spec),
+    'reference/Pets/Other/listPets.md':
+      '---\napi:\n  file: pets.json\n  operationId: listPets\n---\n\nCUSTOM BODY\n',
+  });
+  try {
+    const [result] = syncOas(root);
+    assert.deepEqual(result.changes.deleted, []);
+    assert.match(
+      fs.readFileSync(path.join(root, 'reference/Pets/Other/listPets.md'), 'utf-8'),
+      /CUSTOM BODY/,
+    );
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('cyclic path-item $ref is unresolved and does not delete pages', () => {
+  const spec = {
+    openapi: '3.0.0',
+    info: { title: 'Pets' },
+    paths: {
+      '/pets': { $ref: '#/components/pathItems/A' },
+    },
+    components: {
+      pathItems: {
+        A: { $ref: '#/components/pathItems/B' },
+        B: { $ref: '#/components/pathItems/A' },
+      },
+    },
+  };
+  assert.equal(hasUnresolvedOperationRefs(spec), true);
+  assert.equal(extractOperations(spec).size, 0);
+
+  const root = makeRepo({
+    'reference/pets.json': JSON.stringify(spec),
+    'reference/Pets/Other/listPets.md':
+      '---\napi:\n  file: pets.json\n  operationId: listPets\n---\n\nCUSTOM BODY\n',
+  });
+  try {
+    const [result] = syncOas(root);
+    assert.deepEqual(result.changes.deleted, []);
+    assert.ok(fs.existsSync(path.join(root, 'reference/Pets/Other/listPets.md')));
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('OAS 3.1 path-item $ref keeps sibling operations', () => {
+  const spec = {
+    openapi: '3.1.0',
+    info: { title: 'Pets', version: '1.0.0' },
+    paths: {
+      '/pets': {
+        $ref: '#/components/pathItems/Pets',
+        post: { operationId: 'createPet', tags: ['pets'] },
+      },
+    },
+    components: {
+      pathItems: {
+        Pets: {
+          get: { operationId: 'listPets', tags: ['pets'] },
+        },
+      },
+    },
+  };
+  const ops = extractOperations(spec);
+  assert.deepEqual([...ops.keys()].sort(), ['createPet', 'listPets']);
+  assert.equal(hasUnresolvedOperationRefs(spec), false);
+
+  const root = makeRepo({
+    'reference/pets.json': JSON.stringify(spec),
+    'reference/Pets/pets/createPet.md':
+      '---\napi:\n  file: pets.json\n  operationId: createPet\n---\n\nSIBLING BODY\n',
+    'reference/Pets/pets/_order.yaml': '- createPet\n',
+    'reference/Pets/_order.yaml': '- pets\n',
+  });
+  try {
+    const [result] = syncOas(root);
+    assert.deepEqual(result.changes.deleted, []);
+    assert.match(
+      fs.readFileSync(path.join(root, 'reference/Pets/pets/createPet.md'), 'utf-8'),
+      /SIBLING BODY/,
+    );
+    assert.equal(result.changes.added.includes('Pets/pets/listPets.md'), true);
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('OAS 3.1 path-item sibling overrides the referenced method', () => {
+  const spec = {
+    openapi: '3.1.0',
+    info: { title: 'Pets', version: '1.0.0' },
+    paths: {
+      '/pets': {
+        $ref: '#/components/pathItems/Pets',
+        get: { operationId: 'listPetsV2', tags: ['pets'] },
+      },
+    },
+    components: {
+      pathItems: {
+        Pets: {
+          get: { operationId: 'listPets', tags: ['pets'] },
+        },
+      },
+    },
+  };
+  const ops = extractOperations(spec);
+  assert.equal(ops.has('listPetsV2'), true);
+  assert.equal(ops.has('listPets'), false);
+});
+
 test('sync does not delete pages when a path $ref points at an external file', () => {
   const spec = JSON.stringify({
     openapi: '3.0.0',
