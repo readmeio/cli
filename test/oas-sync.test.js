@@ -732,3 +732,55 @@ test('a webhook that is a $ref to components.pathItems is resolved', () => {
     rmRepo(root);
   }
 });
+
+test('a $ref to a pathItem that is itself a $ref is followed to the literal Path Item', () => {
+  const spec = JSON.stringify({
+    openapi: '3.1.0',
+    info: { title: 'Payments' },
+    webhooks: {
+      // Chained: paymentCompleted -> Alias -> the literal Path Item.
+      paymentCompleted: { $ref: '#/components/pathItems/Alias' },
+    },
+    components: {
+      pathItems: {
+        Alias: { $ref: '#/components/pathItems/PaymentCompleted' },
+        PaymentCompleted: {
+          post: { operationId: 'onPaymentCompleted', summary: 'Sent when a payment settles' },
+        },
+      },
+    },
+  });
+  const root = makeRepo({ 'reference/payments.json': spec });
+  try {
+    syncOas(root);
+    const page = path.join(root, 'reference/Payments/paymentcompleted/onpaymentcompleted.md');
+    assert.ok(fs.existsSync(page), 'expected the chained $ref to be followed to the literal Path Item');
+    assert.equal(matter(fs.readFileSync(page, 'utf-8')).data.api.operationId, 'onPaymentCompleted');
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('a circular pathItem $ref is left unresolved rather than looping forever', () => {
+  const spec = JSON.stringify({
+    openapi: '3.1.0',
+    info: { title: 'Payments' },
+    webhooks: {
+      paymentCompleted: { $ref: '#/components/pathItems/A' },
+    },
+    components: {
+      pathItems: {
+        A: { $ref: '#/components/pathItems/B' },
+        B: { $ref: '#/components/pathItems/A' },
+      },
+    },
+  });
+  const root = makeRepo({ 'reference/payments.json': spec });
+  try {
+    // Must return (not hang) and simply generate nothing for the cycle.
+    const [result] = syncOas(root);
+    assert.equal(result.changes.added.filter((p) => !p.endsWith('index.md')).length, 0);
+  } finally {
+    rmRepo(root);
+  }
+});

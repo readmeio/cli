@@ -71,18 +71,31 @@ export function operationKey({ operationId, isWebhook }) {
 /**
  * Resolve a `paths`/`webhooks` entry that's a Reference Object (OAS 3.1,
  * `{ $ref: '#/components/pathItems/Name' }`) against the spec's own
- * `components.pathItems`. Only same-document refs in that exact form are
- * supported; anything else (external files, other pointer shapes) is left
- * unresolved and quietly skipped by the caller, same as before this existed.
+ * `components.pathItems`, following chained refs (a pathItem that is itself
+ * a $ref to another) until a literal Path Item is reached. Only same-document
+ * refs in that exact form are supported; anything else (external files,
+ * other pointer shapes, an unresolvable name, or a cycle) is left unresolved
+ * and quietly skipped by the caller, same as before this existed.
  */
 function resolveLocalPathItemRef(entry, spec) {
-  if (!entry || typeof entry.$ref !== 'string') return entry;
+  const seen = new Set();
+  let current = entry;
 
-  const match = entry.$ref.match(/^#\/components\/pathItems\/(.+)$/);
-  if (!match) return entry;
+  while (current && typeof current.$ref === 'string') {
+    if (seen.has(current.$ref)) return current;
+    seen.add(current.$ref);
 
-  const name = decodeURIComponent(match[1]).replace(/~1/g, '/').replace(/~0/g, '~');
-  return spec.components?.pathItems?.[name] || entry;
+    const match = current.$ref.match(/^#\/components\/pathItems\/(.+)$/);
+    if (!match) return current;
+
+    const name = decodeURIComponent(match[1]).replace(/~1/g, '/').replace(/~0/g, '~');
+    const resolved = spec.components?.pathItems?.[name];
+    if (!resolved) return current;
+
+    current = resolved;
+  }
+
+  return current;
 }
 
 /**
