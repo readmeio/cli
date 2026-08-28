@@ -124,11 +124,13 @@ test('sync does not overwrite an existing tag index.md', () => {
   });
   const root = makeRepo({
     'reference/pets.json': spec,
-    'reference/Pets/Other/index.md': '---\ntitle: Hand-written category\n---\n\nCustom intro.\n',
+    // "Other" is lowercased to "other" for a tag-derived folder — matches
+    // where the operation's own generated page (tag: 'Other') actually goes.
+    'reference/Pets/other/index.md': '---\ntitle: Hand-written category\n---\n\nCustom intro.\n',
   });
   try {
     syncOas(root);
-    const content = fs.readFileSync(path.join(root, 'reference/Pets/Other/index.md'), 'utf-8');
+    const content = fs.readFileSync(path.join(root, 'reference/Pets/other/index.md'), 'utf-8');
     assert.match(content, /Hand-written category/);
     assert.match(content, /Custom intro/);
   } finally {
@@ -220,8 +222,9 @@ test('operations whose sanitized names collide get distinct suffixed slugs', () 
     assert.equal(opPages.length, 2);
     assert.equal(first.changes.skipped.length, 0);
 
-    const base = path.join(root, 'reference/Pets/Other/foo-bar.md');
-    const suffixed = path.join(root, 'reference/Pets/Other/foo-bar-1.md');
+    // Tag "Other" is lowercased to the folder "other".
+    const base = path.join(root, 'reference/Pets/other/foo-bar.md');
+    const suffixed = path.join(root, 'reference/Pets/other/foo-bar-1.md');
     assert.ok(fs.existsSync(base) && fs.existsSync(suffixed), 'expected foo-bar.md and foo-bar-1.md');
     const ops = [base, suffixed].map((p) => matter(fs.readFileSync(p, 'utf-8')).data.api.operationId);
     assert.deepEqual([...ops].sort(), ['foo/bar', 'foo\\bar']);
@@ -290,17 +293,18 @@ test('a slug taken by a category folder (folder/index.md) is not reused by an op
   });
   const root = makeRepo({
     'reference/pets.json': spec,
-    // A category folder whose slug is its folder name: "guides".
-    'reference/Pets/Other/guides/index.md': '---\ntitle: Guides\n---\n\nA sub-category.\n',
+    // A category folder whose slug is its folder name: "guides". Tag "Other"
+    // is lowercased to "other", matching where the operation's own page goes.
+    'reference/Pets/other/guides/index.md': '---\ntitle: Guides\n---\n\nA sub-category.\n',
   });
   try {
     syncOas(root);
     // The operation slug "guides" is taken by the folder, so it is suffixed.
-    assert.ok(fs.existsSync(path.join(root, 'reference/Pets/Other/guides-1.md')));
-    assert.equal(fs.existsSync(path.join(root, 'reference/Pets/Other/guides.md')), false);
+    assert.ok(fs.existsSync(path.join(root, 'reference/Pets/other/guides-1.md')));
+    assert.equal(fs.existsSync(path.join(root, 'reference/Pets/other/guides.md')), false);
     // The category folder's index.md is untouched.
     assert.match(
-      fs.readFileSync(path.join(root, 'reference/Pets/Other/guides/index.md'), 'utf-8'),
+      fs.readFileSync(path.join(root, 'reference/Pets/other/guides/index.md'), 'utf-8'),
       /A sub-category/,
     );
   } finally {
