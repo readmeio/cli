@@ -357,7 +357,14 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
       fs.unlinkSync(page.filePath);
 
       const pageDir = path.dirname(page.filePath);
-      const slug = path.basename(page.filePath, '.md');
+      // A legacy operation page can be literally named index.md (predating
+      // the "index is reserved for the category page" convention) — its
+      // slug, like any index.md's, is its folder name (see
+      // collectReferenceSlugs), not the literal string "index".
+      const slug =
+        path.basename(page.filePath) === 'index.md'
+          ? path.basename(pageDir)
+          : path.basename(page.filePath, '.md');
       removeFromOrder(path.join(pageDir, '_order.yaml'), slug);
       releaseSlug(takenSlugs, slug);
 

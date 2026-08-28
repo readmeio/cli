@@ -535,3 +535,35 @@ test('a mixed-case tag gets a lowercased folder, but keeps its original case as 
     rmRepo(root);
   }
 });
+
+test('deleting a legacy operation page literally named index.md releases its folder-name slug, not "index"', () => {
+  // A legacy operation stored as index.md (predating the "index is reserved
+  // for the category page" convention) claims its folder's name as its slug,
+  // same as any index.md. The spec no longer has this operation, so it's
+  // deleted; a completely unrelated new operation elsewhere in the same sync
+  // run wants that exact same slug and must get it cleanly, not a suffix.
+  const spec = JSON.stringify({
+    openapi: '3.0.0',
+    info: { title: 'Pets' },
+    paths: {
+      // Unrelated new operation whose desired slug is "sometag" — the same
+      // string as the deleted legacy page's folder name.
+      '/new': { get: { operationId: 'sometag', tags: ['other-tag'] } },
+    },
+  });
+  const root = makeRepo({
+    'reference/pets.json': spec,
+    'reference/Pets/sometag/index.md':
+      '---\napi:\n  file: pets.json\n  operationId: legacyOp\n---\n',
+  });
+  try {
+    const [result] = syncOas(root);
+    assert.ok(result.changes.deleted.some((p) => p.endsWith('sometag/index.md')));
+
+    // The base slug is free again — no unnecessary numeric suffix.
+    assert.ok(fs.existsSync(path.join(root, 'reference/Pets/other-tag/sometag.md')));
+    assert.equal(fs.existsSync(path.join(root, 'reference/Pets/other-tag/sometag-1.md')), false);
+  } finally {
+    rmRepo(root);
+  }
+});
