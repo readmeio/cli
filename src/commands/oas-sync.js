@@ -56,18 +56,87 @@ function generateOperationId(method, pathStr) {
 }
 
 /**
+ * JSON Pointer (`#/components/pathItems/Pets`, `#/paths/~1pets`) used by
+ * OAS path-item and operation `$ref`s. `~1` / `~0` are the spec's escapes
+ * for `/` and `~`.
+ */
+function decodeJsonPointerToken(token) {
+  return token.replace(/~1/g, '/').replace(/~0/g, '~');
+}
+
+function resolvePointer(root, pointer) {
+  if (pointer === '#' || pointer === '') return root;
+  if (typeof pointer !== 'string' || !pointer.startsWith('#/')) return undefined;
+  const parts = pointer.slice(2).split('/').map(decodeJsonPointerToken);
+  let current = root;
+  for (const part of parts) {
+    if (current == null || typeof current !== 'object') return undefined;
+    if (!(part in current)) return undefined;
+    current = current[part];
+  }
+  return current;
+}
+
+/**
+ * Follow an internal `#/…` `$ref` (and chains of them). External/file refs
+ * (`./paths/pets.yaml`) are left as-is so callers can treat them as unresolved.
+ */
+function resolveRefObject(root, obj, seen = new Set()) {
+  if (!obj || typeof obj !== 'object' || typeof obj.$ref !== 'string') return obj;
+  const ref = obj.$ref;
+  if (!ref.startsWith('#/')) return obj;
+  if (seen.has(ref)) return obj;
+  seen.add(ref);
+  const target = resolvePointer(root, ref);
+  if (target == null) return obj;
+  return resolveRefObject(root, target, seen);
+}
+
+function isUnresolvedRef(root, obj) {
+  if (!obj || typeof obj !== 'object' || typeof obj.$ref !== 'string') return false;
+  if (!obj.$ref.startsWith('#/')) return true;
+  return resolvePointer(root, obj.$ref) == null;
+}
+
+/**
+ * True when `paths` still has a `$ref` we could not inline. Used to skip the
+ * delete pass — missing operations after a failed resolve are "we couldn't
+ * see the spec", not "the operation was removed".
+ */
+export function hasUnresolvedOperationRefs(spec) {
+  for (const rawPathItem of Object.values(spec.paths || {})) {
+    if (isUnresolvedRef(spec, rawPathItem)) return true;
+    const pathItem = resolveRefObject(spec, rawPathItem);
+    if (!pathItem || typeof pathItem !== 'object') continue;
+    for (const [method, rawOp] of Object.entries(pathItem)) {
+      if (!HTTP_METHODS.has(method)) continue;
+      if (isUnresolvedRef(spec, rawOp)) return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Extract operations from an OAS spec.
  * Returns a Map of operationId -> { summary, description, tag, operationId }.
  * For operations without an operationId, a synthetic one is generated from the method and path.
+ *
+ * Path-item and operation `$ref`s that point inside the same document
+ * (`#/components/pathItems/…`, `#/paths/~1pets`) are resolved first. OAS 3.1
+ * `components.pathItems` is the documented way to reuse a path; walking the
+ * raw `$ref` stub would report zero operations and `oas:sync` / `lint --fix`
+ * would delete every matching reference page.
  */
 export function extractOperations(spec) {
   const ops = new Map();
   const paths = spec.paths || {};
 
-  for (const [pathStr, methods] of Object.entries(paths)) {
-    for (const [method, operation] of Object.entries(methods)) {
+  for (const [pathStr, rawPathItem] of Object.entries(paths)) {
+    const methods = resolveRefObject(spec, rawPathItem) || {};
+    for (const [method, rawOperation] of Object.entries(methods)) {
       if (!HTTP_METHODS.has(method)) continue;
 
+      const operation = resolveRefObject(spec, rawOperation) || {};
       const operationId = operation.operationId || generateOperationId(method, pathStr);
 
       ops.set(operationId, {
@@ -210,10 +279,14 @@ function syncOneOas(refDir, oasFilename, spec) {
   }
 
   const changes = { added: [], deleted: [], skipped: [] };
+  // File $refs (and broken internal pointers) mean we cannot see the real
+  // operation set. Deleting "missing" pages would wipe valid reference docs.
+  const skipDeletes = hasUnresolvedOperationRefs(spec);
 
   // Deletes: pages referencing operations that no longer exist.
   for (const [opId, page] of pagesByOpId) {
     if (!specOps.has(opId)) {
+      if (skipDeletes) continue;
       fs.unlinkSync(page.filePath);
 
       const pageDir = path.dirname(page.filePath);

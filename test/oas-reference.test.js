@@ -28,6 +28,33 @@ test('mismatched title/excerpt no longer reported as out of sync', () => {
   }
 });
 
+test('path-item $ref is not reported as a missing operation', () => {
+  const spec = JSON.stringify({
+    openapi: '3.1.0',
+    info: { title: 'Pets', version: '1.0.0' },
+    paths: {
+      '/pets': { $ref: '#/components/pathItems/Pets' },
+    },
+    components: {
+      pathItems: {
+        Pets: { get: { operationId: 'listPets' } },
+      },
+    },
+  });
+  const root = makeRepo({
+    'reference/pets.json': spec,
+    'reference/Pets/Other/listPets.md':
+      '---\napi:\n  file: pets.json\n  operationId: listPets\n---\n',
+  });
+  try {
+    const res = validateAll(collectFiles(root), root, {});
+    assert.ok(!res.some((r) => r.message.includes('Operation not found')));
+    assert.ok(!res.some((r) => r.message.includes('Missing page')));
+  } finally {
+    rmRepo(root);
+  }
+});
+
 test('operation not found is still reported', () => {
   const root = makeRepo({
     'reference/pets.json': SPEC,

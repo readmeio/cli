@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import matter from 'gray-matter';
-import { syncOas } from '../src/commands/oas-sync.js';
+import { extractOperations, hasUnresolvedOperationRefs, syncOas } from '../src/commands/oas-sync.js';
 import { makeRepo, rmRepo } from './helpers.js';
 
 const SPEC = JSON.stringify({
@@ -100,6 +100,112 @@ test('sync does not overwrite an existing page from another spec or author', () 
     const content = fs.readFileSync(path.join(root, 'reference/Pets/Other/listPets.md'), 'utf-8');
     assert.match(content, /Hand-written page/);
     assert.match(content, /Custom content/);
+  } finally {
+    rmRepo(root);
+  }
+});
+
+const PATH_ITEMS_SPEC = {
+  openapi: '3.1.0',
+  info: { title: 'Pets', version: '1.0.0' },
+  paths: {
+    '/pets': { $ref: '#/components/pathItems/Pets' },
+  },
+  components: {
+    pathItems: {
+      Pets: {
+        get: { operationId: 'listPets', summary: 'List pets', tags: ['pets'] },
+        post: { operationId: 'createPet', summary: 'Create a pet', tags: ['pets'] },
+      },
+    },
+  },
+};
+
+test('extractOperations resolves OAS 3.1 components.pathItems $refs', () => {
+  const ops = extractOperations(PATH_ITEMS_SPEC);
+  assert.deepEqual([...ops.keys()].sort(), ['createPet', 'listPets']);
+  assert.equal(ops.get('listPets').tag, 'pets');
+  assert.equal(hasUnresolvedOperationRefs(PATH_ITEMS_SPEC), false);
+});
+
+test('extractOperations resolves a path $ref to another path item', () => {
+  const spec = {
+    openapi: '3.0.0',
+    info: { title: 'Pets' },
+    paths: {
+      '/pets': {
+        get: { operationId: 'listPets', summary: 'List pets' },
+      },
+      '/animals': { $ref: '#/paths/~1pets' },
+    },
+  };
+  const ops = extractOperations(spec);
+  // Same operationId is reused (Map last-write); the point is the $ref is visible.
+  assert.equal(ops.has('listPets'), true);
+  assert.equal(ops.size, 1);
+});
+
+test('extractOperations uses the resolved operationId on an operation $ref', () => {
+  const spec = {
+    openapi: '3.0.0',
+    info: { title: 'Pets' },
+    paths: {
+      '/pets': {
+        get: { $ref: '#/components/x-operations/ListPets' },
+      },
+    },
+    components: {
+      'x-operations': {
+        ListPets: { operationId: 'listPets', summary: 'List pets', tags: ['pets'] },
+      },
+    },
+  };
+  const ops = extractOperations(spec);
+  assert.equal(ops.has('listPets'), true);
+  assert.equal(ops.has('get_pets'), false);
+  assert.equal(ops.get('listPets').summary, 'List pets');
+});
+
+test('sync does not delete pages when the spec uses path-item $refs', () => {
+  const root = makeRepo({
+    'reference/pets.json': JSON.stringify(PATH_ITEMS_SPEC),
+    'reference/Pets/pets/listPets.md':
+      '---\ntitle: Custom docs\napi:\n  file: pets.json\n  operationId: listPets\n---\n\nCUSTOM BODY\n',
+    'reference/Pets/pets/_order.yaml': '- listPets\n',
+    'reference/Pets/_order.yaml': '- pets\n',
+  });
+  try {
+    const [result] = syncOas(root);
+    assert.deepEqual(result.changes.deleted, []);
+    const page = path.join(root, 'reference/Pets/pets/listPets.md');
+    assert.ok(fs.existsSync(page), 'existing $ref-backed page must survive sync');
+    assert.match(fs.readFileSync(page, 'utf-8'), /CUSTOM BODY/);
+    assert.equal(result.changes.added.includes('Pets/pets/createPet.md'), true);
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('sync does not delete pages when a path $ref points at an external file', () => {
+  const spec = JSON.stringify({
+    openapi: '3.0.0',
+    info: { title: 'Pets' },
+    paths: {
+      '/pets': { $ref: './paths/pets.yaml' },
+    },
+  });
+  const root = makeRepo({
+    'reference/pets.json': spec,
+    'reference/Pets/Other/listPets.md':
+      '---\napi:\n  file: pets.json\n  operationId: listPets\n---\n\nCUSTOM BODY\n',
+  });
+  try {
+    assert.equal(hasUnresolvedOperationRefs(JSON.parse(spec)), true);
+    const [result] = syncOas(root);
+    assert.deepEqual(result.changes.deleted, []);
+    const page = path.join(root, 'reference/Pets/Other/listPets.md');
+    assert.ok(fs.existsSync(page), 'unresolved $ref must not wipe existing pages');
+    assert.match(fs.readFileSync(page, 'utf-8'), /CUSTOM BODY/);
   } finally {
     rmRepo(root);
   }
