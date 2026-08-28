@@ -238,7 +238,7 @@ function buildTagIndexContent(title, description) {
  * one "Other" folder.
  */
 function operationGroup(op) {
-  if (op.tag) return { folder: safeSegment(op.tag, 'Other'), title: op.tag };
+  if (op.tag) return { folder: safeSegment(op.tag, 'Other').toLowerCase(), title: op.tag };
   const folder = safeSegment(op.path.replace(/[/{}]/g, ''), 'operation').toLowerCase();
   return { folder, title: op.path };
 }
@@ -387,7 +387,7 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
   // declared tag.
   const declaredOrder = (Array.isArray(spec.tags) ? spec.tags : [])
     .filter((t) => t && t.name)
-    .map((t) => safeSegment(t.name, 'Other'));
+    .map((t) => safeSegment(t.name, 'Other').toLowerCase());
   const orderedFolders = [
     ...declaredOrder.filter((folder) => groupsByFolder.has(folder)),
     ...[...groupsByFolder.keys()].filter((folder) => !declaredOrder.includes(folder)),

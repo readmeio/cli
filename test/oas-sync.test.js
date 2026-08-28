@@ -500,3 +500,34 @@ test('deleting one of two existing owners of a shared slug does not free it for 
     rmRepo(root);
   }
 });
+
+test('a mixed-case tag gets a lowercased folder, but keeps its original case as the category title', () => {
+  // Confirmed against a real platform upload: a tag declared "MixedCaseTag"
+  // in the spec produces an on-disk folder "mixedcasetag", but the category
+  // page's title frontmatter keeps the original casing.
+  const spec = JSON.stringify({
+    openapi: '3.0.0',
+    info: { title: 'Pets' },
+    tags: [{ name: 'MixedCaseTag', description: 'Ops under a mixed-case tag' }],
+    paths: {
+      '/a': { get: { operationId: 'getA', tags: ['MixedCaseTag'] } },
+    },
+  });
+  const root = makeRepo({ 'reference/pets.json': spec });
+  try {
+    syncOas(root);
+    const refDir = path.join(root, 'reference/Pets');
+    assert.ok(fs.existsSync(path.join(refDir, 'mixedcasetag/geta.md')));
+    // Check the actual on-disk directory name (not just existsSync, which
+    // some filesystems like macOS's default APFS resolve case-insensitively).
+    assert.ok(fs.readdirSync(refDir).includes('mixedcasetag'));
+
+    const index = matter(fs.readFileSync(path.join(refDir, 'mixedcasetag/index.md'), 'utf-8')).data;
+    assert.equal(index.title, 'MixedCaseTag');
+
+    const order = fs.readFileSync(path.join(refDir, '_order.yaml'), 'utf-8');
+    assert.deepEqual(order.trim().split('\n'), ['- mixedcasetag']);
+  } finally {
+    rmRepo(root);
+  }
+});
