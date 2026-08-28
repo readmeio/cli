@@ -244,14 +244,21 @@ function operationGroup(op) {
 }
 
 /**
- * Collect every slug already used across the entire reference/ tree. Reference
- * page slugs share one flat namespace (docs/ is a separate namespace and is not
- * consulted), so a generated operation slug must be unique against all of them.
- * A page's slug is its filename without `.md`; a category page's slug (a folder
- * containing `index.md`) is the folder name. Comparison is case-insensitive.
+ * Collect every slug already used across the entire reference/ tree, as a
+ * lowercase-slug -> owner-count map. Reference page slugs share one flat
+ * namespace (docs/ is a separate namespace and is not consulted), so a
+ * generated operation slug must be unique against all of them. A page's slug
+ * is its filename without `.md`; a category page's slug (a folder containing
+ * `index.md`) is the folder name.
+ *
+ * A count, not a Set, because two existing pages or folders can already share
+ * a slug (hand-authored content, or content that predates this uniqueness
+ * logic) — a Set would collapse them to one entry, and releasing one owner
+ * (see `releaseSlug`) would incorrectly free the slug while the other owner
+ * still holds it.
  */
 function collectReferenceSlugs(refDir) {
-  const slugs = new Set();
+  const counts = new Map();
 
   function walk(dir) {
     for (const entry of fs.readdirSync(dir)) {
@@ -268,29 +275,47 @@ function collectReferenceSlugs(refDir) {
         // A folder's index.md contributes the folder name as a slug; any other
         // page contributes its own filename.
         const slug = entry === 'index.md' ? path.basename(dir) : path.basename(entry, '.md');
-        slugs.add(slug.toLowerCase());
+        takeSlug(counts, slug);
       }
     }
   }
 
   walk(refDir);
-  return slugs;
+  return counts;
+}
+
+function isSlugTaken(takenSlugs, slug) {
+  return (takenSlugs.get(slug.toLowerCase()) || 0) > 0;
+}
+
+/** Record one more owner of `slug`. */
+function takeSlug(takenSlugs, slug) {
+  const key = slug.toLowerCase();
+  takenSlugs.set(key, (takenSlugs.get(key) || 0) + 1);
+}
+
+/** Record one fewer owner of `slug`; only fully frees it once every owner is gone. */
+function releaseSlug(takenSlugs, slug) {
+  const key = slug.toLowerCase();
+  const remaining = (takenSlugs.get(key) || 0) - 1;
+  if (remaining > 0) takenSlugs.set(key, remaining);
+  else takenSlugs.delete(key);
 }
 
 /**
  * Reserve a unique reference slug. `index` is never usable by an operation (it's
  * reserved for the tag category page), and any slug already present in the
  * reference namespace gets a numeric suffix (`-1`, `-2`, ...) until it's free.
- * The chosen slug is added to `takenSlugs` so later operations see it.
+ * The chosen slug gains an owner in `takenSlugs` so later operations see it.
  */
 function reserveSlug(takenSlugs, base) {
   let chosen = base;
-  if (base === 'index' || takenSlugs.has(base)) {
+  if (base === 'index' || isSlugTaken(takenSlugs, base)) {
     let n = 1;
-    while (takenSlugs.has(`${base}-${n}`)) n += 1;
+    while (isSlugTaken(takenSlugs, `${base}-${n}`)) n += 1;
     chosen = `${base}-${n}`;
   }
-  takenSlugs.add(chosen);
+  takeSlug(takenSlugs, chosen);
   return chosen;
 }
 
@@ -334,7 +359,7 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
       const pageDir = path.dirname(page.filePath);
       const slug = path.basename(page.filePath, '.md');
       removeFromOrder(path.join(pageDir, '_order.yaml'), slug);
-      takenSlugs.delete(slug.toLowerCase());
+      releaseSlug(takenSlugs, slug);
 
       changes.deleted.push(page.relativePath);
     }
@@ -379,10 +404,11 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
       fs.mkdirSync(pageDir, { recursive: true });
       fs.writeFileSync(indexPath, buildTagIndexContent(title, description));
       changes.added.push(path.relative(refDir, indexPath));
+      // The category page's slug is the folder name; reserve it so no operation
+      // takes it. Only when just-created — an existing index.md was already
+      // counted by collectReferenceSlugs's initial disk walk.
+      takeSlug(takenSlugs, folder);
     }
-    // The category page's slug is the folder name; reserve it so no operation
-    // takes it. Ordering entries are idempotent, so this is a no-op when present.
-    takenSlugs.add(folder.toLowerCase());
     addToOrder(path.join(refDir, infoTitle, '_order.yaml'), folder);
     addToOrder(path.join(refDir, '_order.yaml'), infoTitle);
   }

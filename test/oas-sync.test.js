@@ -457,3 +457,46 @@ test('a tag used by an operation but not declared in `tags` is ordered after eve
     rmRepo(root);
   }
 });
+
+test('deleting one of two existing owners of a shared slug does not free it for reuse', () => {
+  // "shared" is already claimed by two pre-existing things: a leaf page
+  // backing an operation that's about to be removed from the spec, and an
+  // unrelated hand-authored category folder that survives. Deleting the
+  // former must not make the slug look free again.
+  const spec = JSON.stringify({
+    openapi: '3.0.0',
+    info: { title: 'Pets' },
+    paths: {
+      // "goneOp" (which used to back reference/Pets/a/shared.md) no longer
+      // exists in the spec. "newOp" is a new operation that would also want
+      // the base slug "shared".
+      '/new': { get: { operationId: 'shared', tags: ['a'] } },
+    },
+  });
+  const root = makeRepo({
+    'reference/pets.json': spec,
+    'reference/Pets/a/shared.md': '---\napi:\n  file: pets.json\n  operationId: goneOp\n---\n',
+    'reference/Pets/b/shared/index.md': '---\ntitle: Shared Category\n---\n\nHand-authored, unrelated to any operation.\n',
+  });
+  try {
+    syncOas(root);
+
+    // The orphaned page is gone...
+    assert.equal(fs.existsSync(path.join(root, 'reference/Pets/a/shared.md')), false);
+    // ...but the still-existing category folder still owns "shared", so the
+    // new operation is suffixed rather than colliding with it.
+    assert.ok(fs.existsSync(path.join(root, 'reference/Pets/a/shared-1.md')));
+    const opId = matter(
+      fs.readFileSync(path.join(root, 'reference/Pets/a/shared-1.md'), 'utf-8'),
+    ).data.api.operationId;
+    assert.equal(opId, 'shared');
+
+    // The hand-authored survivor is untouched.
+    assert.match(
+      fs.readFileSync(path.join(root, 'reference/Pets/b/shared/index.md'), 'utf-8'),
+      /Hand-authored/,
+    );
+  } finally {
+    rmRepo(root);
+  }
+});
