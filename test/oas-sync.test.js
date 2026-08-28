@@ -671,3 +671,64 @@ test('an untagged webhook and an untagged path operation with the same sanitized
     rmRepo(root);
   }
 });
+
+test('a path and a webhook whose synthesized operationIds collide both still get pages', () => {
+  // Neither declares an operationId, both are POST, and both sanitize to
+  // the same synthetic id: post_orders.
+  const spec = JSON.stringify({
+    openapi: '3.1.0',
+    info: { title: 'Payments' },
+    paths: {
+      '/orders': { post: { summary: 'Create an order' } },
+    },
+    webhooks: {
+      orders: { post: { summary: 'Sent when an order changes' } },
+    },
+  });
+  const root = makeRepo({ 'reference/payments.json': spec });
+  try {
+    const [result] = syncOas(root);
+    // Both pages generated — neither silently dropped by an internal Map
+    // collision keyed only on the (identical) synthesized operationId.
+    const added = result.changes.added.filter((p) => !p.endsWith('index.md'));
+    assert.equal(added.length, 2, `expected 2 pages, got: ${JSON.stringify(added)}`);
+
+    const refDir = path.join(root, 'reference/Payments/orders');
+    const pathPage = matter(fs.readFileSync(path.join(refDir, 'post_orders.md'), 'utf-8')).data;
+    const webhookPage = matter(
+      fs.readFileSync(path.join(refDir, 'post_orders-1.md'), 'utf-8'),
+    ).data;
+    assert.equal('webhook' in pathPage.api, false);
+    assert.equal(webhookPage.api.webhook, true);
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('a webhook that is a $ref to components.pathItems is resolved', () => {
+  const spec = JSON.stringify({
+    openapi: '3.1.0',
+    info: { title: 'Payments' },
+    webhooks: {
+      paymentCompleted: { $ref: '#/components/pathItems/PaymentCompleted' },
+    },
+    components: {
+      pathItems: {
+        PaymentCompleted: {
+          post: { operationId: 'onPaymentCompleted', summary: 'Sent when a payment settles' },
+        },
+      },
+    },
+  });
+  const root = makeRepo({ 'reference/payments.json': spec });
+  try {
+    syncOas(root);
+    const page = path.join(root, 'reference/Payments/paymentcompleted/onpaymentcompleted.md');
+    assert.ok(fs.existsSync(page), 'expected the $ref-resolved webhook to generate a page');
+    const { data } = matter(fs.readFileSync(page, 'utf-8'));
+    assert.equal(data.api.operationId, 'onPaymentCompleted');
+    assert.equal(data.api.webhook, true);
+  } finally {
+    rmRepo(root);
+  }
+});

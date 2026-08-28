@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import matter from 'gray-matter';
-import { findOasFiles, extractOperations, collectExistingPages, syncOas } from '../commands/oas-sync.js';
+import { findOasFiles, extractOperations, collectExistingPages, syncOas, operationKey } from '../commands/oas-sync.js';
 
 export const name = 'oas-reference';
 
@@ -34,6 +34,7 @@ export function validateAll(files, gitRoot, { fix } = {}) {
 
     const oasFilename = data.api.file;
     const operationId = data.api.operationId;
+    const isWebhook = !!data.api.webhook;
     const oas = oasMap.get(oasFilename);
 
     // Check: OAS file doesn't exist.
@@ -50,7 +51,7 @@ export function validateAll(files, gitRoot, { fix } = {}) {
     if (!operationId) continue;
 
     // Check: operationId doesn't exist in the spec.
-    if (!oas.ops.has(operationId)) {
+    if (!oas.ops.has(operationKey({ operationId, isWebhook }))) {
       results.push({
         file: relPath,
         rule: name,
@@ -67,15 +68,19 @@ export function validateAll(files, gitRoot, { fix } = {}) {
   const existingPages = collectExistingPages(refDir);
   for (const [oasFilename, { ops }] of oasMap) {
     const pagesForOas = existingPages.filter((p) => p.data.api.file === oasFilename);
-    const coveredOps = new Set(pagesForOas.map((p) => p.data.api.operationId));
+    const coveredOps = new Set(
+      pagesForOas.map((p) =>
+        operationKey({ operationId: p.data.api.operationId, isWebhook: !!p.data.api.webhook }),
+      ),
+    );
 
-    for (const [opId] of ops) {
-      if (!coveredOps.has(opId)) {
+    for (const op of ops.values()) {
+      if (!coveredOps.has(operationKey(op))) {
         results.push({
           file: `reference/${oasFilename}`,
           rule: name,
           severity: 'warning',
-          message: `Missing page: no reference page found for operation "${opId}"`,
+          message: `Missing page: no reference page found for operation "${op.operationId}"`,
           fixable: true,
         });
       }
