@@ -555,6 +555,9 @@ test('deleting a legacy operation page literally named index.md releases its fol
     'reference/pets.json': spec,
     'reference/Pets/sometag/index.md':
       '---\napi:\n  file: pets.json\n  operationId: legacyOp\n---\n',
+    // A pre-refactor tool would have written the literal filename "index"
+    // into this directory's own order file — not the folder name.
+    'reference/Pets/sometag/_order.yaml': '- index\n',
   });
   try {
     const [result] = syncOas(root);
@@ -563,6 +566,11 @@ test('deleting a legacy operation page literally named index.md releases its fol
     // The base slug is free again — no unnecessary numeric suffix.
     assert.ok(fs.existsSync(path.join(root, 'reference/Pets/other-tag/sometag.md')));
     assert.equal(fs.existsSync(path.join(root, 'reference/Pets/other-tag/sometag-1.md')), false);
+
+    // The dangling "- index" entry is removed from the folder's own order
+    // file (not the folder name — that was never what was listed there).
+    const orderPath = path.join(root, 'reference/Pets/sometag/_order.yaml');
+    assert.equal(fs.existsSync(orderPath), false, 'expected the now-empty _order.yaml to be removed');
   } finally {
     rmRepo(root);
   }

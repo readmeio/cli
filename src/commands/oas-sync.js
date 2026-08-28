@@ -358,15 +358,18 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
 
       const pageDir = path.dirname(page.filePath);
       // A legacy operation page can be literally named index.md (predating
-      // the "index is reserved for the category page" convention) — its
-      // slug, like any index.md's, is its folder name (see
-      // collectReferenceSlugs), not the literal string "index".
-      const slug =
-        path.basename(page.filePath) === 'index.md'
-          ? path.basename(pageDir)
-          : path.basename(page.filePath, '.md');
-      removeFromOrder(path.join(pageDir, '_order.yaml'), slug);
-      releaseSlug(takenSlugs, slug);
+      // the "index is reserved for the category page" convention). Two
+      // different things need two different values here: pageSlug is what a
+      // pre-refactor tool would have actually written into pageDir's own
+      // _order.yaml ("index", the filename) — that's what removeFromOrder
+      // must remove. referenceSlug is what the reference-wide slug map
+      // reserved for it (its folder name, like any index.md — see
+      // collectReferenceSlugs) — that's what releaseSlug must free.
+      const isIndexPage = path.basename(page.filePath) === 'index.md';
+      const pageSlug = path.basename(page.filePath, '.md');
+      const referenceSlug = isIndexPage ? path.basename(pageDir) : pageSlug;
+      removeFromOrder(path.join(pageDir, '_order.yaml'), pageSlug);
+      releaseSlug(takenSlugs, referenceSlug);
 
       changes.deleted.push(page.relativePath);
     }
