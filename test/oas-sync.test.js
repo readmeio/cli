@@ -784,3 +784,23 @@ test('a circular pathItem $ref is left unresolved rather than looping forever', 
     rmRepo(root);
   }
 });
+
+test('a pathItem $ref with a malformed percent-escape is left unresolved rather than throwing', () => {
+  const spec = JSON.stringify({
+    openapi: '3.1.0',
+    info: { title: 'Payments' },
+    webhooks: {
+      // "%zz" is not a valid percent-escape — decodeURIComponent throws on it.
+      paymentCompleted: { $ref: '#/components/pathItems/%zz' },
+    },
+    components: { pathItems: {} },
+  });
+  const root = makeRepo({ 'reference/payments.json': spec });
+  try {
+    // Must not throw; the malformed ref is simply left unresolved.
+    const [result] = syncOas(root);
+    assert.equal(result.changes.added.filter((p) => !p.endsWith('index.md')).length, 0);
+  } finally {
+    rmRepo(root);
+  }
+});

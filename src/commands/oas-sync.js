@@ -88,7 +88,14 @@ function resolveLocalPathItemRef(entry, spec) {
     const match = current.$ref.match(/^#\/components\/pathItems\/(.+)$/);
     if (!match) return current;
 
-    const name = decodeURIComponent(match[1]).replace(/~1/g, '/').replace(/~0/g, '~');
+    let name;
+    try {
+      name = decodeURIComponent(match[1]).replace(/~1/g, '/').replace(/~0/g, '~');
+    } catch {
+      // Malformed percent-escape — leave unresolved rather than throwing and
+      // aborting the whole sync/lint run over one bad $ref.
+      return current;
+    }
     const resolved = spec.components?.pathItems?.[name];
     if (!resolved) return current;
 
