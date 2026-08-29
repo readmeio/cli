@@ -804,3 +804,34 @@ test('a pathItem $ref with a malformed percent-escape is left unresolved rather 
     rmRepo(root);
   }
 });
+
+test('an inline operation alongside a $ref sibling is not discarded', () => {
+  // OAS 3.1 explicitly permits sibling fields (like an inline operation)
+  // alongside $ref in a Path Item Object.
+  const spec = JSON.stringify({
+    openapi: '3.1.0',
+    info: { title: 'Payments' },
+    webhooks: {
+      paymentCompleted: {
+        $ref: '#/components/pathItems/Base',
+        // Inline sibling operation, alongside the $ref.
+        put: { operationId: 'inlineUpdate', summary: 'Inline sibling op' },
+      },
+    },
+    components: {
+      pathItems: {
+        Base: { post: { operationId: 'onPaymentCompleted', summary: 'From the referenced pathItem' } },
+      },
+    },
+  });
+  const root = makeRepo({ 'reference/payments.json': spec });
+  try {
+    syncOas(root);
+    const refDir = path.join(root, 'reference/Payments/paymentcompleted');
+    // Both the referenced pathItem's operation and the inline sibling exist.
+    assert.ok(fs.existsSync(path.join(refDir, 'onpaymentcompleted.md')), 'expected the referenced operation');
+    assert.ok(fs.existsSync(path.join(refDir, 'inlineupdate.md')), 'expected the inline sibling operation');
+  } finally {
+    rmRepo(root);
+  }
+});

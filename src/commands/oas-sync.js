@@ -80,13 +80,23 @@ export function operationKey({ operationId, isWebhook }) {
 function resolveLocalPathItemRef(entry, spec) {
   const seen = new Set();
   let current = entry;
+  // Sibling fields (e.g. an inline operation) alongside a $ref are explicitly
+  // allowed in an OAS 3.1 Path Item Object — accumulate them from every hop
+  // in the chain so they aren't discarded once $ref is followed. A field
+  // declared at an outer/earlier hop wins over the same field found deeper
+  // in the chain (OAS itself leaves this "undefined" when both define it).
+  let overrides = {};
+  const finish = () => ({ ...current, ...overrides });
 
   while (current && typeof current.$ref === 'string') {
-    if (seen.has(current.$ref)) return current;
+    const { $ref, ...siblings } = current;
+    overrides = { ...siblings, ...overrides };
+
+    if (seen.has(current.$ref)) return finish();
     seen.add(current.$ref);
 
     const match = current.$ref.match(/^#\/components\/pathItems\/(.+)$/);
-    if (!match) return current;
+    if (!match) return finish();
 
     let name;
     try {
@@ -94,15 +104,15 @@ function resolveLocalPathItemRef(entry, spec) {
     } catch {
       // Malformed percent-escape — leave unresolved rather than throwing and
       // aborting the whole sync/lint run over one bad $ref.
-      return current;
+      return finish();
     }
     const resolved = spec.components?.pathItems?.[name];
-    if (!resolved) return current;
+    if (!resolved) return finish();
 
     current = resolved;
   }
 
-  return current;
+  return finish();
 }
 
 /**
