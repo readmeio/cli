@@ -380,3 +380,83 @@ test('tryFernNav keeps the entry tree when a tab fetch fails', async () => {
   const nav = await __test__.tryFernNav('https://fern.example/intro', [])
   assertGetStartedTree(nav)
 })
+
+function pages(...urls) {
+  return urls.map((url) => ({ title: url, url }))
+}
+
+test('htmlScrapeCoverage drops below 75% when a thin HTML scrape sees a fraction of llms.txt', () => {
+  const scraped = { categories: [{ title: 'Docs', pages: pages('https://ex.com/docs/a', 'https://ex.com/docs/b') }] }
+  const known = pages(
+    'https://ex.com/docs/a',
+    'https://ex.com/docs/b',
+    'https://ex.com/docs/c',
+    'https://ex.com/docs/d',
+    'https://ex.com/docs/e',
+  )
+  const coverage = __test__.htmlScrapeCoverage(scraped, known)
+  assert.equal(coverage.scrapedPages, 2)
+  assert.equal(coverage.nonReferenceKnown, 5)
+  assert.ok(coverage.ratio < 0.75)
+})
+
+test('htmlScrapeCoverage stays at or above 75% when the scrape covers most llms.txt pages', () => {
+  const scraped = {
+    categories: [{ title: 'Docs', pages: pages('https://ex.com/docs/a', 'https://ex.com/docs/b', 'https://ex.com/docs/c', 'https://ex.com/docs/d') }],
+  }
+  const known = pages(
+    'https://ex.com/docs/a',
+    'https://ex.com/docs/b',
+    'https://ex.com/docs/c',
+    'https://ex.com/docs/d',
+    'https://ex.com/docs/e',
+  )
+  const coverage = __test__.htmlScrapeCoverage(scraped, known)
+  assert.equal(coverage.ratio, 0.8)
+  assert.ok(coverage.ratio >= 0.75)
+})
+
+test('htmlScrapeCoverage ignores api-reference llms.txt rows so endpoint stubs do not tank a real sidebar', () => {
+  const scraped = { categories: [{ title: 'Docs', pages: pages('https://ex.com/docs/a') }] }
+  const known = pages('https://ex.com/docs/a', 'https://ex.com/api-reference/list', 'https://ex.com/endpoints/create')
+  const coverage = __test__.htmlScrapeCoverage(scraped, known)
+  assert.equal(coverage.nonReferenceKnown, 1)
+  assert.equal(coverage.excludedApiReference, 2)
+  assert.equal(coverage.ratio, 1)
+})
+
+test('orphansDwarfHtmlScrape trips when leftovers are at least twice the direct matches', () => {
+  assert.equal(__test__.orphansDwarfHtmlScrape(6, 3), true)
+  assert.equal(__test__.orphansDwarfHtmlScrape(5, 3), false)
+  assert.equal(__test__.orphansDwarfHtmlScrape(0, 4), false)
+})
+
+test('orphansDwarfHtmlScrape never trips for a canonical Fern/Mintlify/Archbee nav', () => {
+  // Same 6-orphan / 3-direct shape that would discard an HTML scrape — the
+  // authored tree must stay, with leftovers slotted or bucketed instead.
+  assert.equal(__test__.orphansDwarfHtmlScrape(6, 3, { canonical: true }), false)
+  assert.equal(__test__.orphansDwarfHtmlScrape(100, 1, { canonical: true }), false)
+})
+
+test('htmlScrapeCoverage treats a curated Fern-sized sidebar against a larger llms.txt as below the HTML-scrape cutoff', () => {
+  // Typical Fern + llms.txt shape: authored sidebar is a subset, llms.txt
+  // also lists hidden/legacy/API pages. The HTML-scrape cutoff would discard
+  // that tree; canonical Fern/Mintlify/Archbee navs must skip this check.
+  const scraped = {
+    categories: [{ title: 'Get started', pages: pages('https://fern.example/intro', 'https://fern.example/guides', 'https://fern.example/nested/deep') }],
+  }
+  const known = pages(
+    'https://fern.example/intro',
+    'https://fern.example/guides',
+    'https://fern.example/nested/deep',
+    'https://fern.example/hidden',
+    'https://fern.example/legacy',
+    'https://fern.example/old-guide',
+    'https://fern.example/changelog',
+    'https://fern.example/blog-in-docs',
+  )
+  const coverage = __test__.htmlScrapeCoverage(scraped, known)
+  assert.equal(coverage.scrapedPages, 3)
+  assert.equal(coverage.nonReferenceKnown, 8)
+  assert.ok(coverage.ratio < 0.75)
+})
