@@ -575,3 +575,263 @@ test('deleting a legacy operation page literally named index.md releases its fol
     rmRepo(root);
   }
 });
+
+test('sync generates a page for a webhook, marked with api.webhook: true', () => {
+  const spec = JSON.stringify({
+    openapi: '3.1.0',
+    info: { title: 'Payments' },
+    webhooks: {
+      paymentCompleted: {
+        post: { summary: 'Sent when a payment settles' },
+      },
+    },
+  });
+  const root = makeRepo({ 'reference/payments.json': spec });
+  try {
+    syncOas(root);
+    const page = path.join(root, 'reference/Payments/paymentcompleted/post_paymentcompleted.md');
+    assert.ok(fs.existsSync(page), 'expected a generated webhook page');
+    const { data } = matter(fs.readFileSync(page, 'utf-8'));
+    assert.equal(data.api.file, 'payments.json');
+    assert.equal(data.api.operationId, 'post_paymentcompleted');
+    assert.equal(data.api.webhook, true);
+
+    // The category page's title is the webhook's own name, not the folder.
+    const index = matter(
+      fs.readFileSync(path.join(root, 'reference/Payments/paymentcompleted/index.md'), 'utf-8'),
+    ).data;
+    assert.equal(index.title, 'paymentCompleted');
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('a path operation is not stamped api.webhook', () => {
+  const root = makeRepo({ 'reference/pets.json': SPEC });
+  try {
+    syncOas(root);
+    const { data } = matter(
+      fs.readFileSync(path.join(root, 'reference/Pets/pets/listpets.md'), 'utf-8'),
+    );
+    assert.equal('webhook' in data.api, false);
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('sync no longer deletes an existing webhook page on every run', () => {
+  const spec = JSON.stringify({
+    openapi: '3.1.0',
+    info: { title: 'Payments' },
+    webhooks: {
+      paymentCompleted: {
+        post: { summary: 'Sent when a payment settles' },
+      },
+    },
+  });
+  const root = makeRepo({
+    'reference/payments.json': spec,
+    'reference/Payments/paymentcompleted/post_paymentcompleted.md':
+      '---\napi:\n  file: payments.json\n  operationId: post_paymentcompleted\n  webhook: true\nhidden: false\n---\n',
+  });
+  try {
+    const [result] = syncOas(root);
+    assert.deepEqual(result.changes.deleted, []);
+    assert.ok(
+      fs.existsSync(path.join(root, 'reference/Payments/paymentcompleted/post_paymentcompleted.md')),
+    );
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('an untagged webhook and an untagged path operation with the same sanitized name both get pages', () => {
+  // "/orders" and webhook "orders" sanitize to the same untagged group
+  // ("orders"), same as two untagged paths would; each still gets its own
+  // distinct operation page (they have different operationIds).
+  const spec = JSON.stringify({
+    openapi: '3.1.0',
+    info: { title: 'Payments' },
+    paths: {
+      '/orders': { get: { operationId: 'listOrders' } },
+    },
+    webhooks: {
+      orders: {
+        post: { summary: 'Sent when an order changes' },
+      },
+    },
+  });
+  const root = makeRepo({ 'reference/payments.json': spec });
+  try {
+    syncOas(root);
+    const refDir = path.join(root, 'reference/Payments');
+    assert.ok(fs.existsSync(path.join(refDir, 'orders/listorders.md')));
+    assert.ok(fs.existsSync(path.join(refDir, 'orders/post_orders.md')));
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('a path and a webhook whose synthesized operationIds collide both still get pages', () => {
+  // Neither declares an operationId, both are POST, and both sanitize to
+  // the same synthetic id: post_orders.
+  const spec = JSON.stringify({
+    openapi: '3.1.0',
+    info: { title: 'Payments' },
+    paths: {
+      '/orders': { post: { summary: 'Create an order' } },
+    },
+    webhooks: {
+      orders: { post: { summary: 'Sent when an order changes' } },
+    },
+  });
+  const root = makeRepo({ 'reference/payments.json': spec });
+  try {
+    const [result] = syncOas(root);
+    // Both pages generated — neither silently dropped by an internal Map
+    // collision keyed only on the (identical) synthesized operationId.
+    const added = result.changes.added.filter((p) => !p.endsWith('index.md'));
+    assert.equal(added.length, 2, `expected 2 pages, got: ${JSON.stringify(added)}`);
+
+    const refDir = path.join(root, 'reference/Payments/orders');
+    const pathPage = matter(fs.readFileSync(path.join(refDir, 'post_orders.md'), 'utf-8')).data;
+    const webhookPage = matter(
+      fs.readFileSync(path.join(refDir, 'post_orders-1.md'), 'utf-8'),
+    ).data;
+    assert.equal('webhook' in pathPage.api, false);
+    assert.equal(webhookPage.api.webhook, true);
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('a webhook that is a $ref to components.pathItems is resolved', () => {
+  const spec = JSON.stringify({
+    openapi: '3.1.0',
+    info: { title: 'Payments' },
+    webhooks: {
+      paymentCompleted: { $ref: '#/components/pathItems/PaymentCompleted' },
+    },
+    components: {
+      pathItems: {
+        PaymentCompleted: {
+          post: { operationId: 'onPaymentCompleted', summary: 'Sent when a payment settles' },
+        },
+      },
+    },
+  });
+  const root = makeRepo({ 'reference/payments.json': spec });
+  try {
+    syncOas(root);
+    const page = path.join(root, 'reference/Payments/paymentcompleted/onpaymentcompleted.md');
+    assert.ok(fs.existsSync(page), 'expected the $ref-resolved webhook to generate a page');
+    const { data } = matter(fs.readFileSync(page, 'utf-8'));
+    assert.equal(data.api.operationId, 'onPaymentCompleted');
+    assert.equal(data.api.webhook, true);
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('a $ref to a pathItem that is itself a $ref is followed to the literal Path Item', () => {
+  const spec = JSON.stringify({
+    openapi: '3.1.0',
+    info: { title: 'Payments' },
+    webhooks: {
+      // Chained: paymentCompleted -> Alias -> the literal Path Item.
+      paymentCompleted: { $ref: '#/components/pathItems/Alias' },
+    },
+    components: {
+      pathItems: {
+        Alias: { $ref: '#/components/pathItems/PaymentCompleted' },
+        PaymentCompleted: {
+          post: { operationId: 'onPaymentCompleted', summary: 'Sent when a payment settles' },
+        },
+      },
+    },
+  });
+  const root = makeRepo({ 'reference/payments.json': spec });
+  try {
+    syncOas(root);
+    const page = path.join(root, 'reference/Payments/paymentcompleted/onpaymentcompleted.md');
+    assert.ok(fs.existsSync(page), 'expected the chained $ref to be followed to the literal Path Item');
+    assert.equal(matter(fs.readFileSync(page, 'utf-8')).data.api.operationId, 'onPaymentCompleted');
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('a circular pathItem $ref is left unresolved rather than looping forever', () => {
+  const spec = JSON.stringify({
+    openapi: '3.1.0',
+    info: { title: 'Payments' },
+    webhooks: {
+      paymentCompleted: { $ref: '#/components/pathItems/A' },
+    },
+    components: {
+      pathItems: {
+        A: { $ref: '#/components/pathItems/B' },
+        B: { $ref: '#/components/pathItems/A' },
+      },
+    },
+  });
+  const root = makeRepo({ 'reference/payments.json': spec });
+  try {
+    // Must return (not hang) and simply generate nothing for the cycle.
+    const [result] = syncOas(root);
+    assert.equal(result.changes.added.filter((p) => !p.endsWith('index.md')).length, 0);
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('a pathItem $ref with a malformed percent-escape is left unresolved rather than throwing', () => {
+  const spec = JSON.stringify({
+    openapi: '3.1.0',
+    info: { title: 'Payments' },
+    webhooks: {
+      // "%zz" is not a valid percent-escape — decodeURIComponent throws on it.
+      paymentCompleted: { $ref: '#/components/pathItems/%zz' },
+    },
+    components: { pathItems: {} },
+  });
+  const root = makeRepo({ 'reference/payments.json': spec });
+  try {
+    // Must not throw; the malformed ref is simply left unresolved.
+    const [result] = syncOas(root);
+    assert.equal(result.changes.added.filter((p) => !p.endsWith('index.md')).length, 0);
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('an inline operation alongside a $ref sibling is not discarded', () => {
+  // OAS 3.1 explicitly permits sibling fields (like an inline operation)
+  // alongside $ref in a Path Item Object.
+  const spec = JSON.stringify({
+    openapi: '3.1.0',
+    info: { title: 'Payments' },
+    webhooks: {
+      paymentCompleted: {
+        $ref: '#/components/pathItems/Base',
+        // Inline sibling operation, alongside the $ref.
+        put: { operationId: 'inlineUpdate', summary: 'Inline sibling op' },
+      },
+    },
+    components: {
+      pathItems: {
+        Base: { post: { operationId: 'onPaymentCompleted', summary: 'From the referenced pathItem' } },
+      },
+    },
+  });
+  const root = makeRepo({ 'reference/payments.json': spec });
+  try {
+    syncOas(root);
+    const refDir = path.join(root, 'reference/Payments/paymentcompleted');
+    // Both the referenced pathItem's operation and the inline sibling exist.
+    assert.ok(fs.existsSync(path.join(refDir, 'onpaymentcompleted.md')), 'expected the referenced operation');
+    assert.ok(fs.existsSync(path.join(refDir, 'inlineupdate.md')), 'expected the inline sibling operation');
+  } finally {
+    rmRepo(root);
+  }
+});

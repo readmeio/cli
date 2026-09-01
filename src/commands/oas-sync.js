@@ -56,29 +56,103 @@ function generateOperationId(method, pathStr) {
 }
 
 /**
- * Extract operations from an OAS spec.
- * Returns a Map of operationId -> { summary, description, tag, path, operationId }.
- * For operations without an operationId, a synthetic one is generated from the method and path.
+ * Identity key for an operation record (or an existing page's frontmatter),
+ * used everywhere operations/pages are looked up by operationId. `paths` and
+ * `webhooks` are separate namespaces in an OAS document, but both can have
+ * operationId omitted, so their synthetic `<method>_<name>` ids can
+ * legitimately collide (e.g. `POST /orders` and webhook `POST orders` both
+ * synthesize to `post_orders`) — the isWebhook flag disambiguates them so
+ * neither silently overwrites the other in an operationId-only Map.
+ */
+export function operationKey({ operationId, isWebhook }) {
+  return `${isWebhook ? 'webhook' : 'path'}:${operationId}`;
+}
+
+/**
+ * Resolve a `paths`/`webhooks` entry that's a Reference Object (OAS 3.1,
+ * `{ $ref: '#/components/pathItems/Name' }`) against the spec's own
+ * `components.pathItems`, following chained refs (a pathItem that is itself
+ * a $ref to another) until a literal Path Item is reached. Only same-document
+ * refs in that exact form are supported; anything else (external files,
+ * other pointer shapes, an unresolvable name, or a cycle) is left unresolved
+ * and quietly skipped by the caller, same as before this existed.
+ */
+function resolveLocalPathItemRef(entry, spec) {
+  const seen = new Set();
+  let current = entry;
+  // Sibling fields (e.g. an inline operation) alongside a $ref are explicitly
+  // allowed in an OAS 3.1 Path Item Object — accumulate them from every hop
+  // in the chain so they aren't discarded once $ref is followed. A field
+  // declared at an outer/earlier hop wins over the same field found deeper
+  // in the chain (OAS itself leaves this "undefined" when both define it).
+  let overrides = {};
+  const finish = () => ({ ...current, ...overrides });
+
+  while (current && typeof current.$ref === 'string') {
+    const { $ref, ...siblings } = current;
+    overrides = { ...siblings, ...overrides };
+
+    if (seen.has(current.$ref)) return finish();
+    seen.add(current.$ref);
+
+    const match = current.$ref.match(/^#\/components\/pathItems\/(.+)$/);
+    if (!match) return finish();
+
+    let name;
+    try {
+      name = decodeURIComponent(match[1]).replace(/~1/g, '/').replace(/~0/g, '~');
+    } catch {
+      // Malformed percent-escape — leave unresolved rather than throwing and
+      // aborting the whole sync/lint run over one bad $ref.
+      return finish();
+    }
+    const resolved = spec.components?.pathItems?.[name];
+    if (!resolved) return finish();
+
+    current = resolved;
+  }
+
+  return finish();
+}
+
+/**
+ * Extract operations from an OAS spec's `paths`, plus its OAS 3.1 `webhooks`
+ * (callouts the API itself makes to a client-registered URL, not endpoints the
+ * API exposes — a separate top-level sibling of `paths` with the same
+ * Operation Object shape). The platform pages a webhook the same way it pages
+ * a path operation: a synthetic `post_<name>` operationId when none is given,
+ * grouped by its own tag or, absent one, its own category keyed by its raw
+ * name — never merged with `paths` operations of the same name.
+ * Returns a Map keyed by `operationKey()` -> { summary, description, tag,
+ * path, operationId, isWebhook }. For operations without an operationId, a
+ * synthetic one is generated from the method and path (or webhook name).
  */
 export function extractOperations(spec) {
   const ops = new Map();
-  const paths = spec.paths || {};
 
-  for (const [pathStr, methods] of Object.entries(paths)) {
-    for (const [method, operation] of Object.entries(methods)) {
-      if (!HTTP_METHODS.has(method)) continue;
+  function collect(entries, isWebhook) {
+    for (const [pathStr, rawItem] of Object.entries(entries)) {
+      const methods = resolveLocalPathItemRef(rawItem, spec);
 
-      const operationId = operation.operationId || generateOperationId(method, pathStr);
+      for (const [method, operation] of Object.entries(methods)) {
+        if (!HTTP_METHODS.has(method)) continue;
 
-      ops.set(operationId, {
-        operationId,
-        summary: operation.summary || null,
-        description: operation.description || null,
-        tag: (operation.tags && operation.tags[0]) || null,
-        path: pathStr,
-      });
+        const operationId = operation.operationId || generateOperationId(method, pathStr);
+
+        ops.set(operationKey({ operationId, isWebhook }), {
+          operationId,
+          summary: operation.summary || null,
+          description: operation.description || null,
+          tag: (operation.tags && operation.tags[0]) || null,
+          path: pathStr,
+          isWebhook,
+        });
+      }
     }
   }
+
+  collect(spec.paths || {}, false);
+  collect(spec.webhooks || {}, true);
 
   return ops;
 }
@@ -190,11 +264,15 @@ function stringifyFrontmatter(frontmatter) {
   return matter.stringify('', frontmatter).replace(/\n+$/, '');
 }
 
-function buildPageContent({ oasFilename, operationId }) {
+function buildPageContent({ oasFilename, operationId, isWebhook }) {
   const frontmatter = {
     api: {
       file: oasFilename,
       operationId,
+      // Marks the page as a webhook (the API calling out to the client)
+      // rather than a path operation (the client calling the API), matching
+      // what the platform stamps on a page generated from `webhooks`.
+      ...(isWebhook ? { webhook: true } : {}),
     },
     // Mirror the platform's OAS-upload behavior: a newly added endpoint is
     // always written `hidden: false`, even when its tag and siblings are
@@ -338,7 +416,10 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
 
   const pagesByOpId = new Map();
   for (const page of existingPages) {
-    pagesByOpId.set(page.data.api.operationId, page);
+    pagesByOpId.set(
+      operationKey({ operationId: page.data.api.operationId, isWebhook: !!page.data.api.webhook }),
+      page,
+    );
   }
 
   const changes = { added: [], deleted: [], skipped: [] };
@@ -426,26 +507,26 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
   // Adds: operation pages with no page yet. Title/excerpt are owned by the OAS
   // spec at render time, so generated pages carry only the api reference. Slugs
   // are lowercased to match the platform's OAS-upload output.
-  for (const [opId, op] of specOps) {
-    if (pagesByOpId.has(opId)) continue;
+  for (const [key, op] of specOps) {
+    if (pagesByOpId.has(key)) continue;
 
     const { folder } = operationGroup(op);
     const pageDir = path.join(refDir, infoTitle, folder);
     // Reference slugs share one flat namespace, so uniquify against every slug
     // already in reference/ — a collision (or the reserved `index` slug) gets a
     // numeric suffix rather than being skipped.
-    const slug = reserveSlug(takenSlugs, safeSegment(opId, 'operation').toLowerCase());
+    const slug = reserveSlug(takenSlugs, safeSegment(op.operationId, 'operation').toLowerCase());
     const pagePath = path.join(pageDir, `${slug}.md`);
 
     // Guard against a spec-crafted name escaping reference/, or a stale slug set
     // vs. disk. reserveSlug already prevents slug collisions.
     if (!isWithin(refDir, pagePath) || fs.existsSync(pagePath)) {
-      changes.skipped.push({ path: path.relative(refDir, pagePath), operationId: opId });
+      changes.skipped.push({ path: path.relative(refDir, pagePath), operationId: op.operationId });
       continue;
     }
     fs.mkdirSync(pageDir, { recursive: true });
 
-    const content = buildPageContent({ oasFilename, operationId: opId });
+    const content = buildPageContent({ oasFilename, operationId: op.operationId, isWebhook: op.isWebhook });
     fs.writeFileSync(pagePath, content);
 
     addToOrder(path.join(pageDir, '_order.yaml'), slug);
