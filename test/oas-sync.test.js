@@ -320,6 +320,76 @@ test('OAS 3.1 path-item $ref keeps sibling operations', () => {
   }
 });
 
+test('path-item $ref to a non-object keeps siblings and does not delete pages', () => {
+  const spec = {
+    openapi: '3.1.0',
+    info: { title: 'Pets', version: '1.0.0' },
+    paths: {
+      '/pets': {
+        $ref: '#/components/examples/notAPathItem',
+        post: { operationId: 'createPet', tags: ['pets'] },
+      },
+    },
+    components: {
+      examples: {
+        notAPathItem: ['not', 'an', 'object'],
+      },
+    },
+  };
+  const ops = extractOperations(spec);
+  assert.deepEqual([...ops.keys()], ['createPet']);
+  assert.equal(hasUnresolvedOperationRefs(spec), true);
+
+  const root = makeRepo({
+    'reference/pets.json': JSON.stringify(spec),
+    'reference/Pets/pets/createPet.md':
+      '---\napi:\n  file: pets.json\n  operationId: createPet\n---\n\nSIBLING BODY\n',
+  });
+  try {
+    const [result] = syncOas(root);
+    assert.deepEqual(result.changes.deleted, []);
+    assert.match(
+      fs.readFileSync(path.join(root, 'reference/Pets/pets/createPet.md'), 'utf-8'),
+      /SIBLING BODY/,
+    );
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('unresolved operation $ref does not invent a synthetic operationId page', () => {
+  const spec = {
+    openapi: '3.0.0',
+    info: { title: 'Pets' },
+    paths: {
+      '/pets': {
+        get: { $ref: './ops/list.yaml' },
+      },
+    },
+  };
+  const ops = extractOperations(spec);
+  assert.equal(ops.size, 0);
+  assert.equal(ops.has('get_pets'), false);
+  assert.equal(hasUnresolvedOperationRefs(spec), true);
+
+  const root = makeRepo({
+    'reference/pets.json': JSON.stringify(spec),
+    'reference/Pets/Other/listPets.md':
+      '---\napi:\n  file: pets.json\n  operationId: listPets\n---\n\nCUSTOM BODY\n',
+  });
+  try {
+    const [result] = syncOas(root);
+    assert.deepEqual(result.changes.deleted, []);
+    assert.deepEqual(result.changes.added, []);
+    assert.match(
+      fs.readFileSync(path.join(root, 'reference/Pets/Other/listPets.md'), 'utf-8'),
+      /CUSTOM BODY/,
+    );
+  } finally {
+    rmRepo(root);
+  }
+});
+
 test('OAS 3.1 path-item sibling overrides the referenced method', () => {
   const spec = {
     openapi: '3.1.0',

@@ -79,6 +79,10 @@ function resolvePointer(root, pointer) {
   return current;
 }
 
+function isPlainObject(value) {
+  return value != null && typeof value === 'object' && !Array.isArray(value);
+}
+
 function ownSiblings(obj) {
   const siblings = {};
   for (const [key, value] of Object.entries(obj)) {
@@ -93,9 +97,12 @@ function ownSiblings(obj) {
  *
  * OAS 3.1 Path Item Objects may keep sibling fields next to `$ref`; those
  * overlay the resolved target (local keys win) instead of being dropped.
+ * A `$ref` that lands on an array or scalar is a failed resolve — the
+ * original object is kept so siblings stay visible and `$ref` still
+ * trips the unresolved-delete guard.
  */
 function resolveRefObject(root, obj, seen = new Set()) {
-  if (!obj || typeof obj !== 'object' || typeof obj.$ref !== 'string') return obj;
+  if (!isPlainObject(obj) || typeof obj.$ref !== 'string') return obj;
   const ref = obj.$ref;
   const siblings = ownSiblings(obj);
   const hasSiblings = Object.keys(siblings).length > 0;
@@ -103,10 +110,10 @@ function resolveRefObject(root, obj, seen = new Set()) {
   if (!ref.startsWith('#/') || seen.has(ref)) return obj;
   seen.add(ref);
   const target = resolvePointer(root, ref);
-  if (target == null) return obj;
+  if (!isPlainObject(target)) return obj;
   const resolved = resolveRefObject(root, target, seen);
+  if (!isPlainObject(resolved)) return obj;
   if (!hasSiblings) return resolved;
-  if (!resolved || typeof resolved !== 'object' || Array.isArray(resolved)) return resolved;
   return { ...resolved, ...siblings };
 }
 
@@ -130,7 +137,7 @@ export function hasUnresolvedOperationRefs(spec) {
   for (const rawPathItem of Object.values(spec.paths || {})) {
     if (isUnresolvedRef(spec, rawPathItem)) return true;
     const pathItem = resolveRefObject(spec, rawPathItem);
-    if (!pathItem || typeof pathItem !== 'object') continue;
+    if (!isPlainObject(pathItem)) continue;
     for (const [method, rawOp] of Object.entries(pathItem)) {
       if (!HTTP_METHODS.has(method)) continue;
       if (isUnresolvedRef(spec, rawOp)) return true;
@@ -155,11 +162,16 @@ export function extractOperations(spec) {
   const paths = spec.paths || {};
 
   for (const [pathStr, rawPathItem] of Object.entries(paths)) {
-    const methods = resolveRefObject(spec, rawPathItem) || {};
+    const methods = resolveRefObject(spec, rawPathItem);
+    if (!isPlainObject(methods)) continue;
     for (const [method, rawOperation] of Object.entries(methods)) {
       if (!HTTP_METHODS.has(method)) continue;
 
-      const operation = resolveRefObject(spec, rawOperation) || {};
+      const operation = resolveRefObject(spec, rawOperation);
+      if (!isPlainObject(operation)) continue;
+      // Still a $ref stub with no operationId — don't invent get_pets and
+      // add a bogus empty page. The delete guard keeps existing pages.
+      if (typeof operation.$ref === 'string' && !operation.operationId) continue;
       const operationId = operation.operationId || generateOperationId(method, pathStr);
 
       ops.set(operationId, {
