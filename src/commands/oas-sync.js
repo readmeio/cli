@@ -44,76 +44,105 @@ export function findOasFiles(refDir) {
   return oasFiles;
 }
 
-function toOpRecord(operation) {
+/**
+ * Identity key for an operation record (or an existing page's frontmatter),
+ * used everywhere operations/pages are looked up by operationId. `paths` and
+ * `webhooks` are separate namespaces in an OAS document, but both can have
+ * operationId omitted, so their synthetic `<method>_<name>` ids can
+ * legitimately collide (e.g. `POST /orders` and webhook `POST orders` both
+ * synthesize to `post_orders`) — the isWebhook flag disambiguates them so
+ * neither silently overwrites the other in an operationId-only Map.
+ */
+export function operationKey({ operationId, isWebhook }) {
+  return `${isWebhook ? 'webhook' : 'path'}:${operationId}`;
+}
+
+function toOpRecord(operation, pathStr, isWebhook) {
   const tags = operation.getTags();
   return {
     operationId: operation.getOperationId(),
     summary: operation.getSummary() || null,
     description: operation.getDescription() || null,
     tag: tags[0]?.name || null,
+    path: pathStr,
+    isWebhook,
   };
 }
 
-/**
- * Walk the spec through `oas`: `$ref` resolution, operationId generation,
- * and summary/description/tag accessors. `getPaths()` drops OAS 3.1 siblings
- * that sit next to a path-item `$ref`, so those are overlaid from the
- * authored document. Unresolved `$ref`s (external files, cycles, broken
- * pointers) are reported so the delete pass can stay off.
- */
-function inspectSpec(spec) {
-  const api = new Oas(structuredClone(spec));
-  const paths = api.getPaths();
-  const ops = new Map();
+function collectFromOas(ops, groups, isWebhook) {
   let unresolved = false;
-
-  for (const methods of Object.values(paths)) {
+  for (const [pathStr, methods] of Object.entries(groups)) {
     for (const operation of Object.values(methods)) {
       // oas invents get_pets for an operation `$ref` it could not inline.
       if (isRef(operation.schema) && !operation.hasOperationId()) {
         unresolved = true;
         continue;
       }
-      const rec = toOpRecord(operation);
-      ops.set(rec.operationId, rec);
+      const rec = toOpRecord(operation, pathStr, isWebhook);
+      ops.set(operationKey(rec), rec);
     }
   }
+  return unresolved;
+}
 
-  for (const [pathStr, raw] of Object.entries(spec.paths || {})) {
+/**
+ * OAS 3.1 Path Item Objects may keep sibling methods next to `$ref`.
+ * `oas.getPaths()` / `getWebhooks()` replace the whole entry with the
+ * target and drop those siblings; overlay them from the authored document.
+ * Local keys win.
+ */
+function overlaySiblings(ops, resolved, entries, api, isWebhook) {
+  let unresolved = false;
+  for (const [pathStr, raw] of Object.entries(entries || {})) {
     if (!raw || typeof raw !== 'object') continue;
-
-    if (isRef(raw) && Object.keys(paths[pathStr] || {}).length === 0) {
+    if (isRef(raw) && Object.keys(resolved[pathStr] || {}).length === 0) {
       unresolved = true;
     }
-
-    // Path-item `$ref` plus adjacent methods (OAS 3.1). Local keys win.
-    if (isRef(raw)) {
-      for (const method of supportedMethods) {
-        const sibling = raw[method];
-        if (!sibling || typeof sibling !== 'object') continue;
-        if (isRef(sibling) && !sibling.operationId) {
-          unresolved = true;
-          continue;
-        }
-        const operation = new Operation(api, pathStr, method, sibling);
-        const rec = toOpRecord(operation);
-        const previous = paths[pathStr]?.[method];
-        if (previous) {
-          const previousId = previous.getOperationId();
-          if (previousId !== rec.operationId) ops.delete(previousId);
-        }
-        ops.set(rec.operationId, rec);
+    if (!isRef(raw)) continue;
+    for (const method of supportedMethods) {
+      const sibling = raw[method];
+      if (!sibling || typeof sibling !== 'object') continue;
+      if (isRef(sibling) && !sibling.operationId) {
+        unresolved = true;
+        continue;
       }
+      const operation = new Operation(api, pathStr, method, sibling);
+      const rec = toOpRecord(operation, pathStr, isWebhook);
+      const previous = resolved[pathStr]?.[method];
+      if (previous) {
+        const previousId = previous.getOperationId();
+        if (previousId !== rec.operationId) {
+          ops.delete(operationKey({ operationId: previousId, isWebhook }));
+        }
+      }
+      ops.set(operationKey(rec), rec);
     }
   }
+  return unresolved;
+}
 
+/**
+ * Walk the spec through `oas`: `$ref` resolution, operationId generation,
+ * and summary/description/tag accessors. Covers `paths` and OAS 3.1
+ * `webhooks`. Unresolved `$ref`s (external files, cycles, broken pointers)
+ * are reported so the delete pass can stay off.
+ */
+function inspectSpec(spec) {
+  const api = new Oas(structuredClone(spec));
+  const paths = api.getPaths();
+  const webhooks = api.getWebhooks();
+  const ops = new Map();
+  let unresolved = collectFromOas(ops, paths, false);
+  unresolved = collectFromOas(ops, webhooks, true) || unresolved;
+  unresolved = overlaySiblings(ops, paths, spec.paths, api, false) || unresolved;
+  unresolved = overlaySiblings(ops, webhooks, spec.webhooks, api, true) || unresolved;
   return { ops, unresolved };
 }
 
 /**
- * True when `paths` still has a `$ref` we could not inline. Used to skip the
- * delete pass — missing operations after a failed resolve are "we couldn't
- * see the spec", not "the operation was removed".
+ * True when `paths` / `webhooks` still has a `$ref` we could not inline. Used
+ * to skip the delete pass — missing operations after a failed resolve are
+ * "we couldn't see the spec", not "the operation was removed".
  */
 export function hasUnresolvedOperationRefs(spec) {
   return inspectSpec(spec).unresolved;
@@ -121,8 +150,9 @@ export function hasUnresolvedOperationRefs(spec) {
 
 /**
  * Extract operations from an OAS spec via `oas`.
- * Returns a Map of operationId -> { summary, description, tag, operationId }.
- * Operations without an operationId get the synthetic id `oas` would generate.
+ * Returns a Map keyed by `operationKey()` -> { summary, description, tag,
+ * path, operationId, isWebhook }. Operations without an operationId get the
+ * synthetic id `oas` would generate.
  */
 export function extractOperations(spec) {
   return inspectSpec(spec).ops;
@@ -225,21 +255,156 @@ function isWithin(baseDir, target) {
   );
 }
 
-function buildPageContent({ oasFilename, operationId }) {
+/**
+ * Render a frontmatter-only page. `matter.stringify` always appends a blank
+ * body after the closing fence (even for an empty body); the platform's own
+ * generated pages end immediately after the fence with no trailing newline,
+ * so trim it to match.
+ */
+function stringifyFrontmatter(frontmatter) {
+  return matter.stringify('', frontmatter).replace(/\n+$/, '');
+}
+
+function buildPageContent({ oasFilename, operationId, isWebhook }) {
   const frontmatter = {
     api: {
       file: oasFilename,
       operationId,
+      // Marks the page as a webhook (the API calling out to the client)
+      // rather than a path operation (the client calling the API), matching
+      // what the platform stamps on a page generated from `webhooks`.
+      ...(isWebhook ? { webhook: true } : {}),
     },
+    // Mirror the platform's OAS-upload behavior: a newly added endpoint is
+    // always written `hidden: false`, even when its tag and siblings are
+    // `hidden: true`. The backend does not infer this from a missing field, so
+    // it must be written explicitly.
+    //
+    // @todo Honor the `x-internal` OpenAPI extension for page visibility, to
+    // match gitto#2095 (RM-4616 / CX-3303): resolve `hidden` from operation-level
+    // `x-internal`, falling back to root-level, else false; and hide a tag's
+    // index page when all of its operations are `x-internal: true`. Deferred to
+    // keep oas:sync create-only — the resync-side rules (re-applying x-internal
+    // to existing pages, parent hide-ratchet) would require mutating existing
+    // pages, which this command intentionally never does.
+    hidden: false,
   };
 
-  return matter.stringify('', frontmatter);
+  return stringifyFrontmatter(frontmatter);
+}
+
+/**
+ * Build a category landing page (mirrors what the ReadMe platform generates on
+ * OAS upload): `title` is the tag name for a tagged group, or the raw path for
+ * an untagged path-derived group (see `operationGroup`); `excerpt`, when given,
+ * is the tag's description from the spec's top-level `tags` array.
+ */
+function buildTagIndexContent(title, description) {
+  const frontmatter = { title };
+  if (description) frontmatter.excerpt = description;
+  // As with operation pages, upload always stamps hidden: false on new pages.
+  frontmatter.hidden = false;
+
+  return stringifyFrontmatter(frontmatter);
+}
+
+/**
+ * The category-folder grouping for an operation. A tagged operation groups
+ * under its own tag, as before. An untagged operation groups under a folder
+ * derived from its path, with the raw path as the category page's title — one
+ * folder per unique path, not a single shared bucket. This mirrors the
+ * platform's own OAS-upload output: untagged operations are never lumped into
+ * one "Other" folder.
+ */
+function operationGroup(op) {
+  if (op.tag) return { folder: safeSegment(op.tag, 'Other').toLowerCase(), title: op.tag };
+  const folder = safeSegment(op.path.replace(/[/{}]/g, ''), 'operation').toLowerCase();
+  return { folder, title: op.path };
+}
+
+/**
+ * Collect every slug already used across the entire reference/ tree, as a
+ * lowercase-slug -> owner-count map. Reference page slugs share one flat
+ * namespace (docs/ is a separate namespace and is not consulted), so a
+ * generated operation slug must be unique against all of them. A page's slug
+ * is its filename without `.md`; a category page's slug (a folder containing
+ * `index.md`) is the folder name.
+ *
+ * A count, not a Set, because two existing pages or folders can already share
+ * a slug (hand-authored content, or content that predates this uniqueness
+ * logic) — a Set would collapse them to one entry, and releasing one owner
+ * (see `releaseSlug`) would incorrectly free the slug while the other owner
+ * still holds it.
+ */
+function collectReferenceSlugs(refDir) {
+  const counts = new Map();
+
+  function walk(dir) {
+    for (const entry of fs.readdirSync(dir)) {
+      const full = path.join(dir, entry);
+      let stat;
+      try {
+        stat = fs.statSync(full);
+      } catch {
+        continue;
+      }
+      if (stat.isDirectory()) {
+        walk(full);
+      } else if (entry.endsWith('.md')) {
+        // A folder's index.md contributes the folder name as a slug; any other
+        // page contributes its own filename.
+        const slug = entry === 'index.md' ? path.basename(dir) : path.basename(entry, '.md');
+        takeSlug(counts, slug);
+      }
+    }
+  }
+
+  walk(refDir);
+  return counts;
+}
+
+function isSlugTaken(takenSlugs, slug) {
+  return (takenSlugs.get(slug.toLowerCase()) || 0) > 0;
+}
+
+/** Record one more owner of `slug`. */
+function takeSlug(takenSlugs, slug) {
+  const key = slug.toLowerCase();
+  takenSlugs.set(key, (takenSlugs.get(key) || 0) + 1);
+}
+
+/** Record one fewer owner of `slug`; only fully frees it once every owner is gone. */
+function releaseSlug(takenSlugs, slug) {
+  const key = slug.toLowerCase();
+  const remaining = (takenSlugs.get(key) || 0) - 1;
+  if (remaining > 0) takenSlugs.set(key, remaining);
+  else takenSlugs.delete(key);
+}
+
+/**
+ * Reserve a unique reference slug. `index` is never usable by an operation (it's
+ * reserved for the tag category page), and any slug already present in the
+ * reference namespace gets a numeric suffix (`-1`, `-2`, ...) until it's free.
+ * The chosen slug gains an owner in `takenSlugs` so later operations see it.
+ */
+function reserveSlug(takenSlugs, base) {
+  let chosen = base;
+  if (base === 'index' || isSlugTaken(takenSlugs, base)) {
+    let n = 1;
+    while (isSlugTaken(takenSlugs, `${base}-${n}`)) n += 1;
+    chosen = `${base}-${n}`;
+  }
+  takeSlug(takenSlugs, chosen);
+  return chosen;
 }
 
 /**
  * Run the sync for a single OAS file. Returns changes for that file.
+ *
+ * `takenSlugs` is the reference-wide set of slugs already in use; it is read and
+ * mutated so slugs stay unique across every spec processed in one sync run.
  */
-function syncOneOas(refDir, oasFilename, spec) {
+function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
   const { ops: specOps, unresolved: skipDeletes } = inspectSpec(spec);
   const infoTitle = safeSegment(
     spec.info?.title || path.basename(oasFilename, path.extname(oasFilename)),
@@ -252,12 +417,23 @@ function syncOneOas(refDir, oasFilename, spec) {
 
   const pagesByOpId = new Map();
   for (const page of existingPages) {
-    pagesByOpId.set(page.data.api.operationId, page);
+    pagesByOpId.set(
+      operationKey({ operationId: page.data.api.operationId, isWebhook: !!page.data.api.webhook }),
+      page,
+    );
   }
 
   const changes = { added: [], deleted: [], skipped: [] };
   // File $refs (and broken internal pointers) mean we cannot see the real
   // operation set. Deleting "missing" pages would wipe valid reference docs.
+
+  // Tag descriptions from the spec's top-level `tags` array, used for the
+  // per-tag category landing page (index.md).
+  const tagDescriptions = new Map(
+    (Array.isArray(spec.tags) ? spec.tags : [])
+      .filter((t) => t && t.name)
+      .map((t) => [t.name, t.description || null]),
+  );
 
   // Deletes: pages referencing operations that no longer exist.
   for (const [opId, page] of pagesByOpId) {
@@ -266,37 +442,98 @@ function syncOneOas(refDir, oasFilename, spec) {
       fs.unlinkSync(page.filePath);
 
       const pageDir = path.dirname(page.filePath);
-      const slug = path.basename(page.filePath, '.md');
-      removeFromOrder(path.join(pageDir, '_order.yaml'), slug);
+      // A legacy operation page can be literally named index.md (predating
+      // the "index is reserved for the category page" convention). Two
+      // different things need two different values here: pageSlug is what a
+      // pre-refactor tool would have actually written into pageDir's own
+      // _order.yaml ("index", the filename) — that's what removeFromOrder
+      // must remove. referenceSlug is what the reference-wide slug map
+      // reserved for it (its folder name, like any index.md — see
+      // collectReferenceSlugs) — that's what releaseSlug must free.
+      const isIndexPage = path.basename(page.filePath) === 'index.md';
+      const pageSlug = path.basename(page.filePath, '.md');
+      const referenceSlug = isIndexPage ? path.basename(pageDir) : pageSlug;
+      removeFromOrder(path.join(pageDir, '_order.yaml'), pageSlug);
+      releaseSlug(takenSlugs, referenceSlug);
 
       changes.deleted.push(page.relativePath);
     }
   }
 
-  // Adds: operations with no page yet. Title/excerpt are owned by the OAS spec
-  // at render time, so generated pages carry only the api reference.
-  for (const [opId, op] of specOps) {
-    if (pagesByOpId.has(opId)) continue;
+  // Ensure every group (a tag, or a path-derived bucket for untagged
+  // operations) present in the spec has its category landing page (index.md)
+  // and is ordered — independent of whether its operation pages are new. Doing
+  // this as its own pass (rather than only when creating a new op page) backfills
+  // category pages for references first synced by a CLI version that didn't
+  // generate them, and recreates one that was deleted.
+  const groupsByFolder = new Map();
+  for (const op of specOps.values()) {
+    const { folder, title } = operationGroup(op);
+    if (!groupsByFolder.has(folder)) {
+      groupsByFolder.set(folder, { title, description: op.tag ? tagDescriptions.get(op.tag) : null });
+    }
+  }
 
-    const tag = safeSegment(op.tag || 'Other', 'Other');
-    const slug = safeSegment(opId, 'operation');
-    const pageDir = path.join(refDir, infoTitle, tag);
+  // Order groups the way the platform does: a tag keeps the position it's
+  // declared in the spec's own top-level `tags` array, not the order its
+  // operations happen to appear in `paths`. A group with no declared position
+  // (an untagged path-derived group, or a tag used by an operation but never
+  // listed in `tags`) keeps its natural encounter order, appended after every
+  // declared tag.
+  const declaredOrder = (Array.isArray(spec.tags) ? spec.tags : [])
+    .filter((t) => t && t.name)
+    .map((t) => safeSegment(t.name, 'Other').toLowerCase());
+  const orderedFolders = [
+    ...declaredOrder.filter((folder) => groupsByFolder.has(folder)),
+    ...[...groupsByFolder.keys()].filter((folder) => !declaredOrder.includes(folder)),
+  ];
+
+  for (const folder of orderedFolders) {
+    const { title, description } = groupsByFolder.get(folder);
+    const pageDir = path.join(refDir, infoTitle, folder);
+    if (!isWithin(refDir, pageDir)) continue;
+
+    const indexPath = path.join(pageDir, 'index.md');
+    if (!fs.existsSync(indexPath)) {
+      // Never overwrite an existing index.md — it may be a hand-written category.
+      fs.mkdirSync(pageDir, { recursive: true });
+      fs.writeFileSync(indexPath, buildTagIndexContent(title, description));
+      changes.added.push(path.relative(refDir, indexPath));
+      // The category page's slug is the folder name; reserve it so no operation
+      // takes it. Only when just-created — an existing index.md was already
+      // counted by collectReferenceSlugs's initial disk walk.
+      takeSlug(takenSlugs, folder);
+    }
+    addToOrder(path.join(refDir, infoTitle, '_order.yaml'), folder);
+    addToOrder(path.join(refDir, '_order.yaml'), infoTitle);
+  }
+
+  // Adds: operation pages with no page yet. Title/excerpt are owned by the OAS
+  // spec at render time, so generated pages carry only the api reference. Slugs
+  // are lowercased to match the platform's OAS-upload output.
+  for (const [key, op] of specOps) {
+    if (pagesByOpId.has(key)) continue;
+
+    const { folder } = operationGroup(op);
+    const pageDir = path.join(refDir, infoTitle, folder);
+    // Reference slugs share one flat namespace, so uniquify against every slug
+    // already in reference/ — a collision (or the reserved `index` slug) gets a
+    // numeric suffix rather than being skipped.
+    const slug = reserveSlug(takenSlugs, safeSegment(op.operationId, 'operation').toLowerCase());
     const pagePath = path.join(pageDir, `${slug}.md`);
 
-    // Never overwrite an existing file: it belongs to a manual page, another
-    // spec, or a different operation whose sanitized name collides with this
-    // one. Skipping (rather than clobbering) keeps repeated syncs stable.
+    // Guard against a spec-crafted name escaping reference/, or a stale slug set
+    // vs. disk. reserveSlug already prevents slug collisions.
     if (!isWithin(refDir, pagePath) || fs.existsSync(pagePath)) {
-      changes.skipped.push({ path: path.relative(refDir, pagePath), operationId: opId });
+      changes.skipped.push({ path: path.relative(refDir, pagePath), operationId: op.operationId });
       continue;
     }
     fs.mkdirSync(pageDir, { recursive: true });
 
-    const content = buildPageContent({ oasFilename, operationId: opId });
+    const content = buildPageContent({ oasFilename, operationId: op.operationId, isWebhook: op.isWebhook });
     fs.writeFileSync(pagePath, content);
 
     addToOrder(path.join(pageDir, '_order.yaml'), slug);
-    addToOrder(path.join(refDir, infoTitle, '_order.yaml'), tag);
 
     changes.added.push(path.relative(refDir, pagePath));
   }
@@ -324,11 +561,14 @@ export function syncOas(input) {
   const oasFiles = findOasFiles(refDir);
   if (oasFiles.length === 0) return null;
 
+  // Reference slugs share one flat namespace across every spec, so build the set
+  // of in-use slugs once and let each spec read/extend it.
+  const takenSlugs = collectReferenceSlugs(refDir);
   const allChanges = [];
 
   for (const { filename, spec } of oasFiles) {
     const ops = extractOperations(spec);
-    const changes = syncOneOas(refDir, filename, spec);
+    const changes = syncOneOas(refDir, filename, spec, takenSlugs);
     allChanges.push({ filename, spec, opCount: ops.size, changes });
   }
 
