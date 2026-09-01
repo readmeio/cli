@@ -5353,6 +5353,20 @@ export const __test__ = {
   downloadOasSpecs,
   htmlScrapeCoverage,
   orphansDwarfHtmlScrape,
+  injectSectionLandingPages,
+  parseMetaRefreshTarget,
+  parseHtmlCanonical,
+  isDiscoverableLink,
+  isAuthChromeUrl,
+  isDocsUnderApiPath,
+  filterUrlPagesTree,
+  stageOrganized,
+  urlIsApiReference,
+  urlIsChangelog,
+  reclassifyReferencePages,
+  extractChangelogFromSections,
+  decodeEntities,
+  stripTags,
 }
 
 function formatDuration(ms) {
