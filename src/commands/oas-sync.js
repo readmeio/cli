@@ -2,6 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import matter from 'gray-matter';
+import Oas from 'oas';
+import { Operation } from 'oas/operation';
+import { isRef } from 'oas/types';
+import { supportedMethods } from 'oas/utils';
 import * as styles from '../utils/styles.js';
 
 const require = createRequire(import.meta.url);
@@ -11,8 +15,6 @@ export const command = 'oas:sync';
 export const order = 2;
 export const category = 'OAS Tooling';
 export const description = 'Sync reference pages with OpenAPI specs';
-
-const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'options', 'head', 'trace']);
 
 
 /**
@@ -42,90 +44,70 @@ export function findOasFiles(refDir) {
   return oasFiles;
 }
 
-/**
- * Generate a synthetic operationId from the HTTP method and path.
- * Matches the algorithm used by the `oas` package for specs without operationIds.
- */
-function generateOperationId(method, pathStr) {
-  const sanitized = pathStr
-    .replace(/[^a-zA-Z0-9]/g, '-')
-    .replace(/--+/g, '-')
-    .replace(/^-|-$/g, '')
-    .toLowerCase();
-  return `${method.toLowerCase()}_${sanitized}`;
+function toOpRecord(operation) {
+  const tags = operation.getTags();
+  return {
+    operationId: operation.getOperationId(),
+    summary: operation.getSummary() || null,
+    description: operation.getDescription() || null,
+    tag: tags[0]?.name || null,
+  };
 }
 
 /**
- * JSON Pointer (`#/components/pathItems/Pets`, `#/paths/~1pets`) used by
- * OAS path-item and operation `$ref`s. `~1` / `~0` are the spec's escapes
- * for `/` and `~`.
+ * Walk the spec through `oas`: `$ref` resolution, operationId generation,
+ * and summary/description/tag accessors. `getPaths()` drops OAS 3.1 siblings
+ * that sit next to a path-item `$ref`, so those are overlaid from the
+ * authored document. Unresolved `$ref`s (external files, cycles, broken
+ * pointers) are reported so the delete pass can stay off.
  */
-function decodeJsonPointerToken(token) {
-  return token.replace(/~1/g, '/').replace(/~0/g, '~');
-}
+function inspectSpec(spec) {
+  const api = new Oas(structuredClone(spec));
+  const paths = api.getPaths();
+  const ops = new Map();
+  let unresolved = false;
 
-function resolvePointer(root, pointer) {
-  if (pointer === '#' || pointer === '') return root;
-  if (typeof pointer !== 'string' || !pointer.startsWith('#/')) return undefined;
-  const parts = pointer.slice(2).split('/').map(decodeJsonPointerToken);
-  let current = root;
-  for (const part of parts) {
-    if (current == null || typeof current !== 'object') return undefined;
-    // Own keys only — `in` would treat `__proto__` / `constructor` as hits
-    // and walk off the document into Object.prototype.
-    if (!Object.hasOwn(current, part)) return undefined;
-    current = current[part];
+  for (const methods of Object.values(paths)) {
+    for (const operation of Object.values(methods)) {
+      // oas invents get_pets for an operation `$ref` it could not inline.
+      if (isRef(operation.schema) && !operation.hasOperationId()) {
+        unresolved = true;
+        continue;
+      }
+      const rec = toOpRecord(operation);
+      ops.set(rec.operationId, rec);
+    }
   }
-  return current;
-}
 
-function isPlainObject(value) {
-  return value != null && typeof value === 'object' && !Array.isArray(value);
-}
+  for (const [pathStr, raw] of Object.entries(spec.paths || {})) {
+    if (!raw || typeof raw !== 'object') continue;
 
-function ownSiblings(obj) {
-  const siblings = {};
-  for (const [key, value] of Object.entries(obj)) {
-    if (key !== '$ref') siblings[key] = value;
+    if (isRef(raw) && Object.keys(paths[pathStr] || {}).length === 0) {
+      unresolved = true;
+    }
+
+    // Path-item `$ref` plus adjacent methods (OAS 3.1). Local keys win.
+    if (isRef(raw)) {
+      for (const method of supportedMethods) {
+        const sibling = raw[method];
+        if (!sibling || typeof sibling !== 'object') continue;
+        if (isRef(sibling) && !sibling.operationId) {
+          unresolved = true;
+          continue;
+        }
+        const operation = new Operation(api, pathStr, method, sibling);
+        const rec = toOpRecord(operation);
+        const previous = paths[pathStr]?.[method];
+        if (previous) {
+          const previousId = previous.getOperationId();
+          if (previousId !== rec.operationId) ops.delete(previousId);
+        }
+        ops.set(rec.operationId, rec);
+      }
+    }
   }
-  return siblings;
-}
 
-/**
- * Follow an internal `#/…` `$ref` (and chains of them). External/file refs
- * (`./paths/pets.yaml`) are left as-is so callers can treat them as unresolved.
- *
- * OAS 3.1 Path Item Objects may keep sibling fields next to `$ref`; those
- * overlay the resolved target (local keys win) instead of being dropped.
- * A `$ref` that lands on an array or scalar is a failed resolve — the
- * original object is kept so siblings stay visible and `$ref` still
- * trips the unresolved-delete guard.
- */
-function resolveRefObject(root, obj, seen = new Set()) {
-  if (!isPlainObject(obj) || typeof obj.$ref !== 'string') return obj;
-  const ref = obj.$ref;
-  const siblings = ownSiblings(obj);
-  const hasSiblings = Object.keys(siblings).length > 0;
-
-  if (!ref.startsWith('#/') || seen.has(ref)) return obj;
-  seen.add(ref);
-  const target = resolvePointer(root, ref);
-  if (!isPlainObject(target)) return obj;
-  const resolved = resolveRefObject(root, target, seen);
-  if (!isPlainObject(resolved)) return obj;
-  if (!hasSiblings) return resolved;
-  return { ...resolved, ...siblings };
-}
-
-/**
- * True when following `$ref` (including chained pointers) still lands on a
- * `$ref` — external file, cycle, broken pointer, or `#/__proto__`-style miss.
- * A single hop that lands on `{ $ref: './other.yaml' }` is unresolved.
- */
-function isUnresolvedRef(root, obj) {
-  if (!obj || typeof obj !== 'object' || typeof obj.$ref !== 'string') return false;
-  const resolved = resolveRefObject(root, obj);
-  return !!(resolved && typeof resolved === 'object' && typeof resolved.$ref === 'string');
+  return { ops, unresolved };
 }
 
 /**
@@ -134,56 +116,16 @@ function isUnresolvedRef(root, obj) {
  * see the spec", not "the operation was removed".
  */
 export function hasUnresolvedOperationRefs(spec) {
-  for (const rawPathItem of Object.values(spec.paths || {})) {
-    if (isUnresolvedRef(spec, rawPathItem)) return true;
-    const pathItem = resolveRefObject(spec, rawPathItem);
-    if (!isPlainObject(pathItem)) continue;
-    for (const [method, rawOp] of Object.entries(pathItem)) {
-      if (!HTTP_METHODS.has(method)) continue;
-      if (isUnresolvedRef(spec, rawOp)) return true;
-    }
-  }
-  return false;
+  return inspectSpec(spec).unresolved;
 }
 
 /**
- * Extract operations from an OAS spec.
+ * Extract operations from an OAS spec via `oas`.
  * Returns a Map of operationId -> { summary, description, tag, operationId }.
- * For operations without an operationId, a synthetic one is generated from the method and path.
- *
- * Path-item and operation `$ref`s that point inside the same document
- * (`#/components/pathItems/…`, `#/paths/~1pets`) are resolved first. OAS 3.1
- * `components.pathItems` is the documented way to reuse a path; walking the
- * raw `$ref` stub would report zero operations and `oas:sync` / `lint --fix`
- * would delete every matching reference page.
+ * Operations without an operationId get the synthetic id `oas` would generate.
  */
 export function extractOperations(spec) {
-  const ops = new Map();
-  const paths = spec.paths || {};
-
-  for (const [pathStr, rawPathItem] of Object.entries(paths)) {
-    const methods = resolveRefObject(spec, rawPathItem);
-    if (!isPlainObject(methods)) continue;
-    for (const [method, rawOperation] of Object.entries(methods)) {
-      if (!HTTP_METHODS.has(method)) continue;
-
-      const operation = resolveRefObject(spec, rawOperation);
-      if (!isPlainObject(operation)) continue;
-      // Still a $ref stub with no operationId — don't invent get_pets and
-      // add a bogus empty page. The delete guard keeps existing pages.
-      if (typeof operation.$ref === 'string' && !operation.operationId) continue;
-      const operationId = operation.operationId || generateOperationId(method, pathStr);
-
-      ops.set(operationId, {
-        operationId,
-        summary: operation.summary || null,
-        description: operation.description || null,
-        tag: (operation.tags && operation.tags[0]) || null,
-      });
-    }
-  }
-
-  return ops;
+  return inspectSpec(spec).ops;
 }
 
 /**
@@ -298,7 +240,7 @@ function buildPageContent({ oasFilename, operationId }) {
  * Run the sync for a single OAS file. Returns changes for that file.
  */
 function syncOneOas(refDir, oasFilename, spec) {
-  const specOps = extractOperations(spec);
+  const { ops: specOps, unresolved: skipDeletes } = inspectSpec(spec);
   const infoTitle = safeSegment(
     spec.info?.title || path.basename(oasFilename, path.extname(oasFilename)),
     'api',
@@ -316,7 +258,6 @@ function syncOneOas(refDir, oasFilename, spec) {
   const changes = { added: [], deleted: [], skipped: [] };
   // File $refs (and broken internal pointers) mean we cannot see the real
   // operation set. Deleting "missing" pages would wipe valid reference docs.
-  const skipDeletes = hasUnresolvedOperationRefs(spec);
 
   // Deletes: pages referencing operations that no longer exist.
   for (const [opId, page] of pagesByOpId) {
