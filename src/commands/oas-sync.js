@@ -74,7 +74,9 @@ function collectFromOas(ops, groups, isWebhook) {
   for (const [pathStr, methods] of Object.entries(groups)) {
     for (const operation of Object.values(methods)) {
       // oas invents get_pets for an operation `$ref` it could not inline.
-      if (isRef(operation.schema) && !operation.hasOperationId()) {
+      // An operationId on the Reference Object is not proof it resolved —
+      // the pointer may still be external, cyclic, or broken.
+      if (isRef(operation.schema)) {
         unresolved = true;
         continue;
       }
@@ -102,7 +104,11 @@ function overlaySiblings(ops, resolved, entries, api, isWebhook) {
     for (const method of supportedMethods) {
       const sibling = raw[method];
       if (!sibling || typeof sibling !== 'object') continue;
-      if (isRef(sibling) && !sibling.operationId) {
+      // A sibling `$ref` is still a Reference Object. operationId next to
+      // it (OAS 3.1 sibling keywords) must not replace a resolved method
+      // or keep the delete pass on — that wipes the real page and invents
+      // a stub for the unresolved pointer.
+      if (isRef(sibling)) {
         unresolved = true;
         continue;
       }

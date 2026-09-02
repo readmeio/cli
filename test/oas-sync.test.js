@@ -570,6 +570,42 @@ test('path-item $ref to a non-object keeps siblings and does not delete pages', 
   }
 });
 
+test('unresolved operation $ref with operationId does not invent a stub page', () => {
+  const spec = {
+    openapi: '3.0.0',
+    info: { title: 'Pets' },
+    paths: {
+      '/pets': {
+        get: { $ref: './ops/list.yaml', operationId: 'listPets' },
+      },
+    },
+  };
+  const ops = extractOperations(spec);
+  assert.equal(ops.size, 0);
+  assert.equal(ops.has('path:listPets'), false);
+  assert.equal(hasUnresolvedOperationRefs(spec), true);
+
+  const root = makeRepo({
+    'reference/pets.json': JSON.stringify(spec),
+    'reference/Pets/Other/listPets.md':
+      '---\napi:\n  file: pets.json\n  operationId: listPets\n---\n\nCUSTOM BODY\n',
+  });
+  try {
+    const [result] = syncOas(root);
+    assert.deepEqual(result.changes.deleted, []);
+    assert.deepEqual(
+      result.changes.added.filter((p) => !p.endsWith('index.md')),
+      [],
+    );
+    assert.match(
+      fs.readFileSync(path.join(root, 'reference/Pets/Other/listPets.md'), 'utf-8'),
+      /CUSTOM BODY/,
+    );
+  } finally {
+    rmRepo(root);
+  }
+});
+
 test('unresolved operation $ref does not invent a synthetic operationId page', () => {
   const spec = {
     openapi: '3.0.0',
@@ -624,6 +660,59 @@ test('OAS 3.1 path-item sibling overrides the referenced method', () => {
   const ops = extractOperations(spec);
   assert.equal(ops.has('path:listPetsV2'), true);
   assert.equal(ops.has('path:listPets'), false);
+});
+
+test('unresolved sibling operation $ref with operationId does not replace the resolved method or delete its page', () => {
+  // OAS 3.1 allows sibling keywords on a Reference Object. The sibling GET
+  // is still an external $ref — operationId is not proof it resolved.
+  const spec = {
+    openapi: '3.1.0',
+    info: { title: 'Pets', version: '1.0.0' },
+    paths: {
+      '/pets': {
+        $ref: '#/components/pathItems/Pets',
+        get: { $ref: './ops/get.yaml', operationId: 'localId', tags: ['pets'] },
+      },
+    },
+    components: {
+      pathItems: {
+        Pets: {
+          get: { operationId: 'listPets', summary: 'List pets', tags: ['pets'] },
+        },
+      },
+    },
+  };
+  const ops = extractOperations(spec);
+  assert.equal(ops.has('path:listPets'), true, 'resolved method from the path-item $ref must stay');
+  assert.equal(ops.has('path:localId'), false, 'must not invent a stub for the unresolved sibling $ref');
+  assert.equal(hasUnresolvedOperationRefs(spec), true);
+
+  const root = makeRepo({
+    'reference/pets.json': JSON.stringify(spec),
+    'reference/Pets/pets/listPets.md':
+      '---\napi:\n  file: pets.json\n  operationId: listPets\n---\n\nCUSTOM BODY\n',
+    'reference/Pets/pets/localId.md':
+      '---\napi:\n  file: pets.json\n  operationId: localId\n---\n\nSIBLING BODY\n',
+  });
+  try {
+    const [result] = syncOas(root);
+    assert.deepEqual(result.changes.deleted, []);
+    assert.equal(
+      result.changes.added.some((p) => p.toLowerCase().includes('localid')),
+      false,
+      `must not create a stub page: ${JSON.stringify(result.changes.added)}`,
+    );
+    assert.match(
+      fs.readFileSync(path.join(root, 'reference/Pets/pets/listPets.md'), 'utf-8'),
+      /CUSTOM BODY/,
+    );
+    assert.match(
+      fs.readFileSync(path.join(root, 'reference/Pets/pets/localId.md'), 'utf-8'),
+      /SIBLING BODY/,
+    );
+  } finally {
+    rmRepo(root);
+  }
 });
 
 test('sync does not delete pages when a path $ref points at an external file', () => {
