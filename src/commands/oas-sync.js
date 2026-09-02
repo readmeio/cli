@@ -2,6 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import matter from 'gray-matter';
+import Oas from 'oas';
+import { Operation } from 'oas/operation';
+import { isRef } from 'oas/types';
+import { supportedMethods } from 'oas/utils';
 import * as styles from '../utils/styles.js';
 
 const require = createRequire(import.meta.url);
@@ -11,8 +15,6 @@ export const command = 'oas:sync';
 export const order = 2;
 export const category = 'OAS Tooling';
 export const description = 'Sync reference pages with OpenAPI specs';
-
-const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'options', 'head', 'trace']);
 
 
 /**
@@ -43,19 +45,6 @@ export function findOasFiles(refDir) {
 }
 
 /**
- * Generate a synthetic operationId from the HTTP method and path.
- * Matches the algorithm used by the `oas` package for specs without operationIds.
- */
-function generateOperationId(method, pathStr) {
-  const sanitized = pathStr
-    .replace(/[^a-zA-Z0-9]/g, '-')
-    .replace(/--+/g, '-')
-    .replace(/^-|-$/g, '')
-    .toLowerCase();
-  return `${method.toLowerCase()}_${sanitized}`;
-}
-
-/**
  * Identity key for an operation record (or an existing page's frontmatter),
  * used everywhere operations/pages are looked up by operationId. `paths` and
  * `webhooks` are separate namespaces in an OAS document, but both can have
@@ -68,93 +57,111 @@ export function operationKey({ operationId, isWebhook }) {
   return `${isWebhook ? 'webhook' : 'path'}:${operationId}`;
 }
 
-/**
- * Resolve a `paths`/`webhooks` entry that's a Reference Object (OAS 3.1,
- * `{ $ref: '#/components/pathItems/Name' }`) against the spec's own
- * `components.pathItems`, following chained refs (a pathItem that is itself
- * a $ref to another) until a literal Path Item is reached. Only same-document
- * refs in that exact form are supported; anything else (external files,
- * other pointer shapes, an unresolvable name, or a cycle) is left unresolved
- * and quietly skipped by the caller, same as before this existed.
- */
-function resolveLocalPathItemRef(entry, spec) {
-  const seen = new Set();
-  let current = entry;
-  // Sibling fields (e.g. an inline operation) alongside a $ref are explicitly
-  // allowed in an OAS 3.1 Path Item Object — accumulate them from every hop
-  // in the chain so they aren't discarded once $ref is followed. A field
-  // declared at an outer/earlier hop wins over the same field found deeper
-  // in the chain (OAS itself leaves this "undefined" when both define it).
-  let overrides = {};
-  const finish = () => ({ ...current, ...overrides });
+function toOpRecord(operation, pathStr, isWebhook) {
+  const tags = operation.getTags();
+  return {
+    operationId: operation.getOperationId(),
+    summary: operation.getSummary() || null,
+    description: operation.getDescription() || null,
+    tag: tags[0]?.name || null,
+    path: pathStr,
+    isWebhook,
+  };
+}
 
-  while (current && typeof current.$ref === 'string') {
-    const { $ref, ...siblings } = current;
-    overrides = { ...siblings, ...overrides };
-
-    if (seen.has(current.$ref)) return finish();
-    seen.add(current.$ref);
-
-    const match = current.$ref.match(/^#\/components\/pathItems\/(.+)$/);
-    if (!match) return finish();
-
-    let name;
-    try {
-      name = decodeURIComponent(match[1]).replace(/~1/g, '/').replace(/~0/g, '~');
-    } catch {
-      // Malformed percent-escape — leave unresolved rather than throwing and
-      // aborting the whole sync/lint run over one bad $ref.
-      return finish();
+function collectFromOas(ops, groups, isWebhook) {
+  let unresolved = false;
+  for (const [pathStr, methods] of Object.entries(groups)) {
+    for (const operation of Object.values(methods)) {
+      // oas invents get_pets for an operation `$ref` it could not inline.
+      // An operationId on the Reference Object is not proof it resolved —
+      // the pointer may still be external, cyclic, or broken.
+      if (isRef(operation.schema)) {
+        unresolved = true;
+        continue;
+      }
+      const rec = toOpRecord(operation, pathStr, isWebhook);
+      ops.set(operationKey(rec), rec);
     }
-    const resolved = spec.components?.pathItems?.[name];
-    if (!resolved) return finish();
-
-    current = resolved;
   }
-
-  return finish();
+  return unresolved;
 }
 
 /**
- * Extract operations from an OAS spec's `paths`, plus its OAS 3.1 `webhooks`
- * (callouts the API itself makes to a client-registered URL, not endpoints the
- * API exposes — a separate top-level sibling of `paths` with the same
- * Operation Object shape). The platform pages a webhook the same way it pages
- * a path operation: a synthetic `post_<name>` operationId when none is given,
- * grouped by its own tag or, absent one, its own category keyed by its raw
- * name — never merged with `paths` operations of the same name.
- * Returns a Map keyed by `operationKey()` -> { summary, description, tag,
- * path, operationId, isWebhook }. For operations without an operationId, a
- * synthetic one is generated from the method and path (or webhook name).
+ * OAS 3.1 Path Item Objects may keep sibling methods next to `$ref`.
+ * `oas.getPaths()` / `getWebhooks()` replace the whole entry with the
+ * target and drop those siblings; overlay them from the authored document.
+ * Local keys win.
  */
-export function extractOperations(spec) {
-  const ops = new Map();
-
-  function collect(entries, isWebhook) {
-    for (const [pathStr, rawItem] of Object.entries(entries)) {
-      const methods = resolveLocalPathItemRef(rawItem, spec);
-
-      for (const [method, operation] of Object.entries(methods)) {
-        if (!HTTP_METHODS.has(method)) continue;
-
-        const operationId = operation.operationId || generateOperationId(method, pathStr);
-
-        ops.set(operationKey({ operationId, isWebhook }), {
-          operationId,
-          summary: operation.summary || null,
-          description: operation.description || null,
-          tag: (operation.tags && operation.tags[0]) || null,
-          path: pathStr,
-          isWebhook,
-        });
+function overlaySiblings(ops, resolved, entries, api, isWebhook) {
+  let unresolved = false;
+  for (const [pathStr, raw] of Object.entries(entries || {})) {
+    if (!raw || typeof raw !== 'object') continue;
+    if (isRef(raw) && Object.keys(resolved[pathStr] || {}).length === 0) {
+      unresolved = true;
+    }
+    if (!isRef(raw)) continue;
+    for (const method of supportedMethods) {
+      const sibling = raw[method];
+      if (!sibling || typeof sibling !== 'object') continue;
+      // A sibling `$ref` is still a Reference Object. operationId next to
+      // it (OAS 3.1 sibling keywords) must not replace a resolved method
+      // or keep the delete pass on — that wipes the real page and invents
+      // a stub for the unresolved pointer.
+      if (isRef(sibling)) {
+        unresolved = true;
+        continue;
       }
+      const operation = new Operation(api, pathStr, method, sibling);
+      const rec = toOpRecord(operation, pathStr, isWebhook);
+      const previous = resolved[pathStr]?.[method];
+      if (previous) {
+        const previousId = previous.getOperationId();
+        if (previousId !== rec.operationId) {
+          ops.delete(operationKey({ operationId: previousId, isWebhook }));
+        }
+      }
+      ops.set(operationKey(rec), rec);
     }
   }
+  return unresolved;
+}
 
-  collect(spec.paths || {}, false);
-  collect(spec.webhooks || {}, true);
+/**
+ * Walk the spec through `oas`: `$ref` resolution, operationId generation,
+ * and summary/description/tag accessors. Covers `paths` and OAS 3.1
+ * `webhooks`. Unresolved `$ref`s (external files, cycles, broken pointers)
+ * are reported so the delete pass can stay off.
+ */
+function inspectSpec(spec) {
+  const api = new Oas(structuredClone(spec));
+  const paths = api.getPaths();
+  const webhooks = api.getWebhooks();
+  const ops = new Map();
+  let unresolved = collectFromOas(ops, paths, false);
+  unresolved = collectFromOas(ops, webhooks, true) || unresolved;
+  unresolved = overlaySiblings(ops, paths, spec.paths, api, false) || unresolved;
+  unresolved = overlaySiblings(ops, webhooks, spec.webhooks, api, true) || unresolved;
+  return { ops, unresolved };
+}
 
-  return ops;
+/**
+ * True when `paths` / `webhooks` still has a `$ref` we could not inline. Used
+ * to skip the delete pass — missing operations after a failed resolve are
+ * "we couldn't see the spec", not "the operation was removed".
+ */
+export function hasUnresolvedOperationRefs(spec) {
+  return inspectSpec(spec).unresolved;
+}
+
+/**
+ * Extract operations from an OAS spec via `oas`.
+ * Returns a Map keyed by `operationKey()` -> { summary, description, tag,
+ * path, operationId, isWebhook }. Operations without an operationId get the
+ * synthetic id `oas` would generate.
+ */
+export function extractOperations(spec) {
+  return inspectSpec(spec).ops;
 }
 
 /**
@@ -404,7 +411,7 @@ function reserveSlug(takenSlugs, base) {
  * mutated so slugs stay unique across every spec processed in one sync run.
  */
 function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
-  const specOps = extractOperations(spec);
+  const { ops: specOps, unresolved: skipDeletes } = inspectSpec(spec);
   const infoTitle = safeSegment(
     spec.info?.title || path.basename(oasFilename, path.extname(oasFilename)),
     'api',
@@ -423,6 +430,8 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
   }
 
   const changes = { added: [], deleted: [], skipped: [] };
+  // File $refs (and broken internal pointers) mean we cannot see the real
+  // operation set. Deleting "missing" pages would wipe valid reference docs.
 
   // Tag descriptions from the spec's top-level `tags` array, used for the
   // per-tag category landing page (index.md).
@@ -435,6 +444,7 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
   // Deletes: pages referencing operations that no longer exist.
   for (const [opId, page] of pagesByOpId) {
     if (!specOps.has(opId)) {
+      if (skipDeletes) continue;
       fs.unlinkSync(page.filePath);
 
       const pageDir = path.dirname(page.filePath);

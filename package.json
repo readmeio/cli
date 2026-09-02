@@ -51,6 +51,7 @@
     "gray-matter": "^4.0.3",
     "log-update": "^8.0.0",
     "next": "^15.0.0",
+    "oas": "^38.5.0",
     "oas-normalize": "^15.7.1",
     "ora": "^9.3.0",
     "react": "^18.3.1",
