@@ -49606,6 +49606,13 @@ async function run(_options, _cmd, ctx) {
 
   if (!external_node_fs_namespaceObject.existsSync(refDir)) {
     error('No reference/ directory found.');
+    writeGithubActionsOutputs({
+      'added-count': '0',
+      'deleted-count': '0',
+      'skipped-count': '0',
+      skipped: [],
+      'has-errors': 'true',
+    });
     process.exit(1);
   }
 
@@ -65348,6 +65355,13 @@ async function oas_validate_run(options, _cmd, ctx) {
 
   if (!external_node_fs_namespaceObject.existsSync(refDir)) {
     error('No reference/ directory found.');
+    writeGithubActionsOutputs({
+      'has-errors': 'true',
+      'total-errors': '0',
+      'total-warnings': '0',
+      'total-valid': '0',
+      'file-count': '0',
+    });
     process.exit(1);
   }
 

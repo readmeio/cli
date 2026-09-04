@@ -12,9 +12,13 @@ inputs:
       https://github.com/readmeio/cli for the full command list.
     required: true
 outputs:
-  # Which of these are set depends on which `readme` command ran.
+  # Which of these are set depends on which `readme` command ran. All three
+  # commands write their outputs before exiting on every failure path,
+  # including a missing reference/ directory (oas:validate/oas:sync) — so a
+  # downstream step with `if: always()` can rely on has-errors being set,
+  # not just empty, whenever the command actually ran at all.
   has-errors:
-    description: '"true" or "false" — set by all three commands'
+    description: '"true" or "false" — set by all three commands, on every exit path'
   results:
     description: JSON array of lint issues, each { file, rule, message, severity } (lint only)
   total-errors:

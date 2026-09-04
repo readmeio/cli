@@ -183,6 +183,13 @@ export async function run(options, _cmd, ctx) {
 
   if (!fs.existsSync(refDir)) {
     styles.error('No reference/ directory found.');
+    writeGithubActionsOutputs({
+      'has-errors': 'true',
+      'total-errors': '0',
+      'total-warnings': '0',
+      'total-valid': '0',
+      'file-count': '0',
+    });
     process.exit(1);
   }
 
