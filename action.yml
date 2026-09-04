@@ -12,8 +12,27 @@ inputs:
       https://github.com/readmeio/cli for the full command list.
     required: true
 outputs:
-  readme:
-    description: The @readme/cli command's console output, captured as a single string
+  # Which of these are set depends on which `readme` command ran.
+  has-errors:
+    description: '"true" or "false" — set by lint and oas:validate'
+  results:
+    description: JSON array of lint issues, each { file, rule, message, severity } (lint only)
+  total-errors:
+    description: Total OAS validation errors across all spec files (oas:validate only)
+  total-warnings:
+    description: Total OAS validation warnings across all spec files (oas:validate only)
+  total-valid:
+    description: Number of spec files with no errors (oas:validate only)
+  file-count:
+    description: Number of spec files checked (oas:validate only)
+  added-count:
+    description: Reference pages added (oas:sync only)
+  deleted-count:
+    description: Reference pages deleted (oas:sync only)
+  skipped-count:
+    description: Reference pages skipped because the destination filename already exists (oas:sync only)
+  skipped:
+    description: JSON array of skipped pages, each { filename, path, operationId } (oas:sync only)
 runs:
   using: node24
   pre: src/gha-pre.js

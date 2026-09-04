@@ -10,9 +10,12 @@
 // "oas:validate --dereference". Split into a command name and flags; there's
 // no need for a full argument parser since each of these three commands only
 // ever takes simple boolean flags.
+//
+// Each command's own run() already writes its structured results (has-errors,
+// skipped-count, etc.) to GITHUB_OUTPUT itself, via utils/gha-output.js's
+// GITHUB_ACTIONS-detecting helper — so this file just needs to call run() and
+// let it do what it already does, exit code included.
 
-import { randomUUID } from 'node:crypto';
-import fs from 'node:fs';
 import * as lint from './commands/lint.js';
 import * as oasValidate from './commands/oas-validate.js';
 import * as oasSync from './commands/oas-sync.js';
@@ -37,45 +40,6 @@ function parseInput(input) {
   return { command, flags };
 }
 
-// Mirrors every console.log/error a command makes into a buffer (while still
-// printing it normally, so the raw Action log is unaffected) so it can be
-// exposed as this step's `readme` output — e.g. so a later step can check
-// `contains(steps.sync.outputs.readme, 'Skipped')` the way the old
-// `npx ... | tee sync-output.txt` + grep pattern used to.
-function captureConsoleOutput() {
-  const lines = [];
-  const originals = { log: console.log, error: console.error };
-
-  for (const method of ['log', 'error']) {
-    console[method] = (...args) => {
-      lines.push(args.map(String).join(' '));
-      originals[method](...args);
-    };
-  }
-
-  return {
-    text: () => lines.join('\n'),
-    restore: () => Object.assign(console, originals),
-  };
-}
-
-// Commands call process.exit() directly on failure, which would otherwise
-// skip past any output-writing code that runs after `await entry.run(...)`
-// below — so writing the output has to happen here, in a temporary
-// process.exit override, rather than only after that await resolves.
-function writeGithubOutput(name, value) {
-  const outputPath = process.env.GITHUB_OUTPUT;
-  if (!outputPath) return; // no-op outside a real Actions runner (e.g. local testing)
-
-  // A random delimiter (rather than a fixed one like "EOF") matters here:
-  // `value` is arbitrary CLI output, which can echo back content from a
-  // customer's own docs/OAS files. A fixed, guessable delimiter could let
-  // that content prematurely close the heredoc and inject bogus key=value
-  // pairs into the outputs file.
-  const delimiter = `ghadelimiter_${randomUUID()}`;
-  fs.appendFileSync(outputPath, `${name}<<${delimiter}\n${value}\n${delimiter}\n`);
-}
-
 export async function run() {
   const input = process.env.INPUT_README || '';
   const { command, flags } = parseInput(input);
@@ -96,21 +60,7 @@ export async function run() {
   // action runs — not this action's own (separately checked-out) source.
   const gitRoot = process.env.GITHUB_WORKSPACE || process.cwd();
 
-  const capture = captureConsoleOutput();
-  const realExit = process.exit.bind(process);
-  process.exit = (code) => {
-    capture.restore();
-    writeGithubOutput('readme', capture.text());
-    realExit(code);
-  };
-
-  try {
-    await entry.run(options, null, { gitRoot });
-  } finally {
-    capture.restore();
-    writeGithubOutput('readme', capture.text());
-    process.exit = realExit;
-  }
+  await entry.run(options, null, { gitRoot });
 }
 
 run().catch((err) => {

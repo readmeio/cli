@@ -48137,8 +48137,6 @@ __nccwpck_require__.d(recipes_namespaceObject, {
   validate: () => (recipes_validate)
 });
 
-;// CONCATENATED MODULE: external "node:crypto"
-const external_node_crypto_namespaceObject = __WEBPACK_EXTERNAL_createRequire(import.meta.url)("node:crypto");
 ;// CONCATENATED MODULE: external "node:fs"
 const external_node_fs_namespaceObject = __WEBPACK_EXTERNAL_createRequire(import.meta.url)("node:fs");
 ;// CONCATENATED MODULE: external "node:path"
@@ -48941,7 +48939,44 @@ function warning(message) {
   console.log(`${warn('⚠')} ${message}`);
 }
 
+;// CONCATENATED MODULE: external "node:crypto"
+const external_node_crypto_namespaceObject = __WEBPACK_EXTERNAL_createRequire(import.meta.url)("node:crypto");
+;// CONCATENATED MODULE: ./src/utils/gha-output.js
+
+
+
+/**
+ * Writes each field as a GitHub Actions step output, so a workflow can read
+ * e.g. `steps.sync.outputs.skipped-count` instead of scraping printed text.
+ * A no-op anywhere else (a plain local CLI run, or CI systems other than
+ * GitHub Actions), detected the same way GitHub's own `@actions/core`
+ * toolkit does: the `GITHUB_ACTIONS` env var GitHub sets on every runner,
+ * plus the `GITHUB_OUTPUT` file path it provides for the current step.
+ *
+ * @param {Record<string, string | object | Array<unknown>>} fields  Values are
+ *   written as-is if already a string, JSON-stringified otherwise.
+ */
+function writeGithubActionsOutputs(fields) {
+  if (process.env.GITHUB_ACTIONS !== 'true') return;
+  const outputPath = process.env.GITHUB_OUTPUT;
+  if (!outputPath) return;
+
+  const lines = Object.entries(fields).map(([name, value]) => {
+    const text = typeof value === 'string' ? value : JSON.stringify(value);
+    // A random delimiter, rather than a fixed one like "EOF", matters here:
+    // `value` can echo back content from a customer's own docs/OAS files
+    // (an error message quoting their spec, say), and a guessable delimiter
+    // could let that content prematurely close the heredoc and inject extra
+    // key=value pairs into the outputs file.
+    const delimiter = `ghadelimiter_${(0,external_node_crypto_namespaceObject.randomUUID)()}`;
+    return `${name}<<${delimiter}\n${text}\n${delimiter}`;
+  });
+
+  external_node_fs_namespaceObject.appendFileSync(outputPath, `${lines.join('\n')}\n`);
+}
+
 ;// CONCATENATED MODULE: ./src/commands/oas-sync.js
+
 
 
 
@@ -49515,25 +49550,21 @@ function syncOas(input) {
   return allChanges;
 }
 
-async function run(_options, _cmd, ctx) {
-  const { gitRoot } = ctx;
-  const refDir = external_node_path_namespaceObject.join(gitRoot, 'reference');
-
-  if (!external_node_fs_namespaceObject.existsSync(refDir)) {
-    error('No reference/ directory found.');
-    process.exit(1);
-  }
-
-  const results = syncOas(gitRoot);
-
-  if (!results) {
-    info('No OpenAPI spec files found in reference/.');
-    return;
-  }
-
+/**
+ * Print sync results per spec and return aggregate totals (used by the CLI
+ * command). Mirrors validateOasFiles in oas-validate.js: printing and
+ * summarizing is a presentation concern kept separate from syncOas's pure
+ * programmatic API above.
+ *
+ * @param {ReturnType<typeof syncOas>} results
+ * @returns {{ totalAdded: number, totalDeleted: number, totalSkipped: number,
+ *   skipped: Array<{ filename: string, path: string, operationId: string }> }}
+ */
+function printSyncResults(results) {
   let totalAdded = 0;
   let totalDeleted = 0;
   let totalSkipped = 0;
+  const skipped = [];
 
   for (const { filename, spec, opCount, changes } of results) {
     const title = spec.info?.title || filename;
@@ -49558,12 +49589,35 @@ async function run(_options, _cmd, ctx) {
       console.log(
         `    ${warn('!')} Skipped ${file} for "${operationId}" (destination already exists)`,
       );
+      skipped.push({ filename, path: file, operationId });
     }
 
     totalAdded += changes.added.length;
     totalDeleted += changes.deleted.length;
     totalSkipped += changes.skipped.length;
   }
+
+  return { totalAdded, totalDeleted, totalSkipped, skipped };
+}
+
+async function run(_options, _cmd, ctx) {
+  const { gitRoot } = ctx;
+  const refDir = external_node_path_namespaceObject.join(gitRoot, 'reference');
+
+  if (!external_node_fs_namespaceObject.existsSync(refDir)) {
+    error('No reference/ directory found.');
+    process.exit(1);
+  }
+
+  const results = syncOas(gitRoot);
+
+  if (!results) {
+    info('No OpenAPI spec files found in reference/.');
+    writeGithubActionsOutputs({ 'added-count': '0', 'deleted-count': '0', 'skipped-count': '0', skipped: [] });
+    return;
+  }
+
+  const { totalAdded, totalDeleted, totalSkipped, skipped } = printSyncResults(results);
 
   console.log();
   const total = totalAdded + totalDeleted;
@@ -49575,6 +49629,13 @@ async function run(_options, _cmd, ctx) {
   } else {
     ok(`Synced: ${totalAdded} added, ${totalDeleted} deleted${skippedNote}.`);
   }
+
+  writeGithubActionsOutputs({
+    'added-count': String(totalAdded),
+    'deleted-count': String(totalDeleted),
+    'skipped-count': String(totalSkipped),
+    skipped,
+  });
 }
 
 ;// CONCATENATED MODULE: ./src/validators/oas-reference.js
@@ -65022,6 +65083,7 @@ const package_namespaceObject = {"rE":"0.0.30"};
 
 
 
+
 const lint_command = 'lint'
 const lint_order = 1
 const aliases = (/* unused pure expression or super */ null && (['validate']))
@@ -65074,6 +65136,8 @@ async function lint_run(options, _cmd, ctx) {
 
   reporter.finish(files.length, results, files, { fix: options.fix, gitRoot })
 
+  writeGithubActionsOutputs({ 'has-errors': String(hasErrors), results })
+
   if (hasErrors) {
     // Wait for stdout to flush (important when piped to a file), then exit
     await new Promise((resolve) => process.stdout.write('', resolve))
@@ -65082,6 +65146,7 @@ async function lint_run(options, _cmd, ctx) {
 }
 
 ;// CONCATENATED MODULE: ./src/commands/oas-validate.js
+
 
 
 
@@ -65273,10 +65338,25 @@ async function oas_validate_run(options, _cmd, ctx) {
 
   if (!result) {
     info('No OpenAPI spec files found in reference/.');
+    writeGithubActionsOutputs({
+      'has-errors': 'false',
+      'total-errors': '0',
+      'total-warnings': '0',
+      'total-valid': '0',
+      'file-count': '0',
+    });
     return;
   }
 
   const { totalErrors, totalWarnings, totalValid, fileCount } = result;
+
+  writeGithubActionsOutputs({
+    'has-errors': String(totalErrors > 0),
+    'total-errors': String(totalErrors),
+    'total-warnings': String(totalWarnings),
+    'total-valid': String(totalValid),
+    'file-count': String(fileCount),
+  });
 
   console.log();
   if (totalErrors > 0) {
@@ -65304,8 +65384,11 @@ async function oas_validate_run(options, _cmd, ctx) {
 // "oas:validate --dereference". Split into a command name and flags; there's
 // no need for a full argument parser since each of these three commands only
 // ever takes simple boolean flags.
-
-
+//
+// Each command's own run() already writes its structured results (has-errors,
+// skipped-count, etc.) to GITHUB_OUTPUT itself, via utils/gha-output.js's
+// GITHUB_ACTIONS-detecting helper — so this file just needs to call run() and
+// let it do what it already does, exit code included.
 
 
 
@@ -65331,45 +65414,6 @@ function parseInput(input) {
   return { command, flags };
 }
 
-// Mirrors every console.log/error a command makes into a buffer (while still
-// printing it normally, so the raw Action log is unaffected) so it can be
-// exposed as this step's `readme` output — e.g. so a later step can check
-// `contains(steps.sync.outputs.readme, 'Skipped')` the way the old
-// `npx ... | tee sync-output.txt` + grep pattern used to.
-function captureConsoleOutput() {
-  const lines = [];
-  const originals = { log: console.log, error: console.error };
-
-  for (const method of ['log', 'error']) {
-    console[method] = (...args) => {
-      lines.push(args.map(String).join(' '));
-      originals[method](...args);
-    };
-  }
-
-  return {
-    text: () => lines.join('\n'),
-    restore: () => Object.assign(console, originals),
-  };
-}
-
-// Commands call process.exit() directly on failure, which would otherwise
-// skip past any output-writing code that runs after `await entry.run(...)`
-// below — so writing the output has to happen here, in a temporary
-// process.exit override, rather than only after that await resolves.
-function writeGithubOutput(name, value) {
-  const outputPath = process.env.GITHUB_OUTPUT;
-  if (!outputPath) return; // no-op outside a real Actions runner (e.g. local testing)
-
-  // A random delimiter (rather than a fixed one like "EOF") matters here:
-  // `value` is arbitrary CLI output, which can echo back content from a
-  // customer's own docs/OAS files. A fixed, guessable delimiter could let
-  // that content prematurely close the heredoc and inject bogus key=value
-  // pairs into the outputs file.
-  const delimiter = `ghadelimiter_${(0,external_node_crypto_namespaceObject.randomUUID)()}`;
-  external_node_fs_namespaceObject.appendFileSync(outputPath, `${name}<<${delimiter}\n${value}\n${delimiter}\n`);
-}
-
 async function gha_run() {
   const input = process.env.INPUT_README || '';
   const { command, flags } = parseInput(input);
@@ -65390,21 +65434,7 @@ async function gha_run() {
   // action runs — not this action's own (separately checked-out) source.
   const gitRoot = process.env.GITHUB_WORKSPACE || process.cwd();
 
-  const capture = captureConsoleOutput();
-  const realExit = process.exit.bind(process);
-  process.exit = (code) => {
-    capture.restore();
-    writeGithubOutput('readme', capture.text());
-    realExit(code);
-  };
-
-  try {
-    await entry.run(options, null, { gitRoot });
-  } finally {
-    capture.restore();
-    writeGithubOutput('readme', capture.text());
-    process.exit = realExit;
-  }
+  await entry.run(options, null, { gitRoot });
 }
 
 gha_run().catch((err) => {
