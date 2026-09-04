@@ -1,11 +1,8 @@
-import { createRequire } from 'node:module'
 import { collectFiles, runValidators } from '../utils/lint.js'
 import { createHumanReporter, createJsonReporter, createGithubReporter } from '../utils/reporter.js'
 import { printHeader, isAgenticCli } from '../utils/eyes.js'
 import * as styles from '../utils/styles.js'
-
-const require = createRequire(import.meta.url)
-const pkg = require('../../package.json')
+import pkg from '../../package.json' with { type: 'json' }
 
 export const command = 'lint'
 export const order = 1
