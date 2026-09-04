@@ -11,6 +11,9 @@ inputs:
       "oas:validate --dereference", or "oas:sync". See
       https://github.com/readmeio/cli for the full command list.
     required: true
+outputs:
+  readme:
+    description: The @readme/cli command's console output, captured as a single string
 runs:
   using: node24
   pre: src/gha-pre.js

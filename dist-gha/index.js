@@ -48137,6 +48137,8 @@ __nccwpck_require__.d(recipes_namespaceObject, {
   validate: () => (recipes_validate)
 });
 
+;// CONCATENATED MODULE: external "node:crypto"
+const external_node_crypto_namespaceObject = __WEBPACK_EXTERNAL_createRequire(import.meta.url)("node:crypto");
 ;// CONCATENATED MODULE: external "node:fs"
 const external_node_fs_namespaceObject = __WEBPACK_EXTERNAL_createRequire(import.meta.url)("node:fs");
 ;// CONCATENATED MODULE: external "node:path"
@@ -65307,6 +65309,8 @@ async function oas_validate_run(options, _cmd, ctx) {
 
 
 
+
+
 // Each command's run(options, cmd, ctx) only ever reads specific boolean
 // flags off `options` (confirmed by reading all three) and never uses `cmd`
 // (the commander Command instance normal CLI invocation would pass) — so a
@@ -65325,6 +65329,45 @@ function parseInput(input) {
     rest.filter((t) => t.startsWith('--')).map((t) => t.slice(2)),
   );
   return { command, flags };
+}
+
+// Mirrors every console.log/error a command makes into a buffer (while still
+// printing it normally, so the raw Action log is unaffected) so it can be
+// exposed as this step's `readme` output — e.g. so a later step can check
+// `contains(steps.sync.outputs.readme, 'Skipped')` the way the old
+// `npx ... | tee sync-output.txt` + grep pattern used to.
+function captureConsoleOutput() {
+  const lines = [];
+  const originals = { log: console.log, error: console.error };
+
+  for (const method of ['log', 'error']) {
+    console[method] = (...args) => {
+      lines.push(args.map(String).join(' '));
+      originals[method](...args);
+    };
+  }
+
+  return {
+    text: () => lines.join('\n'),
+    restore: () => Object.assign(console, originals),
+  };
+}
+
+// Commands call process.exit() directly on failure, which would otherwise
+// skip past any output-writing code that runs after `await entry.run(...)`
+// below — so writing the output has to happen here, in a temporary
+// process.exit override, rather than only after that await resolves.
+function writeGithubOutput(name, value) {
+  const outputPath = process.env.GITHUB_OUTPUT;
+  if (!outputPath) return; // no-op outside a real Actions runner (e.g. local testing)
+
+  // A random delimiter (rather than a fixed one like "EOF") matters here:
+  // `value` is arbitrary CLI output, which can echo back content from a
+  // customer's own docs/OAS files. A fixed, guessable delimiter could let
+  // that content prematurely close the heredoc and inject bogus key=value
+  // pairs into the outputs file.
+  const delimiter = `ghadelimiter_${(0,external_node_crypto_namespaceObject.randomUUID)()}`;
+  external_node_fs_namespaceObject.appendFileSync(outputPath, `${name}<<${delimiter}\n${value}\n${delimiter}\n`);
 }
 
 async function gha_run() {
@@ -65347,7 +65390,21 @@ async function gha_run() {
   // action runs — not this action's own (separately checked-out) source.
   const gitRoot = process.env.GITHUB_WORKSPACE || process.cwd();
 
-  await entry.run(options, null, { gitRoot });
+  const capture = captureConsoleOutput();
+  const realExit = process.exit.bind(process);
+  process.exit = (code) => {
+    capture.restore();
+    writeGithubOutput('readme', capture.text());
+    realExit(code);
+  };
+
+  try {
+    await entry.run(options, null, { gitRoot });
+  } finally {
+    capture.restore();
+    writeGithubOutput('readme', capture.text());
+    process.exit = realExit;
+  }
 }
 
 gha_run().catch((err) => {
