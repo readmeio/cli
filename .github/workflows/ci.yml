@@ -40,3 +40,34 @@ jobs:
 
       - name: Run tests
         run: npm test
+
+  build-gha:
+    name: GitHub Action bundle is up to date
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # dist-gha/ is committed so the Action works straight off a git ref
+      # with no install step (see action.yml). Rebuilding it here and diffing
+      # against what's committed catches the case where someone edits
+      # src/gha.js (or anything it imports) without re-running
+      # `npm run build:gha` — otherwise the Action would silently keep
+      # running stale code with no error anywhere.
+      - name: Rebuild and check for drift
+        run: |
+          npm run build:gha
+          if ! git diff --exit-code -- dist-gha; then
+            echo "::error::dist-gha/ is out of date. Run \`npm run build:gha\` and commit the result."
+            exit 1
+          fi
