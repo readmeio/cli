@@ -34,15 +34,12 @@ const COMMANDS = {
 function parseInput(input) {
   const tokens = input.trim().split(/\s+/).filter(Boolean);
   const [command, ...rest] = tokens;
-  const flags = new Set(
-    rest.filter((t) => t.startsWith('--')).map((t) => t.slice(2)),
-  );
-  return { command, flags };
+  return { command, rest };
 }
 
 export async function run() {
   const input = process.env.INPUT_README || '';
-  const { command, flags } = parseInput(input);
+  const { command, rest } = parseInput(input);
 
   const entry = COMMANDS[command];
   if (!entry) {
@@ -53,10 +50,27 @@ export async function run() {
     process.exit(1);
   }
 
-  const unknownFlags = [...flags].filter((f) => !entry.flags.includes(f));
-  if (unknownFlags.length > 0) {
+  // Every trailing token must be exactly "--<a supported flag>" — anything
+  // else (a short option like "-d", a malformed token, a misspelled flag)
+  // is rejected rather than silently dropped. An earlier version of this
+  // only checked tokens that already happened to start with "--", which let
+  // anything shaped differently (like "-d") skip validation entirely and
+  // run the command with default options with no indication anything was
+  // wrong.
+  const flags = new Set();
+  const badTokens = [];
+  for (const token of rest) {
+    const flag = token.startsWith('--') ? token.slice(2) : null;
+    if (flag && entry.flags.includes(flag)) {
+      flags.add(flag);
+    } else {
+      badTokens.push(token);
+    }
+  }
+
+  if (badTokens.length > 0) {
     console.error(
-      `::error::Unknown option${unknownFlags.length > 1 ? 's' : ''} ${unknownFlags.map((f) => `"--${f}"`).join(', ')} for "${command}". ` +
+      `::error::Unknown option${badTokens.length > 1 ? 's' : ''} ${badTokens.map((t) => `"${t}"`).join(', ')} for "${command}". ` +
         `Supported: ${entry.flags.length > 0 ? entry.flags.map((f) => `--${f}`).join(', ') : '(none)'}.`,
     );
     process.exit(1);
