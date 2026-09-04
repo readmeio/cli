@@ -14,7 +14,7 @@ inputs:
 outputs:
   # Which of these are set depends on which `readme` command ran.
   has-errors:
-    description: '"true" or "false" — set by lint and oas:validate'
+    description: '"true" or "false" — set by all three commands'
   results:
     description: JSON array of lint issues, each { file, rule, message, severity } (lint only)
   total-errors:

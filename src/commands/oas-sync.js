@@ -635,7 +635,13 @@ export async function run(_options, _cmd, ctx) {
 
   if (!results) {
     styles.info('No OpenAPI spec files found in reference/.');
-    writeGithubActionsOutputs({ 'added-count': '0', 'deleted-count': '0', 'skipped-count': '0', skipped: [] });
+    writeGithubActionsOutputs({
+      'added-count': '0',
+      'deleted-count': '0',
+      'skipped-count': '0',
+      skipped: [],
+      'has-errors': 'false',
+    });
     return;
   }
 
@@ -643,13 +649,19 @@ export async function run(_options, _cmd, ctx) {
 
   console.log();
   const total = totalAdded + totalDeleted;
-  const skippedNote = totalSkipped > 0 ? `, ${totalSkipped} skipped` : '';
-  if (total === 0 && totalSkipped === 0) {
-    styles.ok('Reference pages are already in sync.');
+  // A skip means a page couldn't be written where it should've gone — either
+  // a spec-crafted path trying to escape reference/, or the destination
+  // already existing in a way sync's own bookkeeping didn't expect. Neither
+  // is something to quietly succeed past, so this fails the same way lint
+  // and oas:validate already fail on a real problem, rather than leaving it
+  // to whoever wraps this command in CI to notice and fail on it themselves.
+  if (totalSkipped > 0) {
+    const syncedNote = total > 0 ? ` (${totalAdded} added, ${totalDeleted} deleted)` : '';
+    styles.error(`${totalSkipped} ${totalSkipped === 1 ? 'page' : 'pages'} skipped${syncedNote} — see above for which, and why.`);
   } else if (total === 0) {
-    styles.warning(`No pages synced; ${totalSkipped} skipped (destination already exists).`);
+    styles.ok('Reference pages are already in sync.');
   } else {
-    styles.ok(`Synced: ${totalAdded} added, ${totalDeleted} deleted${skippedNote}.`);
+    styles.ok(`Synced: ${totalAdded} added, ${totalDeleted} deleted.`);
   }
 
   writeGithubActionsOutputs({
@@ -657,5 +669,10 @@ export async function run(_options, _cmd, ctx) {
     'deleted-count': String(totalDeleted),
     'skipped-count': String(totalSkipped),
     skipped,
+    'has-errors': String(totalSkipped > 0),
   });
+
+  if (totalSkipped > 0) {
+    process.exit(1);
+  }
 }
