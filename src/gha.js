@@ -19,6 +19,7 @@
 import * as lint from './commands/lint.js';
 import * as oasValidate from './commands/oas-validate.js';
 import * as oasSync from './commands/oas-sync.js';
+import { writeGithubActionsOutputs } from './utils/gha-output.js';
 
 // Each command's run(options, cmd, ctx) only ever reads specific boolean
 // flags off `options` (confirmed by reading all three) and never uses `cmd`
@@ -47,6 +48,7 @@ export async function run() {
       `::error::Unknown or unsupported command "${command || '(empty)'}" for the \`readme\` input. ` +
         `Supported: ${[...new Set(Object.keys(COMMANDS).filter((k) => k !== 'validate'))].join(', ')}.`,
     );
+    writeGithubActionsOutputs({ 'has-errors': 'true' });
     process.exit(1);
   }
 
@@ -73,6 +75,7 @@ export async function run() {
       `::error::Unknown option${badTokens.length > 1 ? 's' : ''} ${badTokens.map((t) => `"${t}"`).join(', ')} for "${command}". ` +
         `Supported: ${entry.flags.length > 0 ? entry.flags.map((f) => `--${f}`).join(', ') : '(none)'}.`,
     );
+    writeGithubActionsOutputs({ 'has-errors': 'true' });
     process.exit(1);
   }
 
@@ -88,5 +91,14 @@ export async function run() {
 
 run().catch((err) => {
   console.error(err);
+  // A thrown error (as opposed to a command's own controlled process.exit)
+  // means whatever run() was doing never reached its own
+  // writeGithubActionsOutputs call, so this is the last chance to publish
+  // has-errors — without it, a downstream `if: always()` step would see an
+  // empty string, on exactly the failure path where that check matters
+  // most. Command-specific fields (skipped-count, results, etc.) aren't
+  // meaningful here since they were never computed, so has-errors is all
+  // this can honestly guarantee.
+  writeGithubActionsOutputs({ 'has-errors': 'true' });
   process.exit(1);
 });
