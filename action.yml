@@ -1,0 +1,17 @@
+name: '@readme/cli'
+author: ReadMe
+branding:
+  color: blue
+  icon: book-open
+description: Lint Markdown docs, validate OpenAPI/Swagger definitions, and sync reference pages from them to your ReadMe developer hub
+inputs:
+  readme:
+    description: >
+      The @readme/cli command to run, e.g. "lint", "oas:validate",
+      "oas:validate --dereference", or "oas:sync". See
+      https://github.com/readmeio/cli for the full command list.
+    required: true
+runs:
+  using: node24
+  pre: src/gha-pre.js
+  main: dist-gha/index.js
