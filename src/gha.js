@@ -53,6 +53,15 @@ export async function run() {
     process.exit(1);
   }
 
+  const unknownFlags = [...flags].filter((f) => !entry.flags.includes(f));
+  if (unknownFlags.length > 0) {
+    console.error(
+      `::error::Unknown option${unknownFlags.length > 1 ? 's' : ''} ${unknownFlags.map((f) => `"--${f}"`).join(', ')} for "${command}". ` +
+        `Supported: ${entry.flags.length > 0 ? entry.flags.map((f) => `--${f}`).join(', ') : '(none)'}.`,
+    );
+    process.exit(1);
+  }
+
   const options = {};
   for (const flag of entry.flags) options[flag] = flags.has(flag);
 
