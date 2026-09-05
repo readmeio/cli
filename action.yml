@@ -1,0 +1,43 @@
+name: '@readme/cli'
+author: ReadMe
+branding:
+  color: blue
+  icon: book-open
+description: Lint Markdown docs, validate OpenAPI/Swagger definitions, and sync reference pages from them to your ReadMe developer hub
+inputs:
+  readme:
+    description: >
+      The @readme/cli command to run, e.g. "lint", "oas:validate",
+      "oas:validate --dereference", or "oas:sync". See
+      https://github.com/readmeio/cli for the full command list.
+    required: true
+outputs:
+  # Which of these are set depends on which `readme` command ran. All three
+  # commands write their outputs before exiting on every failure path,
+  # including a missing reference/ directory (oas:validate/oas:sync) — so a
+  # downstream step with `if: always()` can rely on has-errors being set,
+  # not just empty, whenever the command actually ran at all.
+  has-errors:
+    description: '"true" or "false" — set by all three commands, on every exit path'
+  results:
+    description: JSON array of lint issues, each { file, rule, message, severity } (lint only)
+  total-errors:
+    description: Total OAS validation errors across all spec files (oas:validate only)
+  total-warnings:
+    description: Total OAS validation warnings across all spec files (oas:validate only)
+  total-valid:
+    description: Number of spec files with no errors (oas:validate only)
+  file-count:
+    description: Number of spec files checked (oas:validate only)
+  added-count:
+    description: Reference pages added (oas:sync only)
+  deleted-count:
+    description: Reference pages deleted (oas:sync only)
+  skipped-count:
+    description: Reference pages skipped because the destination filename already exists (oas:sync only)
+  skipped:
+    description: JSON array of skipped pages, each { filename, path, operationId } (oas:sync only)
+runs:
+  using: node24
+  pre: src/gha-pre.js
+  main: dist-gha/index.js

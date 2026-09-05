@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import matter from 'gray-matter';
 import * as styles from '../utils/styles.js';
+import { writeGithubActionsOutputs } from '../utils/gha-output.js';
 
 const require = createRequire(import.meta.url);
 const yaml = require('js-yaml');
@@ -571,25 +572,21 @@ export function syncOas(input) {
   return allChanges;
 }
 
-export async function run(_options, _cmd, ctx) {
-  const { gitRoot } = ctx;
-  const refDir = path.join(gitRoot, 'reference');
-
-  if (!fs.existsSync(refDir)) {
-    styles.error('No reference/ directory found.');
-    process.exit(1);
-  }
-
-  const results = syncOas(gitRoot);
-
-  if (!results) {
-    styles.info('No OpenAPI spec files found in reference/.');
-    return;
-  }
-
+/**
+ * Print sync results per spec and return aggregate totals (used by the CLI
+ * command). Mirrors validateOasFiles in oas-validate.js: printing and
+ * summarizing is a presentation concern kept separate from syncOas's pure
+ * programmatic API above.
+ *
+ * @param {ReturnType<typeof syncOas>} results
+ * @returns {{ totalAdded: number, totalDeleted: number, totalSkipped: number,
+ *   skipped: Array<{ filename: string, path: string, operationId: string }> }}
+ */
+export function printSyncResults(results) {
   let totalAdded = 0;
   let totalDeleted = 0;
   let totalSkipped = 0;
+  const skipped = [];
 
   for (const { filename, spec, opCount, changes } of results) {
     const title = spec.info?.title || filename;
@@ -614,6 +611,7 @@ export async function run(_options, _cmd, ctx) {
       console.log(
         `    ${styles.warn('!')} Skipped ${file} for "${operationId}" (destination already exists)`,
       );
+      skipped.push({ filename, path: file, operationId });
     }
 
     totalAdded += changes.added.length;
@@ -621,14 +619,67 @@ export async function run(_options, _cmd, ctx) {
     totalSkipped += changes.skipped.length;
   }
 
+  return { totalAdded, totalDeleted, totalSkipped, skipped };
+}
+
+export async function run(_options, _cmd, ctx) {
+  const { gitRoot } = ctx;
+  const refDir = path.join(gitRoot, 'reference');
+
+  if (!fs.existsSync(refDir)) {
+    styles.error('No reference/ directory found.');
+    writeGithubActionsOutputs({
+      'added-count': '0',
+      'deleted-count': '0',
+      'skipped-count': '0',
+      skipped: [],
+      'has-errors': 'true',
+    });
+    process.exit(1);
+  }
+
+  const results = syncOas(gitRoot);
+
+  if (!results) {
+    styles.info('No OpenAPI spec files found in reference/.');
+    writeGithubActionsOutputs({
+      'added-count': '0',
+      'deleted-count': '0',
+      'skipped-count': '0',
+      skipped: [],
+      'has-errors': 'false',
+    });
+    return;
+  }
+
+  const { totalAdded, totalDeleted, totalSkipped, skipped } = printSyncResults(results);
+
   console.log();
   const total = totalAdded + totalDeleted;
-  const skippedNote = totalSkipped > 0 ? `, ${totalSkipped} skipped` : '';
-  if (total === 0 && totalSkipped === 0) {
-    styles.ok('Reference pages are already in sync.');
+  // A skip means a page couldn't be written where it should've gone — either
+  // a spec-crafted path trying to escape reference/, or the destination
+  // already existing in a way sync's own bookkeeping didn't expect. Neither
+  // is something to quietly succeed past, so this fails the same way lint
+  // and oas:validate already fail on a real problem, rather than leaving it
+  // to whoever wraps this command in CI to notice and fail on it themselves.
+  if (totalSkipped > 0) {
+    const syncedNote = total > 0 ? ` (${totalAdded} added, ${totalDeleted} deleted)` : '';
+    styles.error(`${totalSkipped} ${totalSkipped === 1 ? 'page' : 'pages'} skipped${syncedNote} — see above for which, and why.`);
   } else if (total === 0) {
-    styles.warning(`No pages synced; ${totalSkipped} skipped (destination already exists).`);
+    styles.ok('Reference pages are already in sync.');
   } else {
-    styles.ok(`Synced: ${totalAdded} added, ${totalDeleted} deleted${skippedNote}.`);
+    styles.ok(`Synced: ${totalAdded} added, ${totalDeleted} deleted.`);
+  }
+
+  writeGithubActionsOutputs({
+    'added-count': String(totalAdded),
+    'deleted-count': String(totalDeleted),
+    'skipped-count': String(totalSkipped),
+    skipped,
+    'has-errors': String(totalSkipped > 0),
+  });
+
+  if (totalSkipped > 0) {
+    process.exit(1);
   }
 }

@@ -1,11 +1,9 @@
-import { createRequire } from 'node:module'
 import { collectFiles, runValidators } from '../utils/lint.js'
 import { createHumanReporter, createJsonReporter, createGithubReporter } from '../utils/reporter.js'
 import { printHeader, isAgenticCli } from '../utils/eyes.js'
 import * as styles from '../utils/styles.js'
-
-const require = createRequire(import.meta.url)
-const pkg = require('../../package.json')
+import { writeGithubActionsOutputs } from '../utils/gha-output.js'
+import pkg from '../../package.json' with { type: 'json' }
 
 export const command = 'lint'
 export const order = 1
@@ -58,6 +56,8 @@ export async function run(options, _cmd, ctx) {
   })
 
   reporter.finish(files.length, results, files, { fix: options.fix, gitRoot })
+
+  writeGithubActionsOutputs({ 'has-errors': String(hasErrors), results })
 
   if (hasErrors) {
     // Wait for stdout to flush (important when piped to a file), then exit

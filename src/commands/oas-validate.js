@@ -3,6 +3,7 @@ import path from 'node:path';
 import OASNormalize from 'oas-normalize';
 import { findOasFiles, extractOperations } from './oas-sync.js';
 import * as styles from '../utils/styles.js';
+import { writeGithubActionsOutputs } from '../utils/gha-output.js';
 
 export const command = 'oas:validate';
 export const order = 3;
@@ -182,6 +183,13 @@ export async function run(options, _cmd, ctx) {
 
   if (!fs.existsSync(refDir)) {
     styles.error('No reference/ directory found.');
+    writeGithubActionsOutputs({
+      'has-errors': 'true',
+      'total-errors': '0',
+      'total-warnings': '0',
+      'total-valid': '0',
+      'file-count': '0',
+    });
     process.exit(1);
   }
 
@@ -189,10 +197,25 @@ export async function run(options, _cmd, ctx) {
 
   if (!result) {
     styles.info('No OpenAPI spec files found in reference/.');
+    writeGithubActionsOutputs({
+      'has-errors': 'false',
+      'total-errors': '0',
+      'total-warnings': '0',
+      'total-valid': '0',
+      'file-count': '0',
+    });
     return;
   }
 
   const { totalErrors, totalWarnings, totalValid, fileCount } = result;
+
+  writeGithubActionsOutputs({
+    'has-errors': String(totalErrors > 0),
+    'total-errors': String(totalErrors),
+    'total-warnings': String(totalWarnings),
+    'total-valid': String(totalValid),
+    'file-count': String(fileCount),
+  });
 
   console.log();
   if (totalErrors > 0) {
