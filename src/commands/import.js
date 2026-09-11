@@ -39,10 +39,6 @@ export function args(cmd) {
   cmd.addOption(new Option('-m, --model <name>', 'Claude model alias: haiku, sonnet, opus').choices(['haiku', 'sonnet', 'opus']).default(DEFAULT_MODEL))
   cmd.option('--firecrawl-key <key>', 'Firecrawl API key (or set FIRECRAWL_API_KEY env var) — enables JS-rendered sidebar scraping')
   cmd.option('--skip-api-reference', 'Drop pages routed to the API Reference / reference dir. Use when uploading the OAS spec separately.')
-  cmd.option(
-    '--separate-changelog',
-    'Move changelog / release-notes pages into a top-level changelog/ directory instead of docs/Changelog/. Note: changelog/ is outside the git-format schema, so it will not lint or sync to ReadMe.',
-  )
   // Internal dev-only flag: skip the zip, keep staging, and boot the dev server
   // against it for quick visual previews. Hidden from --help.
   cmd.addOption(new Option('--test').hideHelp())
@@ -96,7 +92,6 @@ const OAS_SOURCE_CONFIDENCE = ['llms', 'mintlify', 'probe', 'html', 'sitemap', '
  * @param {string} [options.model]            Claude model alias: 'haiku' | 'sonnet' | 'opus'. Defaults to 'sonnet'.
  * @param {string} [options.firecrawlKey]     Firecrawl API key (falls back to FIRECRAWL_API_KEY env var).
  * @param {boolean} [options.skipApiReference] Drop pages routed to the API Reference dir.
- * @param {boolean} [options.separateChangelog] Move changelog pages into a top-level `changelog/` dir instead of `docs/Changelog/`.
  * @param {boolean} [options.test]            Skip the zip, keep staging, and boot the dev server.
  * @param {boolean} [options.debug]           Dump intermediate pipeline artifacts to a tmp dir.
  * @returns {Promise<{ source: 'url' | 'oas', outputZip?: string, stagingDir?: string, fileCount: number, duration: number, phases: Array<{ label: string, ms: number }> }>}
@@ -211,17 +206,11 @@ export async function importDocs(options) {
       stageOrganized(organized, stagingDir, { skipApiReference: !!options.skipApiReference, llmsPaths }),
     )
 
-    // Changelog pages stage into docs/Changelog/ (a schema-valid docs
-    // category). With --separate-changelog, relocate them afterwards into a
-    // top-level changelog/ dir — done as a post-staging move so the staged
-    // tree is a valid git-format layout up to this point.
-    if (options.separateChangelog) {
-      const movedChangelog = relocateChangelogDir(stagingDir)
-      if (movedChangelog > 0) {
-        styles.info(
-          `Moved ${styles.bold(String(movedChangelog))} changelog page${movedChangelog === 1 ? '' : 's'} into ${styles.bold('changelog/')} (--separate-changelog).`,
-        )
-      }
+    const movedChangelog = finalizeChangelogs(stagingDir)
+    if (movedChangelog > 0) {
+      styles.info(
+        `Staged ${styles.bold(String(movedChangelog))} changelog page${movedChangelog === 1 ? '' : 's'} in ${styles.bold('changelogs/')}.`,
+      )
     }
 
     const landingTitle =
@@ -442,9 +431,8 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
 
   // Pre-extract changelog pages so AI / URL clustering / section-direct paths
   // never see them as candidates for organization. We re-attach them as a
-  // dedicated Changelog category once `organized` is finalized below — that
-  // guarantees they route to docs/Changelog/ (or to changelog/ with
-  // --separate-changelog) regardless of which organize path ran. Done here,
+  // dedicated Changelog category once `organized` is finalized below. Done
+  // here,
   // before knownUrls is derived, so every downstream consumer operates on the
   // already-changelog-free view.
   let extractedChangelog = []
@@ -657,8 +645,7 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
       }
 
       // Same idea for changelog / release-notes pages — pull any whose URL
-      // carries a changelog-style segment into one "Changelog" category. It
-      // routes to docs/Changelog/ unless --separate-changelog relocates it.
+      // carries a changelog-style segment into one "Changelog" category.
       const movedChangelog = reclassifyChangelogPages(scraped)
       if (movedChangelog > 0) {
         styles.info(`Moved ${styles.bold(String(movedChangelog))} page${movedChangelog === 1 ? '' : 's'} into ${styles.bold('Changelog')} based on URL path.`)
@@ -2741,9 +2728,8 @@ function injectChangelogCategory(organized, items) {
 /**
  * Sweep `/changelog/*`, `/release-notes/*` and `/releases/*` pages into one
  * "Changelog" category, wherever the site's sidebar happened to place them.
- * That category routes to `docs/Changelog/`; `--separate-changelog` later
- * relocates it to a top-level `changelog/` dir. Returns the number of pages
- * relocated.
+ * It is finalized as canonical top-level `changelogs/` output. Returns the
+ * number of pages relocated.
  */
 function reclassifyChangelogPages(scraped) {
   return reclassifyPagesByUrlSegment(scraped, {
@@ -4945,31 +4931,21 @@ function countPagesDeep(pages) {
 }
 
 /**
- * Post-staging relocation for `--separate-changelog`: move the staged
- * `docs/Changelog/` category up to a top-level `changelog/` directory.
- *
- * Done as a filesystem move *after* staging (rather than routing there
- * directly) so the staged tree is a valid git-format layout up to this point,
- * and the one schema-divergent step lives in a single, clearly-named place.
- * Note `changelog/` is not part of the git-format schema — it won't lint or
- * sync to ReadMe until git-format adds first-class changelog support.
- *
- * Returns the number of changelog pages moved (0 if there were none).
+ * Convert the staged changelog category into the runner's canonical, flat
+ * `changelogs/` skeleton directory. This happens for every import so neither
+ * command-line nor programmatic callers can produce the legacy layout.
  */
-function relocateChangelogDir(stagingDir) {
+function finalizeChangelogs(stagingDir) {
   const srcDir = path.join(stagingDir, 'docs', 'Changelog')
   if (!fs.existsSync(srcDir) || !fs.statSync(srcDir).isDirectory()) return 0
 
-  const dstDir = path.join(stagingDir, 'changelog')
+  const dstDir = path.join(stagingDir, 'changelogs')
   fs.renameSync(srcDir, dstDir)
 
-  // Collect every real x-import page from the (possibly nested) tree.
-  // Synthetic group-only stubs (no x-import — they exist only to render an
-  // empty parent in the sidebar) are dropped: the flat layout has no concept
-  // of containers, so they'd just be dead frontmatter.
   const pages = []
   const walk = (dir, ancestors) => {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const entries = fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+    for (const entry of entries) {
       const full = path.join(dir, entry.name)
       if (entry.isDirectory()) {
         walk(full, [...ancestors, entry.name])
@@ -4977,44 +4953,38 @@ function relocateChangelogDir(stagingDir) {
       }
       if (!entry.name.endsWith('.md')) continue
       const parsed = matter(fs.readFileSync(full, 'utf-8'))
-      if (!parsed.data || !parsed.data['x-import']) continue
+      if (!parsed.data?.['x-import']) continue
       if (entry.name === 'index.md' && ancestors.length > 0) {
         pages.push({ ancestors: ancestors.slice(0, -1), slug: ancestors.at(-1), content: parsed.content, data: parsed.data })
         continue
       }
-      const slug = entry.name.replace(/\.md$/, '')
-      pages.push({ ancestors, slug, content: parsed.content, data: parsed.data })
+      pages.push({ ancestors, slug: entry.name.replace(/\.md$/, ''), content: parsed.content, data: parsed.data })
     }
   }
   walk(dstDir, [])
 
-  // Wipe the nested tree and rewrite it flat. Filename concatenates the
-  // ancestor folder slugs with the leaf slug so siblings share a prefix —
-  // alphabetical order then naturally matches authored reading order, and
-  // names are unique across the (formerly nested) tree.
   fs.rmSync(dstDir, { recursive: true, force: true })
   fs.mkdirSync(dstDir, { recursive: true })
 
-  const flatSlugs = []
-  for (const p of pages) {
-    const flatSlug = [...p.ancestors, p.slug].join('-')
-    const frontmatter = { ...p.data }
+  const usedFilenames = new Set()
+  for (const page of pages) {
+    const baseSlug = [...page.ancestors, page.slug].join('-')
+    let filename = baseSlug
+    let suffix = 2
+    while (usedFilenames.has(filename.toLowerCase())) filename = `${baseSlug}-${suffix++}`
+    usedFilenames.add(filename.toLowerCase())
+
+    const frontmatter = { ...page.data }
     delete frontmatter.icon
-    fs.writeFileSync(path.join(dstDir, `${flatSlug}.md`), matter.stringify(p.content, frontmatter))
-    flatSlugs.push(flatSlug)
+    fs.writeFileSync(path.join(dstDir, `${filename}.md`), matter.stringify(page.content, frontmatter))
   }
 
-  flatSlugs.sort()
-  fs.writeFileSync(path.join(dstDir, '_order.yaml'), flatSlugs.map((s) => `- ${yamlSafeSlug(s)}`).join('\n') + '\n')
-
-  // docs/_order.yaml lists the docs category subfolders — drop the moved one
-  // so the docs sidebar doesn't point at a folder that's no longer there.
   const docsOrderPath = path.join(stagingDir, 'docs', '_order.yaml')
   if (fs.existsSync(docsOrderPath)) {
     const entries = yamlRequire().load(fs.readFileSync(docsOrderPath, 'utf-8'))
-    const filtered = Array.isArray(entries) ? entries.filter((e) => e !== 'Changelog') : []
+    const filtered = Array.isArray(entries) ? entries.filter((entry) => entry !== 'Changelog') : []
     if (filtered.length > 0) {
-      fs.writeFileSync(docsOrderPath, filtered.map((s) => `- ${yamlSafeSlug(s)}`).join('\n') + '\n')
+      fs.writeFileSync(docsOrderPath, filtered.map((entry) => `- ${yamlSafeSlug(entry)}`).join('\n') + '\n')
     } else {
       fs.rmSync(docsOrderPath)
     }
@@ -5030,8 +5000,8 @@ function relocateChangelogDir(stagingDir) {
 function routeCategory(title) {
   const t = (title || '').trim()
   if (/^(api[ -]?reference|reference|api|endpoints?)$/i.test(t)) return { topDir: 'reference', subDir: null }
-  // Changelog-ish categories normalize to one docs/Changelog/ folder so the
-  // --separate-changelog relocation has a single, predictable source dir.
+  // Changelog categories initially share a staging folder before they are
+  // finalized as canonical top-level changelogs/ output.
   if (/^(changelog|change[ -]?log|release[ -]?notes?|releases?|what'?s[ -]?new)$/i.test(t)) return { topDir: 'docs', subDir: 'Changelog' }
   if (/^(recipes?|cookbook|tutorials?|how[ -]?tos?)$/i.test(t)) return { topDir: 'recipes', subDir: null }
   if (/^(custom[ -]?pages?|landing( page)?s?)$/i.test(t)) return { topDir: 'custom_pages', subDir: null }
@@ -5327,6 +5297,7 @@ export const __test__ = {
   isDocsUnderApiPath,
   filterUrlPagesTree,
   stageOrganized,
+  finalizeChangelogs,
   urlIsApiReference,
   urlIsChangelog,
   reclassifyReferencePages,
