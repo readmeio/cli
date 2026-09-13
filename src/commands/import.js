@@ -4930,6 +4930,31 @@ function countPagesDeep(pages) {
   return n
 }
 
+function allocateChangelogFilenames(pages) {
+  const baseSlugs = pages.map((page) => [...page.ancestors, page.slug].join('-'))
+  const baseNames = baseSlugs.map((slug) => slug.toLowerCase())
+  const counts = new Map()
+  for (const name of baseNames) counts.set(name, (counts.get(name) || 0) + 1)
+
+  const reserved = new Set(baseNames)
+  const allocated = new Set()
+  return baseSlugs.map((baseSlug, index) => {
+    const baseName = baseNames[index]
+    if (counts.get(baseName) === 1 || !allocated.has(baseName)) {
+      allocated.add(baseName)
+      return baseSlug
+    }
+
+    for (let suffix = 2; ; suffix++) {
+      const filename = `${baseSlug}-${suffix}`
+      const name = filename.toLowerCase()
+      if (reserved.has(name) || allocated.has(name)) continue
+      allocated.add(name)
+      return filename
+    }
+  })
+}
+
 /**
  * Convert the staged changelog category into the runner's canonical, flat
  * `changelogs/` skeleton directory. This happens for every import so neither
@@ -4966,14 +4991,8 @@ function finalizeChangelogs(stagingDir) {
   fs.rmSync(dstDir, { recursive: true, force: true })
   fs.mkdirSync(dstDir, { recursive: true })
 
-  const usedFilenames = new Set()
-  for (const page of pages) {
-    const baseSlug = [...page.ancestors, page.slug].join('-')
-    let filename = baseSlug
-    let suffix = 2
-    while (usedFilenames.has(filename.toLowerCase())) filename = `${baseSlug}-${suffix++}`
-    usedFilenames.add(filename.toLowerCase())
-
+  for (const [index, filename] of allocateChangelogFilenames(pages).entries()) {
+    const page = pages[index]
     const frontmatter = { ...page.data }
     delete frontmatter.icon
     fs.writeFileSync(path.join(dstDir, `${filename}.md`), matter.stringify(page.content, frontmatter))
@@ -5298,6 +5317,7 @@ export const __test__ = {
   filterUrlPagesTree,
   stageOrganized,
   finalizeChangelogs,
+  allocateChangelogFilenames,
   urlIsApiReference,
   urlIsChangelog,
   reclassifyReferencePages,

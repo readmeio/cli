@@ -7,7 +7,7 @@ import matter from 'gray-matter'
 import { Command } from 'commander'
 import { args, __test__ } from './import.js'
 
-const { stageOrganized, finalizeChangelogs } = __test__
+const { stageOrganized, finalizeChangelogs, allocateChangelogFilenames } = __test__
 
 const originalLog = console.log
 afterEach(() => {
@@ -166,6 +166,17 @@ test('finalizeChangelogs emits flat canonical changelogs without an order file a
     assert.equal(readFm(path.join(outputDir, 'foo-bar-2.md'))['x-import'], 'https://example.com/root')
     assert.equal(readFm(path.join(outputDir, 'unchanged.md'))['x-import'], 'https://example.com/unchanged')
   })
+})
+
+test('allocateChangelogFilenames preserves an independent numeric-suffix filename', () => {
+  assert.deepEqual(
+    allocateChangelogFilenames([
+      { ancestors: [], slug: 'A' },
+      { ancestors: [], slug: 'a' },
+      { ancestors: [], slug: 'a-2' },
+    ]),
+    ['A', 'a-3', 'a-2'],
+  )
 })
 
 test('import command has no conditional changelog layout option', () => {
