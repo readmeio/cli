@@ -4763,7 +4763,8 @@ function stageOrganized(organized, stagingDir, opts = {}) {
   for (const cat of eligibleCategories) collapseRedundantLayers(cat)
 
   // Slug names must be unique
-  const slugFor = ensureUniqueSlugs(eligibleCategories)
+  const slugFor = opts.slugFor || ensureUniqueSlugs(eligibleCategories)
+  planChangelogStagingSlugs(eligibleCategories, slugFor)
 
   const labelFor = (p) => {
     if (p.url) return p.url
@@ -4928,6 +4929,25 @@ function countPagesDeep(pages) {
     if (p.pages && p.pages.length) n += countPagesDeep(p.pages)
   }
   return n
+}
+
+function planChangelogStagingSlugs(categories, slugFor) {
+  const changelogPages = []
+  for (const category of categories) {
+    const route = routeCategory(category.title)
+    if (route.topDir !== 'docs' || route.subDir !== 'Changelog') continue
+    changelogPages.push(...(category.pages || []))
+  }
+
+  const planSiblings = (pages) => {
+    const plannedPages = pages.filter((page) => slugFor.has(page))
+    const plannedSlugs = allocateChangelogFilenames(
+      plannedPages.map((page) => ({ ancestors: [], slug: slugFor.get(page) })),
+    )
+    for (const [index, page] of plannedPages.entries()) slugFor.set(page, plannedSlugs[index])
+    for (const page of pages) planSiblings(page.pages || [])
+  }
+  planSiblings(changelogPages)
 }
 
 function allocateChangelogFilenames(pages) {

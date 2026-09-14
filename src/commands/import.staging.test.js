@@ -168,6 +168,26 @@ test('finalizeChangelogs emits flat canonical changelogs without an order file a
   })
 })
 
+test('stageOrganized retains case-only changelog names before finalization', () => {
+  withStaging((stagingDir) => {
+    const upper = { title: 'Upper A', url: 'https://example.com/A' }
+    const lower = { title: 'Lower a', url: 'https://example.com/a' }
+    const independent = { title: 'Independent a-2', url: 'https://example.com/a-2' }
+    stageOrganized(
+      { categories: [{ title: 'Changelog', pages: [upper, lower, independent] }] },
+      stagingDir,
+      { slugFor: new Map([[upper, 'A'], [lower, 'a'], [independent, 'a-2']]) },
+    )
+    assert.equal(finalizeChangelogs(stagingDir), 3)
+
+    const outputDir = path.join(stagingDir, 'changelogs')
+    assert.deepEqual(fs.readdirSync(outputDir).sort(), ['A.md', 'a-2.md', 'a-3.md'])
+    assert.equal(readFm(path.join(outputDir, 'A.md')).title, 'Upper A')
+    assert.equal(readFm(path.join(outputDir, 'a-3.md')).title, 'Lower a')
+    assert.equal(readFm(path.join(outputDir, 'a-2.md')).title, 'Independent a-2')
+  })
+})
+
 test('allocateChangelogFilenames preserves an independent numeric-suffix filename', () => {
   assert.deepEqual(
     allocateChangelogFilenames([
