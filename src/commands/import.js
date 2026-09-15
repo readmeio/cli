@@ -4764,7 +4764,7 @@ function stageOrganized(organized, stagingDir, opts = {}) {
 
   // Slug names must be unique
   const slugFor = opts.slugFor || ensureUniqueSlugs(eligibleCategories)
-  planChangelogStagingSlugs(eligibleCategories, slugFor)
+  disambiguateChangelogSiblingSlugs(eligibleCategories, slugFor)
 
   const labelFor = (p) => {
     if (p.url) return p.url
@@ -4931,7 +4931,16 @@ function countPagesDeep(pages) {
   return n
 }
 
-function planChangelogStagingSlugs(categories, slugFor) {
+/**
+ * Make changelog sibling slugs safe to write on case-insensitive filesystems.
+ * Guides retain their directory hierarchy, while changelogs are later flattened
+ * into one directory; the final flattening pass handles cross-level collisions.
+ *
+ * @param {Array<{ title?: string, pages?: object[] }>} categories Organized import categories.
+ * @param {Map<object, string>} slugFor Slugs keyed by page; mutated in place.
+ * @returns {void}
+ */
+function disambiguateChangelogSiblingSlugs(categories, slugFor) {
   const changelogPages = []
   for (const category of categories) {
     const route = routeCategory(category.title)
@@ -4950,6 +4959,12 @@ function planChangelogStagingSlugs(categories, slugFor) {
   planSiblings(changelogPages)
 }
 
+/**
+ * Allocate case-insensitively unique filenames for a flat changelog directory.
+ *
+ * @param {Array<{ ancestors: string[], slug: string }>} pages Changelog paths to flatten.
+ * @returns {string[]} Filenames in the same order as `pages`, without extensions.
+ */
 function allocateChangelogFilenames(pages) {
   const baseSlugs = pages.map((page) => [...page.ancestors, page.slug].join('-'))
   const baseNames = baseSlugs.map((slug) => slug.toLowerCase())
