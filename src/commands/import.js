@@ -30,6 +30,13 @@ export const skipBootstrap = true
 
 export const DEFAULT_MODEL = 'claude-sonnet-5'
 
+export function getClaudeReasoningOptions(model) {
+  if (model === 'sonnet' || model === DEFAULT_MODEL || model?.startsWith('claude-sonnet-5-')) {
+    return { thinking: { type: 'adaptive' }, effort: 'medium' }
+  }
+  return {}
+}
+
 export function args(cmd) {
   cmd.requiredOption(
     '--source <url-or-file...>',
@@ -1197,6 +1204,7 @@ export async function runAgent({ userPrompt, systemPrompt, cwd, model }) {
       canUseTool: makeStagingGuard(cwd),
       ...(systemPrompt ? { systemPrompt } : {}),
       ...(model ? { model } : {}),
+      ...getClaudeReasoningOptions(model),
     },
   })) {
     if (message.type === 'assistant' && message.message?.content) {
@@ -1209,7 +1217,8 @@ export async function runAgent({ userPrompt, systemPrompt, cwd, model }) {
       }
     } else if (message.type === 'result') {
       if (message.subtype && message.subtype !== 'success') {
-        const err = new Error(`Agent result subtype=${message.subtype}${message.error?.message ? ': ' + message.error.message : ''}`)
+        const details = claudeResultDetails(message)
+        const err = new Error(`Agent result subtype=${message.subtype}${details ? ` — ${details}` : ''}`)
         err.subtype = message.subtype
         err.result = message
         throw err
@@ -3687,6 +3696,34 @@ async function organizeFromScratch(parsed, model) {
   return { title: raw.title, categories: expandedCategories }
 }
 
+function claudeResultDetails(message) {
+  const details = []
+  if (message.api_error_status != null) details.push(`API status ${message.api_error_status}`)
+  if (Array.isArray(message.errors)) details.push(...message.errors.filter((error) => typeof error === 'string' && error.trim()))
+  if (typeof message.result === 'string' && message.result.trim()) {
+    const result = message.result.replace(/\s+/g, ' ').trim()
+    details.push(result.length > 1000 ? `${result.slice(0, 1000)}…` : result)
+  }
+  return details.join('; ')
+}
+
+export function getStructuredOutput(message) {
+  const details = claudeResultDetails(message)
+  if (message.subtype === 'error_max_structured_output_retries') {
+    throw new Error(
+      'Claude could not produce output matching the schema after retries. ' +
+      `Likely hit the model's output limit — try --model sonnet.${details ? ` ${details}` : ''}`,
+    )
+  }
+  if (message.subtype && message.subtype !== 'success') {
+    throw new Error(`Claude failed: ${message.subtype}${details ? ` — ${details}` : ''}`)
+  }
+  if (!message.structured_output || typeof message.structured_output !== 'object') {
+    throw new Error(`Claude returned no structured output${details ? ` — ${details}` : ''}`)
+  }
+  return message.structured_output
+}
+
 /**
  * Shared Claude call for "send a prompt, get schema-validated JSON back".
  * Logs the prompts so we can see what went in, and runs a heartbeat so silent
@@ -3717,19 +3754,11 @@ async function runJsonQuery({ systemPrompt, userPrompt, model, schema }) {
         allowedTools: [],
         outputFormat: { type: 'json_schema', schema },
         ...(model ? { model } : {}),
+        ...getClaudeReasoningOptions(model),
       },
     })) {
       if (message.type === 'result') {
-        if (message.subtype === 'error_max_structured_output_retries') {
-          throw new Error(
-            'Claude could not produce output matching the schema after retries. ' +
-            'Likely hit the model\'s output limit — try --model sonnet.',
-          )
-        }
-        if (message.subtype && message.subtype !== 'success') {
-          throw new Error(`Claude failed: ${message.subtype}${message.error?.message ? ' — ' + message.error.message : ''}`)
-        }
-        structured = message.structured_output
+        structured = getStructuredOutput(message)
         break
       }
     }
