@@ -4,9 +4,10 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import matter from 'gray-matter'
-import { __test__ } from './import.js'
+import { Command } from 'commander'
+import { args, __test__ } from './import.js'
 
-const { stageOrganized } = __test__
+const { stageOrganized, finalizeChangelogs, allocateChangelogFilenames } = __test__
 
 const originalLog = console.log
 afterEach(() => {
@@ -132,6 +133,77 @@ test('stageOrganized namespaces nested category folders that would otherwise sha
     assert.match(docsOrder, /^- Fundamentals$/m)
     assert.match(docsOrder, /^- cockroach\/cockroach-fundamentals$/m)
   })
+})
+
+test('finalizeChangelogs emits flat canonical changelogs without an order file and suffixes case-insensitive collisions', () => {
+  withStaging((stagingDir) => {
+    const changelogDir = path.join(stagingDir, 'docs', 'Changelog')
+    fs.mkdirSync(path.join(changelogDir, 'foo'), { recursive: true })
+    fs.writeFileSync(
+      path.join(changelogDir, 'foo', 'Bar.md'),
+      matter.stringify('', { title: 'Nested', icon: 'fa-book', 'x-import': 'https://example.com/nested' }),
+    )
+    fs.writeFileSync(
+      path.join(changelogDir, 'foo-bar.md'),
+      matter.stringify('', { title: 'Root', icon: 'fa-book', 'x-import': 'https://example.com/root' }),
+    )
+    fs.writeFileSync(
+      path.join(changelogDir, 'unchanged.md'),
+      matter.stringify('', { title: 'Unchanged', icon: 'fa-book', 'x-import': 'https://example.com/unchanged' }),
+    )
+    fs.writeFileSync(path.join(stagingDir, 'docs', '_order.yaml'), '- Changelog\n')
+
+    assert.equal(finalizeChangelogs(stagingDir), 3)
+
+    const outputDir = path.join(stagingDir, 'changelogs')
+    assert.deepEqual(fs.readdirSync(outputDir).sort(), ['foo-Bar.md', 'foo-bar-2.md', 'unchanged.md'])
+    assert.equal(fs.existsSync(path.join(outputDir, '_order.yaml')), false)
+    assert.equal(fs.existsSync(path.join(stagingDir, 'changelog')), false)
+    assert.equal(fs.existsSync(path.join(stagingDir, 'docs', 'Changelog')), false)
+    assert.equal(fs.existsSync(path.join(stagingDir, 'docs', '_order.yaml')), false)
+    assert.equal(readFm(path.join(outputDir, 'foo-Bar.md')).icon, undefined)
+    assert.equal(readFm(path.join(outputDir, 'foo-Bar.md'))['x-import'], 'https://example.com/nested')
+    assert.equal(readFm(path.join(outputDir, 'foo-bar-2.md'))['x-import'], 'https://example.com/root')
+    assert.equal(readFm(path.join(outputDir, 'unchanged.md'))['x-import'], 'https://example.com/unchanged')
+  })
+})
+
+test('stageOrganized retains case-only changelog names before finalization', () => {
+  withStaging((stagingDir) => {
+    const upper = { title: 'Upper A', url: 'https://example.com/A' }
+    const lower = { title: 'Lower a', url: 'https://example.com/a' }
+    const independent = { title: 'Independent a-2', url: 'https://example.com/a-2' }
+    stageOrganized(
+      { categories: [{ title: 'Changelog', pages: [upper, lower, independent] }] },
+      stagingDir,
+      { slugFor: new Map([[upper, 'A'], [lower, 'a'], [independent, 'a-2']]) },
+    )
+    assert.equal(finalizeChangelogs(stagingDir), 3)
+
+    const outputDir = path.join(stagingDir, 'changelogs')
+    assert.deepEqual(fs.readdirSync(outputDir).sort(), ['A.md', 'a-2.md', 'a-3.md'])
+    assert.equal(readFm(path.join(outputDir, 'A.md')).title, 'Upper A')
+    assert.equal(readFm(path.join(outputDir, 'a-3.md')).title, 'Lower a')
+    assert.equal(readFm(path.join(outputDir, 'a-2.md')).title, 'Independent a-2')
+  })
+})
+
+test('allocateChangelogFilenames preserves an independent numeric-suffix filename', () => {
+  assert.deepEqual(
+    allocateChangelogFilenames([
+      { ancestors: [], slug: 'A' },
+      { ancestors: [], slug: 'a' },
+      { ancestors: [], slug: 'a-2' },
+    ]),
+    ['A', 'a-3', 'a-2'],
+  )
+})
+
+test('import command has no conditional changelog layout option', () => {
+  const cmd = new Command()
+  args(cmd)
+
+  assert.equal(cmd.options.some((option) => option.long === '--separate-changelog'), false)
 })
 
 test('stageOrganized quotes YAML-unsafe slugs in _order.yaml', () => {
