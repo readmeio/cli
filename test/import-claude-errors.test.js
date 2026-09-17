@@ -6,11 +6,11 @@ import { getClaudeReasoningOptions, getStructuredOutput } from '../src/commands/
 test('getClaudeReasoningOptions uses adaptive thinking for Sonnet 5', () => {
   assert.deepEqual(getClaudeReasoningOptions('claude-sonnet-5'), {
     thinking: { type: 'adaptive' },
-    effort: 'high',
+    effort: 'medium',
   })
   assert.deepEqual(getClaudeReasoningOptions('sonnet'), {
     thinking: { type: 'adaptive' },
-    effort: 'high',
+    effort: 'medium',
   })
 })
 
