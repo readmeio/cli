@@ -32,7 +32,7 @@ export const DEFAULT_MODEL = 'claude-sonnet-5'
 
 export function getClaudeReasoningOptions(model) {
   if (model === 'sonnet' || model === DEFAULT_MODEL || model?.startsWith('claude-sonnet-5-')) {
-    return { thinking: { type: 'adaptive' }, effort: 'medium' }
+    return { thinking: { type: 'adaptive' }, effort: 'high' }
   }
   return {}
 }
