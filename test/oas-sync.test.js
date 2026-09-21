@@ -195,8 +195,11 @@ test('spec-derived names cannot escape the reference directory', () => {
     assert.equal(fs.existsSync(path.join(root, '..', 'escaped-title')), false);
     assert.equal(fs.existsSync(path.join(root, 'escaped-title')), false);
 
-    // The page is still generated, under sanitized single-segment names.
-    const page = path.join(refDir, '..-..-escaped-title', '..-..-escaped-tag', '..-escaped-op.md');
+    // The page is still generated, under sanitized single-segment names. The
+    // tag folder is additionally slugified (dots and hyphens collapse to one
+    // hyphen, then trimmed), unlike the title folder which only has slashes
+    // swapped for hyphens.
+    const page = path.join(refDir, '..-..-escaped-title', 'escaped-tag', '..-escaped-op.md');
     assert.ok(fs.existsSync(page), 'expected sanitized page inside reference/');
     const { data } = matter(fs.readFileSync(page, 'utf-8'));
     assert.equal(data.api.operationId, '../escaped-op', 'frontmatter keeps the raw operationId');
@@ -531,6 +534,103 @@ test('a mixed-case tag gets a lowercased folder, but keeps its original case as 
 
     const order = fs.readFileSync(path.join(refDir, '_order.yaml'), 'utf-8');
     assert.deepEqual(order.trim().split('\n'), ['- mixedcasetag']);
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('a space-separated tag folder lands on the platform\'s existing hyphenated folder, not a duplicate', () => {
+  // The platform's own OAS-upload slugifies a tag like "Shipping Labels" to
+  // an "shipping-labels" folder. Before this, oas:sync only lowercased tag
+  // names for the folder, so a raw spec tag with spaces ("shipping labels")
+  // produced a second, duplicate "shipping labels" folder alongside the
+  // platform's "shipping-labels" one instead of reusing it.
+  const spec = JSON.stringify({
+    openapi: '3.0.0',
+    info: { title: 'Pets' },
+    tags: [{ name: 'Shipping Labels' }],
+    paths: {
+      '/a': { get: { operationId: 'getA', tags: ['Shipping Labels'] } },
+    },
+  });
+  const root = makeRepo({
+    'reference/pets.json': spec,
+    // Pre-existing folder as the platform itself would have named it.
+    'reference/Pets/shipping-labels/index.md': '---\ntitle: Shipping Labels\n---\n',
+  });
+  try {
+    syncOas(root);
+    const refDir = path.join(root, 'reference/Pets');
+
+    assert.ok(fs.existsSync(path.join(refDir, 'shipping-labels/geta.md')));
+    assert.equal(fs.existsSync(path.join(refDir, 'shipping labels')), false);
+    assert.equal(fs.readdirSync(refDir).includes('shipping labels'), false);
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('a pre-existing space-separated tag folder is reused as-is, not replaced by a hyphenated duplicate', () => {
+  // A reference tree can already have a tag folder spelled with spaces —
+  // hand-authored, or left over from before this folder-slug fix. Whatever
+  // spelling is already on disk wins: a new operation under that same tag
+  // must land in the existing folder, not spawn a second, hyphenated one
+  // next to it.
+  const spec = JSON.stringify({
+    openapi: '3.0.0',
+    info: { title: 'Pets' },
+    tags: [{ name: 'Shipping Labels' }],
+    paths: {
+      '/a': { get: { operationId: 'getA', tags: ['Shipping Labels'] } },
+    },
+  });
+  const root = makeRepo({
+    'reference/pets.json': spec,
+    'reference/Pets/shipping labels/index.md': '---\ntitle: Shipping Labels\n---\n',
+  });
+  try {
+    syncOas(root);
+    const refDir = path.join(root, 'reference/Pets');
+
+    assert.ok(fs.existsSync(path.join(refDir, 'shipping labels/geta.md')));
+    assert.equal(fs.existsSync(path.join(refDir, 'shipping-labels')), false);
+    assert.equal(fs.readdirSync(refDir).includes('shipping-labels'), false);
+
+    const order = fs.readFileSync(path.join(refDir, '_order.yaml'), 'utf-8');
+    assert.deepEqual(order.trim().split('\n'), ['- shipping labels']);
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('a tag folder missing its category index.md is backfilled in place, regardless of its spelling', () => {
+  // The category-page backfill pass (for a reference first synced by a CLI
+  // version that didn't generate index.md) must resolve the same existing
+  // folder as the operation-adding pass, even when that folder predates the
+  // hyphenated-slug convention.
+  const spec = JSON.stringify({
+    openapi: '3.0.0',
+    info: { title: 'Pets' },
+    tags: [{ name: 'Shipping Labels', description: 'Shipping stuff' }],
+    paths: {
+      '/a': { get: { operationId: 'getA', tags: ['Shipping Labels'] } },
+    },
+  });
+  const root = makeRepo({
+    'reference/pets.json': spec,
+    // Pre-existing operation page (still current in the spec) under the
+    // space-separated folder, with no index.md yet.
+    'reference/Pets/shipping labels/geta.md': matter.stringify('', {
+      api: { file: 'pets.json', operationId: 'getA' },
+    }),
+  });
+  try {
+    syncOas(root);
+    const refDir = path.join(root, 'reference/Pets');
+
+    assert.ok(fs.existsSync(path.join(refDir, 'shipping labels/index.md')));
+    assert.ok(fs.existsSync(path.join(refDir, 'shipping labels/geta.md')));
+    assert.equal(fs.existsSync(path.join(refDir, 'shipping-labels')), false);
   } finally {
     rmRepo(root);
   }
