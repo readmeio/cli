@@ -312,11 +312,12 @@ function buildTagIndexContent(title, description) {
  * non-alphanumeric characters (a space, an underscore, ...) collapsed to a
  * single hyphen. Two roles: (1) as an equivalence key, so "Shipping Labels",
  * "shipping labels" and "shipping-labels" are recognized as the same
- * folder no matter which spelling is already on disk (see `resolveFolder`);
- * and (2) as the spelling used when *creating* a folder that doesn't exist
- * under any spelling yet, matching what a fresh platform OAS-upload would
- * produce. Neither spelling is the one "true" form — this just needs one
- * fixed spelling to create with and to compare against.
+ * folder no matter which spelling is already on disk (see
+ * `existingFoldersBySlug`); and (2) as the spelling used when *creating* a
+ * folder that doesn't exist under any spelling yet, matching what a fresh
+ * platform OAS-upload would produce. Neither spelling is the one "true"
+ * form — this just needs one fixed spelling to create with and to compare
+ * against.
  */
 function slugifyFolder(value) {
   return value
@@ -337,6 +338,30 @@ function operationGroup(op) {
   if (op.tag) return { folder: slugifyFolder(safeSegment(op.tag, 'Other')) || 'other', title: op.tag };
   const folder = slugifyFolder(safeSegment(op.path.replace(/[/{}]/g, ''), 'operation')) || 'operation';
   return { folder, title: op.path };
+}
+
+/**
+ * Map every existing directory directly under `apiDir` to its slugified
+ * name (`slug -> actual on-disk name`), with a single directory read. Used
+ * to resolve a group's folder: whatever spelling is already on disk
+ * (hyphenated, space-separated, hand-authored, ...) is authoritative and
+ * must be reused rather than spawning a second, differently-spelled folder
+ * next to it. A slug with no entry here has nothing on disk yet, so the
+ * caller falls back to creating it under its hyphenated slug — the spelling
+ * a fresh platform OAS-upload would produce.
+ */
+function existingFoldersBySlug(apiDir) {
+  const bySlug = new Map();
+  let entries;
+  try {
+    entries = fs.readdirSync(apiDir, { withFileTypes: true });
+  } catch {
+    return bySlug; // apiDir doesn't exist yet — nothing to reuse.
+  }
+  for (const entry of entries) {
+    if (entry.isDirectory()) bySlug.set(slugifyFolder(entry.name), entry.name);
+  }
+  return bySlug;
 }
 
 /**
@@ -430,35 +455,12 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
 
   // Hyphen vs. space in a group's folder name is not a meaningful difference
   // — "shipping-labels" and "shipping labels" are the same folder to a
-  // human and to the platform, just spelled differently. Whatever spelling
-  // is already on disk (hand-authored, or from a version of this command
-  // that didn't hyphenate) is authoritative and must be reused; a hyphenated
-  // slug is only the spelling this command creates *new* folders with, since
-  // that's what a fresh platform OAS-upload would produce absent any
-  // existing folder to defer to. resolveFolder(slug) looks for a directory
-  // under the API's own folder whose kebab-cased name equals `slug` and
-  // returns its actual on-disk name if found, else `slug` itself (a folder
-  // to be created). Memoized per OAS file per run.
+  // human and to the platform, just spelled differently. One directory read
+  // up front (existingFoldersBySlug) is enough to resolve every group's
+  // folder for this API as an O(1) lookup, rather than walking apiDir again
+  // for each distinct tag/group.
   const apiDir = path.join(refDir, infoTitle);
-  const resolvedFolders = new Map();
-  function resolveFolder(slug) {
-    if (resolvedFolders.has(slug)) return resolvedFolders.get(slug);
-
-    let resolved = slug;
-    try {
-      for (const entry of fs.readdirSync(apiDir, { withFileTypes: true })) {
-        if (entry.isDirectory() && slugifyFolder(entry.name) === slug) {
-          resolved = entry.name;
-          break;
-        }
-      }
-    } catch {
-      // apiDir doesn't exist yet — nothing to reuse.
-    }
-
-    resolvedFolders.set(slug, resolved);
-    return resolved;
-  }
+  const foldersBySlug = existingFoldersBySlug(apiDir);
 
   const existingPages = collectExistingPages(refDir).filter(
     (p) => p.data.api.file === oasFilename,
@@ -536,7 +538,7 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
 
   for (const folder of orderedFolders) {
     const { title, description } = groupsByFolder.get(folder);
-    const actualFolder = resolveFolder(folder);
+    const actualFolder = foldersBySlug.get(folder) || folder;
     const pageDir = path.join(refDir, infoTitle, actualFolder);
     if (!isWithin(refDir, pageDir)) continue;
 
@@ -562,7 +564,7 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
     if (pagesByOpId.has(key)) continue;
 
     const { folder } = operationGroup(op);
-    const pageDir = path.join(refDir, infoTitle, resolveFolder(folder));
+    const pageDir = path.join(refDir, infoTitle, foldersBySlug.get(folder) || folder);
     // Reference slugs share one flat namespace, so uniquify against every slug
     // already in reference/ — a collision (or the reserved `index` slug) gets a
     // numeric suffix rather than being skipped.
