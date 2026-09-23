@@ -50,6 +50,33 @@ Starts a local dev server so you can preview your docs as you write them. Watche
 npx @readme/cli dev
 ```
 
+## GitHub Action
+
+This repo also publishes itself as a GitHub Action, so a workflow can run `lint`, `oas:validate`, or `oas:sync` directly, pinned to a version, without an `npx` install step on every run:
+
+```yaml
+- uses: readmeio/cli@v1
+  with:
+    readme: oas:sync
+```
+
+The `readme` input is the same command you'd run on the CLI, e.g. `lint`, `oas:validate --dereference`, or `oas:sync`. Each command exits non-zero on a real problem, same as running it locally, and publishes its results as step outputs — `has-errors`, `skipped-count`, `total-errors`, and more (see [`action.yml`](./action.yml) for the full list) — so a later step can check them directly instead of parsing log output:
+
+```yaml
+- name: Sync reference pages from OpenAPI specs
+  id: sync
+  uses: readmeio/cli@v1
+  with:
+    readme: oas:sync
+```
+
+```yaml
+- if: steps.sync.outputs.skipped-count != '0'
+  run: echo "::error::oas:sync skipped a page — see the sync step above."
+```
+
+Note: the first run of a workflow using this Action installs one extra dependency (`@readme/markdown`) behind the scenes before your command runs — this is expected, and only adds a few seconds.
+
 ## Feedback
 
 If something doesn't work right, or if you have suggestions, please [open an issue](https://github.com/readmeio/cli/issues). We're actively building this and want to hear from you.

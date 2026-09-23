@@ -1,6 +1,15 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { pathToFileURL, fileURLToPath } from 'node:url'
+import * as componentsValidator from '../validators/components.js'
+import * as contentValidator from '../validators/content.js'
+import * as duplicatesValidator from '../validators/duplicates.js'
+import * as frontmatterValidator from '../validators/frontmatter.js'
+import * as linksValidator from '../validators/links.js'
+import * as nestingValidator from '../validators/nesting.js'
+import * as oasReferenceValidator from '../validators/oas-reference.js'
+import * as oasSchemaValidator from '../validators/oas-schema.js'
+import * as orderingValidator from '../validators/ordering.js'
+import * as recipesValidator from '../validators/recipes.js'
 
 const TARGET_PATTERNS = [
   { dir: 'custom_blocks', ext: ['.mdx', '.md'] },
@@ -32,24 +41,30 @@ export function collectFiles(gitRoot) {
   return files.sort()
 }
 
+// Every validator in src/validators/, imported statically (rather than
+// discovered via a runtime directory scan) so this file — and anything that
+// imports it, like the GitHub Action entrypoint in src/gha.js — can be
+// bundled into a single file by a tool like ncc. Add a new validator's
+// import above and its module here.
+const ALL_VALIDATORS = [
+  componentsValidator,
+  contentValidator,
+  duplicatesValidator,
+  frontmatterValidator,
+  linksValidator,
+  nestingValidator,
+  oasReferenceValidator,
+  oasSchemaValidator,
+  orderingValidator,
+  recipesValidator,
+]
+
 /**
- * Auto-discover all validators from src/validators/.
  * Validators can export `validate()` for per-file checks and/or
  * `validateAll()` for cross-file checks (like ordering).
  */
-async function loadValidators() {
-  const validatorsDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'validators')
-  const files = fs.readdirSync(validatorsDir).filter((f) => f.endsWith('.js'))
-  const validators = []
-
-  for (const file of files) {
-    const mod = await import(pathToFileURL(path.join(validatorsDir, file)).href)
-    if (mod.name && (mod.validate || mod.validateAll)) {
-      validators.push(mod)
-    }
-  }
-
-  return validators
+function loadValidators() {
+  return ALL_VALIDATORS.filter((mod) => mod.name && (mod.validate || mod.validateAll))
 }
 
 /**
