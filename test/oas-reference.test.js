@@ -91,3 +91,31 @@ test('a path page and a webhook page sharing an operationId are both recognized,
     rmRepo(root);
   }
 });
+
+test('x-readme.internal is warned about at the root and on operations, x-internal is not', () => {
+  const spec = JSON.stringify({
+    openapi: '3.1.0',
+    info: { title: 'Pets' },
+    'x-readme': { internal: true },
+    paths: {
+      '/pets': {
+        get: { operationId: 'listPets', 'x-readme': { internal: true } },
+        post: { operationId: 'addPet', 'x-internal': true },
+      },
+    },
+    webhooks: { newPet: { post: { operationId: 'newPet', 'x-readme': { internal: false } } } },
+  });
+  const root = makeRepo({ 'reference/pets.json': spec });
+  try {
+    const res = validateAll(collectFiles(root), root, {}).filter((r) =>
+      r.message.includes('x-readme.internal'),
+    );
+    assert.deepEqual(
+      res.map((r) => r.message.match(/\((.+?)\)/)[1]),
+      ['root', 'GET /pets', 'webhook POST newPet'],
+    );
+    assert.ok(res.every((r) => r.file === 'reference/pets.json' && r.severity === 'warning' && !r.fixable));
+  } finally {
+    rmRepo(root);
+  }
+});

@@ -1,7 +1,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import matter from 'gray-matter';
-import { findOasFiles, extractOperations, collectExistingPages, syncOas, operationKey } from '../commands/oas-sync.js';
+import {
+  findOasFiles,
+  extractOperations,
+  collectExistingPages,
+  syncOas,
+  operationKey,
+  findIgnoredInternalExtensions,
+} from '../commands/oas-sync.js';
 
 export const name = 'oas-reference';
 
@@ -16,6 +23,17 @@ export function validateAll(files, gitRoot, { fix } = {}) {
   const oasMap = new Map();
   for (const { filename, spec } of oasFiles) {
     oasMap.set(filename, { spec, ops: extractOperations(spec) });
+
+    // Check: `x-readme.internal`, which ReadMe ignores for page visibility.
+    for (const location of findIgnoredInternalExtensions(spec)) {
+      results.push({
+        file: `reference/${filename}`,
+        rule: name,
+        severity: 'warning',
+        message: `"x-readme.internal" is ignored by ReadMe (${location}); use "x-internal" instead to hide pages`,
+        fixable: false,
+      });
+    }
   }
 
   // Collect all reference pages with api frontmatter.
