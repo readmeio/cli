@@ -1,6 +1,6 @@
 {
   "name": "@readme/cli",
-  "version": "0.0.30",
+  "version": "0.0.31",
   "description": "The ReadMe CLI",
   "type": "module",
   "bin": {
