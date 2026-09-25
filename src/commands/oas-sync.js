@@ -117,6 +117,60 @@ function resolveLocalPathItemRef(entry, spec) {
 }
 
 /**
+ * Resolve the `x-internal` extension for an operation the way the platform
+ * does on OAS upload: an operation-level value wins, falling back to the
+ * spec root. `present` is false when neither sets it, in which case the
+ * page's visibility is left to whoever owns it (new pages default to
+ * visible, existing pages keep whatever `hidden` they already have).
+ * `x-readme: { internal: true }` is deliberately not read — the platform's
+ * page sync only honors the bare `x-internal` key.
+ */
+function resolveXInternal(operation, spec) {
+  if (operation && 'x-internal' in operation) return { present: true, value: operation['x-internal'] };
+  if (spec && 'x-internal' in spec) return { present: true, value: spec['x-internal'] };
+  return { present: false, value: undefined };
+}
+
+/**
+ * Find every `x-readme: { internal: ... }` in a spec. The `oas` package
+ * documents it as an alternative spelling of `x-internal`, but the platform's
+ * page sync never reads it (see `resolveXInternal`), so it silently has no
+ * effect. Returns human-readable locations (`root`, `GET /pets`,
+ * `webhook POST newPet`) for lint to warn about.
+ */
+export function findIgnoredInternalExtensions(spec) {
+  const hasInternal = (obj) => {
+    const xReadme = obj?.['x-readme'];
+    return !!xReadme && typeof xReadme === 'object' && 'internal' in xReadme;
+  };
+
+  const locations = [];
+  if (hasInternal(spec)) locations.push('root');
+
+  for (const [entries, isWebhook] of [[spec?.paths, false], [spec?.webhooks, true]]) {
+    for (const [name, rawItem] of Object.entries(entries || {})) {
+      for (const [method, operation] of Object.entries(resolveLocalPathItemRef(rawItem, spec) || {})) {
+        if (!HTTP_METHODS.has(method) || !hasInternal(operation)) continue;
+        locations.push(`${isWebhook ? 'webhook ' : ''}${method.toUpperCase()} ${name}`);
+      }
+    }
+  }
+  return locations;
+}
+
+/**
+ * Read a root-level ReadMe extension, in the same precedence as the `oas`
+ * package's `getExtension()` with no operation: `x-readme.<name>`, then
+ * `x-<name>`, then a bare `<name>`.
+ */
+function getRootExtension(spec, name) {
+  const xReadme = spec?.['x-readme'];
+  if (xReadme && typeof xReadme === 'object' && name in xReadme) return xReadme[name];
+  if (spec && `x-${name}` in spec) return spec[`x-${name}`];
+  return spec?.[name];
+}
+
+/**
  * Extract operations from an OAS spec's `paths`, plus its OAS 3.1 `webhooks`
  * (callouts the API itself makes to a client-registered URL, not endpoints the
  * API exposes — a separate top-level sibling of `paths` with the same
@@ -144,9 +198,11 @@ export function extractOperations(spec) {
           operationId,
           summary: operation.summary || null,
           description: operation.description || null,
-          tag: (operation.tags && operation.tags[0]) || null,
+          // The platform groups by the first *non-empty* tag.
+          tag: (Array.isArray(operation.tags) && operation.tags.find((t) => t)) || null,
           path: pathStr,
           isWebhook,
+          xInternal: resolveXInternal(operation, spec),
         });
       }
     }
@@ -265,7 +321,7 @@ function stringifyFrontmatter(frontmatter) {
   return matter.stringify('', frontmatter).replace(/\n+$/, '');
 }
 
-function buildPageContent({ oasFilename, operationId, isWebhook }) {
+function buildPageContent({ oasFilename, operationId, isWebhook, hidden = false }) {
   const frontmatter = {
     api: {
       file: oasFilename,
@@ -275,19 +331,12 @@ function buildPageContent({ oasFilename, operationId, isWebhook }) {
       // what the platform stamps on a page generated from `webhooks`.
       ...(isWebhook ? { webhook: true } : {}),
     },
-    // Mirror the platform's OAS-upload behavior: a newly added endpoint is
-    // always written `hidden: false`, even when its tag and siblings are
-    // `hidden: true`. The backend does not infer this from a missing field, so
-    // it must be written explicitly.
-    //
-    // @todo Honor the `x-internal` OpenAPI extension for page visibility, to
-    // match gitto#2095 (RM-4616 / CX-3303): resolve `hidden` from operation-level
-    // `x-internal`, falling back to root-level, else false; and hide a tag's
-    // index page when all of its operations are `x-internal: true`. Deferred to
-    // keep oas:sync create-only — the resync-side rules (re-applying x-internal
-    // to existing pages, parent hide-ratchet) would require mutating existing
-    // pages, which this command intentionally never does.
-    hidden: false,
+    // The backend does not infer visibility from a missing field, so it's
+    // always written explicitly: `x-internal` when the spec sets it (see
+    // `resolveXInternal`), otherwise `false` — mirroring the platform's
+    // OAS-upload, which writes a new endpoint visible even when its tag and
+    // siblings are hidden.
+    hidden,
   };
 
   return stringifyFrontmatter(frontmatter);
@@ -442,6 +491,133 @@ function reserveSlug(takenSlugs, base) {
 }
 
 /**
+ * Rewrite a page's frontmatter in place, keeping its body. `mutate` receives
+ * a copy of the parsed frontmatter and edits it. Returns true if the file
+ * changed. A copy matters: gray-matter caches parse results by input string,
+ * so mutating the returned `data` would poison later parses of that content.
+ */
+function updateFrontmatter(filePath, mutate) {
+  const content = fs.readFileSync(filePath, 'utf-8');
+  const parsed = matter(content);
+  const data = structuredClone(parsed.data);
+  mutate(data);
+  const next = parsed.content.trim()
+    ? matter.stringify(parsed.content, data)
+    : stringifyFrontmatter(data);
+  if (next === content || JSON.stringify(data) === JSON.stringify(parsed.data)) return false;
+  fs.writeFileSync(filePath, next);
+  return true;
+}
+
+/**
+ * Merge an OAS-derived slug order into an existing `_order.yaml` list, the
+ * way the platform does (gitto's `applyOASOrder`): only the slots already
+ * held by one of `orderedSlugs` are refilled, left to right, in OAS order;
+ * every other entry (hand-authored pages, other APIs) keeps its position.
+ * Slugs not yet listed are inserted right after the last refilled slot, or
+ * appended when none of them are listed yet.
+ */
+export function applyOASOrder(currentOrder, orderedSlugs) {
+  const desired = [...new Set(orderedSlugs)];
+  const desiredSet = new Set(desired);
+  // A hand-edited _order.yaml can list the same slug more than once. Collapse
+  // duplicates up front so each slot corresponds to exactly one distinct slug;
+  // otherwise there are more slots than slugs to refill them with, and the
+  // surplus slots would be filled with `undefined`.
+  const order = [...new Set(currentOrder)];
+  if (!order.length) return desired;
+
+  const slots = order.map((s, i) => (desiredSet.has(s) ? i : -1)).filter((i) => i > -1);
+  if (!slots.length) return [...order, ...desired];
+
+  const remaining = [...desired];
+  for (const index of slots) order[index] = remaining.shift();
+  if (remaining.length) order.splice(slots.at(-1) + 1, 0, ...remaining);
+  return order;
+}
+
+const INDEX_FILES = ['index.md', 'index.mdx', 'index.html'];
+
+/**
+ * Whether a tag folder's category page looks untouched since it was
+ * generated (mirrors gitto's `isAutoGeneratedParentPage`): no body, no
+ * frontmatter beyond title/hidden/excerpt, a title that slugifies to the
+ * folder name (allowing a `-N` uniqueness suffix), and an excerpt, if any,
+ * that is text the spec supplies.
+ *
+ * The excerpt needs care. The platform never writes one, but this CLI stamps
+ * the tag's description as `excerpt` on the pages it generates (see
+ * `buildTagIndexContent`), so its presence alone can't mean "hand-edited".
+ * Nothing records what a page was generated from, and by the time a folder
+ * is being cleaned up its tag has often left the spec, so the excerpt can't
+ * be checked against "its" tag either. What can be checked is whether the
+ * current spec still supplies that exact text under *any* tag
+ * (`specDescriptions`): a generated excerpt is always lifted from
+ * `tags[].description`, and a retag that renames a tag usually keeps its
+ * description, so this recognizes generated pages across the common rename.
+ * An excerpt the spec no longer supplies could be a description that left
+ * the spec, or a person's edit; with no way to tell them apart, the page is
+ * reported as hand-edited and `cleanupTagFolder` flattens it rather than
+ * deleting it. A stale page can be removed by hand; a deleted edit is gone.
+ */
+function isGeneratedTagIndex(indexPath, specDescriptions) {
+  let parsed;
+  try {
+    parsed = matter(fs.readFileSync(indexPath, 'utf-8'));
+  } catch {
+    return false;
+  }
+  const { data, content } = parsed;
+  if (content.trim()) return false;
+  if (typeof data.title !== 'string' || !('hidden' in data)) return false;
+  if (Object.keys(data).some((k) => !['title', 'hidden', 'excerpt'].includes(k))) return false;
+  if ('excerpt' in data && !specDescriptions.has(data.excerpt)) return false;
+
+  const dirSlug = slugifyFolder(path.basename(path.dirname(indexPath)));
+  const titleSlug = slugifyFolder(data.title);
+  return dirSlug === titleSlug || new RegExp(`^${titleSlug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-\\d+$`).test(dirSlug);
+}
+
+/**
+ * After `apply-tag-changes` moves pages out of a tag folder, clean up the
+ * folder if it's now empty (gitto's `cleanupParentDirectory`). A generated
+ * category page is deleted along with its folder; a hand-edited one is kept
+ * by flattening `tag/index.md` into a sibling `tag.md` (same slug, so the
+ * parent `_order.yaml` entry still applies).
+ */
+function cleanupTagFolder(dir, { refDir, specDescriptions, takenSlugs, changes }) {
+  let entries;
+  try {
+    entries = fs.readdirSync(dir);
+  } catch {
+    return;
+  }
+  const others = entries.filter((e) => !INDEX_FILES.includes(e) && e !== '_order.yaml');
+  if (others.length) return;
+
+  const parentDir = path.dirname(dir);
+  const slug = path.basename(dir);
+  const indexFile = entries.find((e) => INDEX_FILES.includes(e));
+
+  if (!indexFile || isGeneratedTagIndex(path.join(dir, indexFile), specDescriptions)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    removeFromOrder(path.join(parentDir, '_order.yaml'), slug);
+    if (indexFile) {
+      releaseSlug(takenSlugs, slug);
+      changes.deleted.push(path.relative(refDir, path.join(dir, indexFile)));
+    }
+    return;
+  }
+
+  const from = path.join(dir, indexFile);
+  const to = path.join(parentDir, `${slug}${path.extname(indexFile)}`);
+  if (fs.existsSync(to)) return;
+  fs.renameSync(from, to);
+  fs.rmSync(dir, { recursive: true, force: true });
+  changes.moved.push({ from: path.relative(refDir, from), to: path.relative(refDir, to) });
+}
+
+/**
  * Run the sync for a single OAS file. Returns changes for that file.
  *
  * `takenSlugs` is the reference-wide set of slugs already in use; it is read and
@@ -475,7 +651,12 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
     );
   }
 
-  const changes = { added: [], deleted: [], skipped: [] };
+  const changes = { added: [], deleted: [], moved: [], updated: [], skipped: [] };
+
+  // Root-only opt-ins; only an explicit `true` counts, so a missing or
+  // malformed value leaves existing placement and order alone.
+  const applyTagChanges = getRootExtension(spec, 'apply-tag-changes') === true;
+  const applyEndpointOrder = getRootExtension(spec, 'apply-endpoint-order') === true;
 
   // Tag descriptions from the spec's top-level `tags` array, used for the
   // per-tag category landing page (index.md).
@@ -484,6 +665,9 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
       .filter((t) => t && t.name)
       .map((t) => [t.name, t.description || null]),
   );
+  // Every description the spec supplies, regardless of which tag: what an
+  // emptied tag folder's excerpt is checked against (see `isGeneratedTagIndex`).
+  const specDescriptions = new Set([...tagDescriptions.values()].filter(Boolean));
 
   // Deletes: pages referencing operations that no longer exist.
   for (const [opId, page] of pagesByOpId) {
@@ -537,11 +721,14 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
     ...[...groupsByFolder.keys()].filter((folder) => !declaredOrder.includes(folder)),
   ];
 
+  const groupDirs = new Map();
+  const createdIndexes = new Set();
   for (const folder of orderedFolders) {
     const { title, description } = groupsByFolder.get(folder);
     const actualFolder = foldersBySlug.get(folder) || folder;
     const pageDir = path.join(refDir, infoTitle, actualFolder);
     if (!isWithin(refDir, pageDir)) continue;
+    groupDirs.set(folder, pageDir);
 
     const indexPath = path.join(pageDir, 'index.md');
     if (!fs.existsSync(indexPath)) {
@@ -549,13 +736,78 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
       fs.mkdirSync(pageDir, { recursive: true });
       fs.writeFileSync(indexPath, buildTagIndexContent(title, description));
       changes.added.push(path.relative(refDir, indexPath));
+      createdIndexes.add(indexPath);
       // The category page's slug is the folder name; reserve it so no operation
       // takes it. Only when just-created — an existing index.md was already
       // counted by collectReferenceSlugs's initial disk walk.
       takeSlug(takenSlugs, actualFolder);
+    } else if (applyTagChanges) {
+      // With `apply-tag-changes`, the spec owns the category page's title and
+      // excerpt too (a tag with no description clears the excerpt). Its body
+      // and any other frontmatter are the user's and are kept.
+      const updated = updateFrontmatter(indexPath, (data) => {
+        data.title = title;
+        if (description) data.excerpt = description;
+        else delete data.excerpt;
+      });
+      if (updated) changes.updated.push(path.relative(refDir, indexPath));
     }
     addToOrder(path.join(refDir, infoTitle, '_order.yaml'), actualFolder);
     addToOrder(path.join(refDir, '_order.yaml'), infoTitle);
+  }
+
+  // Where each of this spec's operations ends up this run, by operationKey.
+  const opPaths = new Map();
+  const vacatedDirs = new Set();
+
+  // Existing pages: by default they stay wherever they are. Two opt-ins can
+  // touch them: `x-internal` (visibility) and `apply-tag-changes` (placement).
+  for (const [key, op] of specOps) {
+    const page = pagesByOpId.get(key);
+    if (!page) continue;
+    let filePath = page.filePath;
+
+    // `apply-tag-changes`: a page still inside this API's category follows
+    // its tag's folder, even if it was hand-moved or nested elsewhere in the
+    // category. A page moved to another category is the user's call and is
+    // never touched. Legacy pages literally named index.md are left alone —
+    // moving one would turn it into the destination folder's category page.
+    const targetDir = groupDirs.get(operationGroup(op).folder);
+    if (
+      applyTagChanges &&
+      targetDir &&
+      isWithin(apiDir, filePath) &&
+      path.basename(filePath) !== 'index.md' &&
+      path.dirname(filePath) !== targetDir
+    ) {
+      const target = path.join(targetDir, path.basename(filePath));
+      if (fs.existsSync(target)) {
+        changes.skipped.push({ path: path.relative(refDir, target), operationId: op.operationId });
+      } else {
+        const fromDir = path.dirname(filePath);
+        const slug = path.basename(filePath, '.md');
+        fs.mkdirSync(targetDir, { recursive: true });
+        fs.renameSync(filePath, target);
+        removeFromOrder(path.join(fromDir, '_order.yaml'), slug);
+        addToOrder(path.join(targetDir, '_order.yaml'), slug);
+        vacatedDirs.add(fromDir);
+        changes.moved.push({ from: page.relativePath, to: path.relative(refDir, target) });
+        filePath = target;
+      }
+    }
+
+    // `x-internal`, when the spec sets it (operation or root), decides the
+    // page's visibility in both directions. When it's absent the page keeps
+    // its own `hidden` — removing the extension never unhides a page.
+    if (op.xInternal.present) {
+      const hidden = Boolean(op.xInternal.value);
+      const updated = updateFrontmatter(filePath, (data) => {
+        data.hidden = hidden;
+      });
+      if (updated) changes.updated.push(path.relative(refDir, filePath));
+    }
+
+    opPaths.set(key, filePath);
   }
 
   // Adds: operation pages with no page yet. Title/excerpt are owned by the OAS
@@ -580,13 +832,81 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
     }
     fs.mkdirSync(pageDir, { recursive: true });
 
-    const content = buildPageContent({ oasFilename, operationId: op.operationId, isWebhook: op.isWebhook });
+    const content = buildPageContent({
+      oasFilename,
+      operationId: op.operationId,
+      isWebhook: op.isWebhook,
+      hidden: op.xInternal.present ? Boolean(op.xInternal.value) : false,
+    });
     fs.writeFileSync(pagePath, content);
 
     addToOrder(path.join(pageDir, '_order.yaml'), slug);
 
     changes.added.push(path.relative(refDir, pagePath));
+    opPaths.set(key, pagePath);
   }
+
+  // `x-internal` on category pages: a folder whose operations are *all*
+  // internal gets its category page hidden too. This only ever hides — a
+  // category page is never unhidden by sync, so a manual `hidden: true`
+  // survives. Mirroring the platform, a category page created this run
+  // counts any truthy `x-internal`; an existing one needs an explicit `true`.
+  const childrenByDir = new Map();
+  for (const [key, filePath] of opPaths) {
+    const dir = path.dirname(filePath);
+    if (!childrenByDir.has(dir)) childrenByDir.set(dir, []);
+    childrenByDir.get(dir).push(specOps.get(key).xInternal);
+  }
+  for (const [dir, children] of childrenByDir) {
+    const indexPath = path.join(dir, 'index.md');
+    if (!fs.existsSync(indexPath)) continue;
+    const isNew = createdIndexes.has(indexPath);
+    const allHidden = children.every((x) => x.present && (isNew ? Boolean(x.value) : x.value === true));
+    if (!allHidden) continue;
+    const updated = updateFrontmatter(indexPath, (data) => {
+      data.hidden = true;
+    });
+    if (updated && !isNew) changes.updated.push(path.relative(refDir, indexPath));
+  }
+
+  // Tag folders emptied by `apply-tag-changes` moves. Never the API's own
+  // category folder, and never a folder an operation still lives in.
+  for (const dir of vacatedDirs) {
+    if (!isWithin(apiDir, dir) || childrenByDir.has(dir)) continue;
+    cleanupTagFolder(dir, { refDir, specDescriptions, takenSlugs, changes });
+  }
+
+  // `apply-endpoint-order`: reorder each folder's operation pages to match
+  // the order they're declared in the spec (paths, then webhooks). Only this
+  // API's pages are reordered, and only among the `_order.yaml` slots they
+  // already hold — other entries keep their place. Files never move.
+  if (applyEndpointOrder) {
+    const orderByDir = new Map();
+    for (const key of specOps.keys()) {
+      const filePath = opPaths.get(key);
+      if (!filePath || !isWithin(apiDir, filePath)) continue;
+      // A legacy page named index.md is ordered in its parent, by folder name.
+      const isIndex = path.basename(filePath) === 'index.md';
+      const dir = isIndex ? path.dirname(path.dirname(filePath)) : path.dirname(filePath);
+      const slug = isIndex ? path.basename(path.dirname(filePath)) : path.basename(filePath, '.md');
+      if (!orderByDir.has(dir)) orderByDir.set(dir, []);
+      orderByDir.get(dir).push(slug);
+    }
+    for (const [dir, slugs] of orderByDir) {
+      const orderPath = path.join(dir, '_order.yaml');
+      const current = fs.existsSync(orderPath) ? parseOrderYaml(fs.readFileSync(orderPath, 'utf-8')) : [];
+      const next = applyOASOrder(current, slugs);
+      if (next.join('\n') === current.join('\n')) continue;
+      writeOrderYaml(orderPath, next);
+      changes.updated.push(path.relative(refDir, orderPath));
+    }
+  }
+
+  // Two passes can each touch the same tag page in one run (`apply-tag-changes`
+  // syncing its title/excerpt, then `x-internal` hiding it once every operation
+  // in it is internal). Report each file once so the printed list and the
+  // `updated-count` output reflect files, not writes.
+  changes.updated = [...new Set(changes.updated)];
 
   return changes;
 }
@@ -600,7 +920,8 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
  *
  * @param {string | { cwd?: string }} input  Repo root path, or `{ cwd }` object.
  * @returns {null | Array<{ filename: string, spec: object, opCount: number,
- *   changes: { added: string[], deleted: string[] } }>}
+ *   changes: { added: string[], deleted: string[], moved: { from, to }[],
+ *   updated: string[], skipped: { path, operationId }[] } }>}
  *   Returns null if there's no reference/ dir or no specs.
  */
 export function syncOas(input) {
@@ -632,19 +953,27 @@ export function syncOas(input) {
  * programmatic API above.
  *
  * @param {ReturnType<typeof syncOas>} results
- * @returns {{ totalAdded: number, totalDeleted: number, totalSkipped: number,
+ * @returns {{ totalAdded: number, totalDeleted: number, totalMoved: number,
+ *   totalUpdated: number, totalSkipped: number,
  *   skipped: Array<{ filename: string, path: string, operationId: string }> }}
  */
 export function printSyncResults(results) {
   let totalAdded = 0;
   let totalDeleted = 0;
+  let totalMoved = 0;
+  let totalUpdated = 0;
   let totalSkipped = 0;
   const skipped = [];
 
   for (const { filename, spec, opCount, changes } of results) {
     const title = spec.info?.title || filename;
     const hasChanges =
-      changes.added.length + changes.deleted.length + changes.skipped.length > 0;
+      changes.added.length +
+        changes.deleted.length +
+        changes.moved.length +
+        changes.updated.length +
+        changes.skipped.length >
+      0;
 
     const dot = hasChanges ? styles.warn('●') : styles.success('●');
     console.log();
@@ -660,6 +989,12 @@ export function printSyncResults(results) {
     for (const file of changes.deleted) {
       console.log(`    ${styles.err('−')} Deleted ${file}`);
     }
+    for (const { from, to } of changes.moved) {
+      console.log(`    ${styles.warn('→')} Moved ${from} to ${to}`);
+    }
+    for (const file of changes.updated) {
+      console.log(`    ${styles.warn('~')} Updated ${file}`);
+    }
     for (const { path: file, operationId } of changes.skipped) {
       console.log(
         `    ${styles.warn('!')} Skipped ${file} for "${operationId}" (destination already exists)`,
@@ -669,10 +1004,12 @@ export function printSyncResults(results) {
 
     totalAdded += changes.added.length;
     totalDeleted += changes.deleted.length;
+    totalMoved += changes.moved.length;
+    totalUpdated += changes.updated.length;
     totalSkipped += changes.skipped.length;
   }
 
-  return { totalAdded, totalDeleted, totalSkipped, skipped };
+  return { totalAdded, totalDeleted, totalMoved, totalUpdated, totalSkipped, skipped };
 }
 
 export async function run(_options, _cmd, ctx) {
@@ -684,6 +1021,8 @@ export async function run(_options, _cmd, ctx) {
     writeGithubActionsOutputs({
       'added-count': '0',
       'deleted-count': '0',
+      'moved-count': '0',
+      'updated-count': '0',
       'skipped-count': '0',
       skipped: [],
       'has-errors': 'true',
@@ -698,6 +1037,8 @@ export async function run(_options, _cmd, ctx) {
     writeGithubActionsOutputs({
       'added-count': '0',
       'deleted-count': '0',
+      'moved-count': '0',
+      'updated-count': '0',
       'skipped-count': '0',
       skipped: [],
       'has-errors': 'false',
@@ -705,10 +1046,16 @@ export async function run(_options, _cmd, ctx) {
     return;
   }
 
-  const { totalAdded, totalDeleted, totalSkipped, skipped } = printSyncResults(results);
+  const { totalAdded, totalDeleted, totalMoved, totalUpdated, totalSkipped, skipped } =
+    printSyncResults(results);
 
   console.log();
-  const total = totalAdded + totalDeleted;
+  const total = totalAdded + totalDeleted + totalMoved + totalUpdated;
+  const extra = [
+    totalMoved > 0 ? `${totalMoved} moved` : null,
+    totalUpdated > 0 ? `${totalUpdated} updated` : null,
+  ].filter(Boolean);
+  const extraNote = extra.length ? `, ${extra.join(', ')}` : '';
   // A skip means a page couldn't be written where it should've gone — either
   // a spec-crafted path trying to escape reference/, or the destination
   // already existing in a way sync's own bookkeeping didn't expect. Neither
@@ -716,17 +1063,19 @@ export async function run(_options, _cmd, ctx) {
   // and oas:validate already fail on a real problem, rather than leaving it
   // to whoever wraps this command in CI to notice and fail on it themselves.
   if (totalSkipped > 0) {
-    const syncedNote = total > 0 ? ` (${totalAdded} added, ${totalDeleted} deleted)` : '';
+    const syncedNote = total > 0 ? ` (${totalAdded} added, ${totalDeleted} deleted${extraNote})` : '';
     styles.error(`${totalSkipped} ${totalSkipped === 1 ? 'page' : 'pages'} skipped${syncedNote} — see above for which, and why.`);
   } else if (total === 0) {
     styles.ok('Reference pages are already in sync.');
   } else {
-    styles.ok(`Synced: ${totalAdded} added, ${totalDeleted} deleted.`);
+    styles.ok(`Synced: ${totalAdded} added, ${totalDeleted} deleted${extraNote}.`);
   }
 
   writeGithubActionsOutputs({
     'added-count': String(totalAdded),
     'deleted-count': String(totalDeleted),
+    'moved-count': String(totalMoved),
+    'updated-count': String(totalUpdated),
     'skipped-count': String(totalSkipped),
     skipped,
     'has-errors': String(totalSkipped > 0),

@@ -33,6 +33,10 @@ outputs:
     description: Reference pages added (oas:sync only)
   deleted-count:
     description: Reference pages deleted (oas:sync only)
+  moved-count:
+    description: Reference pages moved to match changed tags via apply-tag-changes (oas:sync only)
+  updated-count:
+    description: Reference pages or _order.yaml files updated in place, e.g. by x-internal or apply-endpoint-order (oas:sync only)
   skipped-count:
     description: Reference pages skipped because the destination filename already exists (oas:sync only)
   skipped:

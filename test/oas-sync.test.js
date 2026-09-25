@@ -935,3 +935,454 @@ test('an inline operation alongside a $ref sibling is not discarded', () => {
     rmRepo(root);
   }
 });
+
+// --- x-internal ---------------------------------------------------------
+
+function fm(root, rel) {
+  return matter(fs.readFileSync(path.join(root, rel), 'utf-8')).data;
+}
+
+function order(root, rel) {
+  return fs
+    .readFileSync(path.join(root, rel), 'utf-8')
+    .trim()
+    .split('\n')
+    .map((l) => l.replace(/^- /, ''));
+}
+
+test('x-internal: operation-level value wins over root, absent falls back to root', () => {
+  const spec = JSON.stringify({
+    openapi: '3.0.0',
+    info: { title: 'Api' },
+    'x-internal': true,
+    tags: [{ name: 'pets' }],
+    paths: {
+      '/a': { get: { operationId: 'a', tags: ['pets'], 'x-internal': false } },
+      '/b': { get: { operationId: 'b', tags: ['pets'] } },
+    },
+  });
+  const root = makeRepo({ 'reference/api.json': spec });
+  try {
+    syncOas(root);
+    assert.equal(fm(root, 'reference/Api/pets/a.md').hidden, false);
+    assert.equal(fm(root, 'reference/Api/pets/b.md').hidden, true);
+    // One child visible, so the tag page stays visible.
+    assert.equal(fm(root, 'reference/Api/pets/index.md').hidden, false);
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('x-internal: a new tag page is hidden when every operation in it is internal', () => {
+  const spec = JSON.stringify({
+    openapi: '3.0.0',
+    info: { title: 'Api' },
+    paths: {
+      '/a': { get: { operationId: 'a', tags: ['secret'], 'x-internal': true } },
+      '/b': { get: { operationId: 'b', tags: ['secret'], 'x-internal': true } },
+      '/c': { get: { operationId: 'c', tags: ['open'] } },
+    },
+  });
+  const root = makeRepo({ 'reference/api.json': spec });
+  try {
+    syncOas(root);
+    assert.equal(fm(root, 'reference/Api/secret/index.md').hidden, true);
+    assert.equal(fm(root, 'reference/Api/open/index.md').hidden, false);
+    assert.equal(fm(root, 'reference/Api/open/c.md').hidden, false);
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('x-internal: resync applies the spec value to existing pages in both directions, keeping the body', () => {
+  const spec = (value) =>
+    JSON.stringify({
+      openapi: '3.0.0',
+      info: { title: 'Api' },
+      paths: {
+        '/a': { get: { operationId: 'a', tags: ['t'], 'x-internal': value } },
+        '/b': { get: { operationId: 'b', tags: ['t'] } },
+      },
+    });
+  const root = makeRepo({
+    'reference/api.json': spec(true),
+    'reference/Api/t/index.md': '---\ntitle: t\nhidden: false\n---\n',
+    'reference/Api/t/a.md': '---\napi:\n  file: api.json\n  operationId: a\nhidden: false\n---\nCustom body\n',
+    'reference/Api/t/b.md': '---\napi:\n  file: api.json\n  operationId: b\nhidden: true\n---\n',
+  });
+  try {
+    let [result] = syncOas(root);
+    assert.deepEqual(result.changes.updated, ['Api/t/a.md']);
+    assert.equal(fm(root, 'reference/Api/t/a.md').hidden, true);
+    assert.match(fs.readFileSync(path.join(root, 'reference/Api/t/a.md'), 'utf-8'), /Custom body/);
+    // No x-internal on b: its manual hidden: true is preserved.
+    assert.equal(fm(root, 'reference/Api/t/b.md').hidden, true);
+
+    fs.writeFileSync(path.join(root, 'reference/api.json'), spec(false));
+    [result] = syncOas(root);
+    assert.equal(fm(root, 'reference/Api/t/a.md').hidden, false);
+
+    // Re-running is a no-op.
+    [result] = syncOas(root);
+    assert.deepEqual(result.changes.updated, []);
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('x-internal: removing the extension does not unhide an existing page', () => {
+  const root = makeRepo({
+    'reference/api.json': JSON.stringify({
+      openapi: '3.0.0',
+      info: { title: 'Api' },
+      paths: { '/a': { get: { operationId: 'a', tags: ['t'] } } },
+    }),
+    'reference/Api/t/index.md': '---\ntitle: t\nhidden: false\n---\n',
+    'reference/Api/t/a.md': '---\napi:\n  file: api.json\n  operationId: a\nhidden: true\n---\n',
+  });
+  try {
+    syncOas(root);
+    assert.equal(fm(root, 'reference/Api/t/a.md').hidden, true);
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('x-internal: an existing tag page is hidden once all its operations are internal, and never unhidden', () => {
+  const spec = (value) =>
+    JSON.stringify({
+      openapi: '3.0.0',
+      info: { title: 'Api' },
+      'x-internal': value,
+      paths: { '/a': { get: { operationId: 'a', tags: ['t'] } } },
+    });
+  const root = makeRepo({
+    'reference/api.json': spec(true),
+    'reference/Api/t/index.md': '---\ntitle: t\nhidden: false\n---\n',
+    'reference/Api/t/a.md': '---\napi:\n  file: api.json\n  operationId: a\nhidden: false\n---\n',
+  });
+  try {
+    syncOas(root);
+    assert.equal(fm(root, 'reference/Api/t/index.md').hidden, true);
+
+    fs.writeFileSync(path.join(root, 'reference/api.json'), spec(false));
+    syncOas(root);
+    assert.equal(fm(root, 'reference/Api/t/a.md').hidden, false);
+    assert.equal(fm(root, 'reference/Api/t/index.md').hidden, true);
+  } finally {
+    rmRepo(root);
+  }
+});
+
+// --- apply-tag-changes --------------------------------------------------
+
+function retaggedSpec(extra = {}) {
+  return JSON.stringify({
+    openapi: '3.0.0',
+    info: { title: 'Api' },
+    ...extra,
+    tags: [{ name: 'new', description: 'New tag' }],
+    paths: { '/a': { get: { operationId: 'a', tags: ['new'] } } },
+  });
+}
+
+const RETAG_FILES = {
+  'reference/_order.yaml': '- Api\n',
+  'reference/Api/_order.yaml': '- old\n',
+  'reference/Api/old/index.md': '---\ntitle: old\nhidden: false\n---\n',
+  'reference/Api/old/_order.yaml': '- a\n',
+  'reference/Api/old/a.md': '---\napi:\n  file: api.json\n  operationId: a\nhidden: false\n---\n',
+};
+
+test('without apply-tag-changes, a retagged page stays where it is', () => {
+  const root = makeRepo({ ...RETAG_FILES, 'reference/api.json': retaggedSpec() });
+  try {
+    const [result] = syncOas(root);
+    assert.ok(fs.existsSync(path.join(root, 'reference/Api/old/a.md')));
+    assert.equal(fs.existsSync(path.join(root, 'reference/Api/new/a.md')), false);
+    assert.deepEqual(result.changes.moved, []);
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('apply-tag-changes moves a retagged page to its new tag and removes the emptied generated tag folder', () => {
+  const root = makeRepo({
+    ...RETAG_FILES,
+    'reference/api.json': retaggedSpec({ 'x-readme': { 'apply-tag-changes': true } }),
+  });
+  try {
+    const [result] = syncOas(root);
+    assert.ok(fs.existsSync(path.join(root, 'reference/Api/new/a.md')));
+    assert.equal(fs.existsSync(path.join(root, 'reference/Api/old')), false);
+    assert.deepEqual(result.changes.moved, [{ from: 'Api/old/a.md', to: 'Api/new/a.md' }]);
+    assert.ok(result.changes.deleted.includes('Api/old/index.md'));
+    assert.deepEqual(order(root, 'reference/Api/_order.yaml'), ['new']);
+    assert.deepEqual(order(root, 'reference/Api/new/_order.yaml'), ['a']);
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('apply-tag-changes deletes an emptied generated tag folder after a rename that kept the tag\'s description', () => {
+  // The page was generated when the tag was still called `old`, with the
+  // description that became its excerpt. The tag has since been renamed to
+  // `new` but kept that description, so the excerpt is still text the spec
+  // supplies: the page is recognized as generated and removed, not flattened
+  // into a stale `old.md` that keeps a sidebar entry alive.
+  const root = makeRepo({
+    ...RETAG_FILES,
+    'reference/Api/old/index.md': '---\ntitle: old\nexcerpt: New tag\nhidden: false\n---\n',
+    'reference/api.json': retaggedSpec({ 'x-readme': { 'apply-tag-changes': true } }),
+  });
+  try {
+    const [result] = syncOas(root);
+    assert.equal(fs.existsSync(path.join(root, 'reference/Api/old')), false);
+    assert.equal(fs.existsSync(path.join(root, 'reference/Api/old.md')), false);
+    assert.ok(result.changes.deleted.includes('Api/old/index.md'));
+    assert.deepEqual(result.changes.moved, [{ from: 'Api/old/a.md', to: 'Api/new/a.md' }]);
+    assert.deepEqual(order(root, 'reference/Api/_order.yaml'), ['new']);
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('apply-tag-changes flattens, never deletes, an emptied tag folder whose excerpt is not text from the spec', () => {
+  // Only the excerpt differs from a generated page. It may be a person's
+  // edit, or the description of a tag that has since left the spec; there is
+  // no way to tell, so the page is kept.
+  const root = makeRepo({
+    ...RETAG_FILES,
+    'reference/Api/old/index.md': '---\ntitle: old\nexcerpt: My own words\nhidden: false\n---\n',
+    'reference/api.json': retaggedSpec({ 'x-readme': { 'apply-tag-changes': true } }),
+  });
+  try {
+    const [result] = syncOas(root);
+    assert.equal(fs.existsSync(path.join(root, 'reference/Api/old')), false);
+    assert.equal(fm(root, 'reference/Api/old.md').excerpt, 'My own words');
+    assert.deepEqual(result.changes.deleted, []);
+    assert.ok(result.changes.moved.some((m) => m.from === 'Api/old/index.md' && m.to === 'Api/old.md'));
+    assert.deepEqual(order(root, 'reference/Api/_order.yaml'), ['old', 'new']);
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('apply-tag-changes flattens an emptied tag folder whose category page was hand-edited', () => {
+  const root = makeRepo({
+    ...RETAG_FILES,
+    'reference/Api/old/index.md': '---\ntitle: old\nhidden: false\n---\nHand-written intro\n',
+    'reference/api.json': retaggedSpec({ 'x-apply-tag-changes': true }),
+  });
+  try {
+    syncOas(root);
+    assert.equal(fs.existsSync(path.join(root, 'reference/Api/old')), false);
+    assert.match(fs.readFileSync(path.join(root, 'reference/Api/old.md'), 'utf-8'), /Hand-written intro/);
+    assert.deepEqual(order(root, 'reference/Api/_order.yaml'), ['old', 'new']);
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('apply-tag-changes keeps an old tag folder that still has other pages', () => {
+  const root = makeRepo({
+    ...RETAG_FILES,
+    'reference/Api/old/guide.md': '---\ntitle: Guide\n---\nHi\n',
+    'reference/api.json': retaggedSpec({ 'x-readme': { 'apply-tag-changes': true } }),
+  });
+  try {
+    syncOas(root);
+    assert.ok(fs.existsSync(path.join(root, 'reference/Api/old/index.md')));
+    assert.ok(fs.existsSync(path.join(root, 'reference/Api/old/guide.md')));
+    assert.ok(fs.existsSync(path.join(root, 'reference/Api/new/a.md')));
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('apply-tag-changes pulls a hand-nested page back to its tag folder, but leaves one moved to another category', () => {
+  const spec = JSON.stringify({
+    openapi: '3.0.0',
+    info: { title: 'Api' },
+    'x-readme': { 'apply-tag-changes': true },
+    paths: {
+      '/a': { get: { operationId: 'a', tags: ['t'] } },
+      '/b': { get: { operationId: 'b', tags: ['t'] } },
+    },
+  });
+  const root = makeRepo({
+    'reference/api.json': spec,
+    'reference/Api/t/index.md': '---\ntitle: t\nhidden: false\n---\n',
+    'reference/Api/t/custom/index.md': '---\ntitle: Custom\n---\nMine\n',
+    'reference/Api/t/custom/a.md': '---\napi:\n  file: api.json\n  operationId: a\nhidden: false\n---\n',
+    'reference/Elsewhere/b.md': '---\napi:\n  file: api.json\n  operationId: b\nhidden: false\n---\n',
+  });
+  try {
+    syncOas(root);
+    assert.ok(fs.existsSync(path.join(root, 'reference/Api/t/a.md')));
+    assert.ok(fs.existsSync(path.join(root, 'reference/Elsewhere/b.md')));
+    assert.equal(fs.existsSync(path.join(root, 'reference/Api/t/b.md')), false);
+    // The user's custom parent was hand-edited, so it's flattened, not deleted.
+    assert.match(fs.readFileSync(path.join(root, 'reference/Api/t/custom.md'), 'utf-8'), /Mine/);
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('apply-tag-changes syncs an existing tag page\'s title and excerpt, keeping its body', () => {
+  const spec = JSON.stringify({
+    openapi: '3.0.0',
+    info: { title: 'Api' },
+    'x-readme': { 'apply-tag-changes': true },
+    tags: [{ name: 'Pets', description: 'All about pets' }, { name: 'Plain' }],
+    paths: {
+      '/a': { get: { operationId: 'a', tags: ['Pets'] } },
+      '/b': { get: { operationId: 'b', tags: ['Plain'] } },
+    },
+  });
+  const root = makeRepo({
+    'reference/api.json': spec,
+    'reference/Api/pets/index.md': '---\ntitle: Custom title\nexcerpt: old\nhidden: false\n---\nBody\n',
+    'reference/Api/plain/index.md': '---\ntitle: plain\nexcerpt: stale\nhidden: false\n---\n',
+  });
+  try {
+    syncOas(root);
+    const pets = matter(fs.readFileSync(path.join(root, 'reference/Api/pets/index.md'), 'utf-8'));
+    assert.equal(pets.data.title, 'Pets');
+    assert.equal(pets.data.excerpt, 'All about pets');
+    assert.match(pets.content, /Body/);
+    const plain = fm(root, 'reference/Api/plain/index.md');
+    assert.equal(plain.title, 'Plain');
+    assert.equal('excerpt' in plain, false);
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('a tag page updated by both apply-tag-changes and x-internal is reported as updated once', () => {
+  const spec = JSON.stringify({
+    openapi: '3.0.0',
+    info: { title: 'Api' },
+    'x-readme': { 'apply-tag-changes': true },
+    'x-internal': true,
+    tags: [{ name: 't', description: 'Fresh' }],
+    paths: { '/a': { get: { operationId: 'a', tags: ['t'] } } },
+  });
+  const root = makeRepo({
+    'reference/api.json': spec,
+    'reference/Api/t/index.md': '---\ntitle: t\nexcerpt: stale\nhidden: false\n---\n',
+    'reference/Api/t/a.md': '---\napi:\n  file: api.json\n  operationId: a\nhidden: false\n---\n',
+  });
+  try {
+    const [result] = syncOas(root);
+    // Both passes really did write to it: excerpt synced, then hidden.
+    const index = fm(root, 'reference/Api/t/index.md');
+    assert.equal(index.excerpt, 'Fresh');
+    assert.equal(index.hidden, true);
+    assert.deepEqual(result.changes.updated.slice().sort(), ['Api/t/a.md', 'Api/t/index.md']);
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('apply-tag-changes must be exactly true and set at the root', () => {
+  const root = makeRepo({
+    ...RETAG_FILES,
+    'reference/api.json': retaggedSpec({ 'x-readme': { 'apply-tag-changes': 'true' } }),
+  });
+  try {
+    syncOas(root);
+    assert.ok(fs.existsSync(path.join(root, 'reference/Api/old/a.md')));
+  } finally {
+    rmRepo(root);
+  }
+});
+
+// --- apply-endpoint-order -----------------------------------------------
+
+function orderedSpec(extra = {}) {
+  return JSON.stringify({
+    openapi: '3.0.0',
+    info: { title: 'Api' },
+    ...extra,
+    paths: {
+      '/c': { get: { operationId: 'c', tags: ['t'] } },
+      '/a': { get: { operationId: 'a', tags: ['t'] } },
+      '/b': { get: { operationId: 'b', tags: ['t'] } },
+    },
+  });
+}
+
+const ORDER_FILES = {
+  'reference/Api/t/index.md': '---\ntitle: t\nhidden: false\n---\n',
+  'reference/Api/t/_order.yaml': '- a\n- guide\n- b\n',
+  'reference/Api/t/a.md': '---\napi:\n  file: api.json\n  operationId: a\nhidden: false\n---\n',
+  'reference/Api/t/b.md': '---\napi:\n  file: api.json\n  operationId: b\nhidden: false\n---\n',
+  'reference/Api/t/guide.md': '---\ntitle: Guide\n---\nHi\n',
+};
+
+test('without apply-endpoint-order, new endpoints are appended and existing order is kept', () => {
+  const root = makeRepo({ ...ORDER_FILES, 'reference/api.json': orderedSpec() });
+  try {
+    syncOas(root);
+    assert.deepEqual(order(root, 'reference/Api/t/_order.yaml'), ['a', 'guide', 'b', 'c']);
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('apply-endpoint-order reorders endpoints to spec order, leaving other pages in their slots', () => {
+  const root = makeRepo({
+    ...ORDER_FILES,
+    'reference/api.json': orderedSpec({ 'x-readme': { 'apply-endpoint-order': true } }),
+  });
+  try {
+    const [result] = syncOas(root);
+    assert.deepEqual(order(root, 'reference/Api/t/_order.yaml'), ['c', 'guide', 'a', 'b']);
+    assert.ok(result.changes.updated.includes('Api/t/_order.yaml'));
+
+    const [again] = syncOas(root);
+    assert.deepEqual(again.changes.updated, []);
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('apply-endpoint-order collapses a duplicated slug in _order.yaml instead of writing "undefined"', () => {
+  const root = makeRepo({
+    ...ORDER_FILES,
+    'reference/Api/t/_order.yaml': '- a\n- guide\n- a\n- b\n',
+    'reference/api.json': orderedSpec({ 'x-readme': { 'apply-endpoint-order': true } }),
+  });
+  try {
+    syncOas(root);
+    const raw = fs.readFileSync(path.join(root, 'reference/Api/t/_order.yaml'), 'utf-8');
+    assert.equal(raw.includes('undefined'), false);
+    assert.deepEqual(order(root, 'reference/Api/t/_order.yaml'), ['c', 'guide', 'a', 'b']);
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('applyOASOrder refills only API slots and inserts new slugs after the last one', async () => {
+  const { applyOASOrder } = await import('../src/commands/oas-sync.js');
+  assert.deepEqual(applyOASOrder([], ['b', 'a']), ['b', 'a']);
+  assert.deepEqual(applyOASOrder(['x', 'y'], ['a']), ['x', 'y', 'a']);
+  assert.deepEqual(applyOASOrder(['a', 'x', 'b', 'y'], ['b', 'c', 'a']), ['b', 'x', 'c', 'a', 'y']);
+});
+
+test('applyOASOrder never emits undefined when the current order repeats a slug', async () => {
+  const { applyOASOrder } = await import('../src/commands/oas-sync.js');
+  // More slots than distinct slugs to fill them with.
+  assert.deepEqual(applyOASOrder(['a', 'a', 'b'], ['b', 'a']), ['b', 'a']);
+  assert.deepEqual(applyOASOrder(['a', 'x', 'a'], ['a']), ['a', 'x']);
+  assert.deepEqual(applyOASOrder(['b', 'x', 'b', 'a'], ['a', 'b']), ['a', 'x', 'b']);
+  // Duplicates in the requested order are collapsed too.
+  assert.deepEqual(applyOASOrder(['a', 'b'], ['b', 'b', 'a']), ['b', 'a']);
+  for (const result of [
+    applyOASOrder(['a', 'a', 'b'], ['b', 'a']),
+    applyOASOrder(['a', 'x', 'a'], ['a']),
+  ]) {
+    assert.ok(result.every((s) => typeof s === 'string'));
+  }
+});

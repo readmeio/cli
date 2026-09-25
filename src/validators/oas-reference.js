@@ -1,7 +1,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import matter from 'gray-matter';
-import { findOasFiles, extractOperations, collectExistingPages, syncOas, operationKey } from '../commands/oas-sync.js';
+import {
+  findOasFiles,
+  extractOperations,
+  collectExistingPages,
+  syncOas,
+  operationKey,
+  findIgnoredInternalExtensions,
+} from '../commands/oas-sync.js';
 
 export const name = 'oas-reference';
 
@@ -16,6 +23,17 @@ export function validateAll(files, gitRoot, { fix } = {}) {
   const oasMap = new Map();
   for (const { filename, spec } of oasFiles) {
     oasMap.set(filename, { spec, ops: extractOperations(spec) });
+
+    // Check: `x-readme.internal`, which ReadMe ignores for page visibility.
+    for (const location of findIgnoredInternalExtensions(spec)) {
+      results.push({
+        file: `reference/${filename}`,
+        rule: name,
+        severity: 'warning',
+        message: `"x-readme.internal" is ignored by ReadMe (${location}); use "x-internal" instead to hide pages`,
+        fixable: false,
+      });
+    }
   }
 
   // Collect all reference pages with api frontmatter.
@@ -87,8 +105,11 @@ export function validateAll(files, gitRoot, { fix } = {}) {
     }
   }
 
-  // Apply fixes by running the full sync.
-  if (fix && results.length > 0) {
+  // Apply fixes by running the full sync — but only when something reported
+  // is actually fixable. The sync adds, deletes, moves, hides and reorders
+  // reference files, which is far too much to do on the strength of an
+  // unfixable warning (`x-readme.internal`, a page pointing at a missing spec).
+  if (fix && results.some((r) => r.fixable)) {
     const syncResults = syncOas(gitRoot);
     if (syncResults) {
       for (const r of results) {
