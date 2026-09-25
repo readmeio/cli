@@ -1124,15 +1124,15 @@ test('apply-tag-changes moves a retagged page to its new tag and removes the emp
   }
 });
 
-test('apply-tag-changes deletes an emptied generated tag folder even when its page carries the old tag\'s description', () => {
-  // The page was generated when the spec still declared `old` with a
-  // description, which became its excerpt. That tag has since left the spec,
-  // so there is nothing current to compare the excerpt against — it must
-  // still be recognized as generated and removed, not flattened into a stale
-  // `old.md` that keeps a sidebar entry alive.
+test('apply-tag-changes deletes an emptied generated tag folder after a rename that kept the tag\'s description', () => {
+  // The page was generated when the tag was still called `old`, with the
+  // description that became its excerpt. The tag has since been renamed to
+  // `new` but kept that description, so the excerpt is still text the spec
+  // supplies: the page is recognized as generated and removed, not flattened
+  // into a stale `old.md` that keeps a sidebar entry alive.
   const root = makeRepo({
     ...RETAG_FILES,
-    'reference/Api/old/index.md': '---\ntitle: old\nexcerpt: The old tag\nhidden: false\n---\n',
+    'reference/Api/old/index.md': '---\ntitle: old\nexcerpt: New tag\nhidden: false\n---\n',
     'reference/api.json': retaggedSpec({ 'x-readme': { 'apply-tag-changes': true } }),
   });
   try {
@@ -1142,6 +1142,27 @@ test('apply-tag-changes deletes an emptied generated tag folder even when its pa
     assert.ok(result.changes.deleted.includes('Api/old/index.md'));
     assert.deepEqual(result.changes.moved, [{ from: 'Api/old/a.md', to: 'Api/new/a.md' }]);
     assert.deepEqual(order(root, 'reference/Api/_order.yaml'), ['new']);
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('apply-tag-changes flattens, never deletes, an emptied tag folder whose excerpt is not text from the spec', () => {
+  // Only the excerpt differs from a generated page. It may be a person's
+  // edit, or the description of a tag that has since left the spec; there is
+  // no way to tell, so the page is kept.
+  const root = makeRepo({
+    ...RETAG_FILES,
+    'reference/Api/old/index.md': '---\ntitle: old\nexcerpt: My own words\nhidden: false\n---\n',
+    'reference/api.json': retaggedSpec({ 'x-readme': { 'apply-tag-changes': true } }),
+  });
+  try {
+    const [result] = syncOas(root);
+    assert.equal(fs.existsSync(path.join(root, 'reference/Api/old')), false);
+    assert.equal(fm(root, 'reference/Api/old.md').excerpt, 'My own words');
+    assert.deepEqual(result.changes.deleted, []);
+    assert.ok(result.changes.moved.some((m) => m.from === 'Api/old/index.md' && m.to === 'Api/old.md'));
+    assert.deepEqual(order(root, 'reference/Api/_order.yaml'), ['old', 'new']);
   } finally {
     rmRepo(root);
   }
