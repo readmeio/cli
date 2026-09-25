@@ -105,8 +105,11 @@ export function validateAll(files, gitRoot, { fix } = {}) {
     }
   }
 
-  // Apply fixes by running the full sync.
-  if (fix && results.length > 0) {
+  // Apply fixes by running the full sync — but only when something reported
+  // is actually fixable. The sync adds, deletes, moves, hides and reorders
+  // reference files, which is far too much to do on the strength of an
+  // unfixable warning (`x-readme.internal`, a page pointing at a missing spec).
+  if (fix && results.some((r) => r.fixable)) {
     const syncResults = syncOas(gitRoot);
     if (syncResults) {
       for (const r of results) {

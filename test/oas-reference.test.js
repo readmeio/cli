@@ -1,5 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { collectFiles } from '../src/utils/lint.js';
 import { validateAll } from '../src/validators/oas-reference.js';
 import { makeRepo, rmRepo } from './helpers.js';
@@ -117,5 +119,45 @@ test('x-readme.internal is warned about at the root and on operations, x-interna
     assert.ok(res.every((r) => r.file === 'reference/pets.json' && r.severity === 'warning' && !r.fixable));
   } finally {
     rmRepo(root);
+  }
+});
+
+test('lint --fix leaves the reference alone when every finding is unfixable', () => {
+  // The only finding is the unfixable `x-readme.internal` warning; the page
+  // for the one operation already exists, so nothing is missing either.
+  const spec = JSON.stringify({
+    openapi: '3.1.0',
+    info: { title: 'Pets' },
+    'x-readme': { internal: true },
+    paths: { '/pets': { get: { operationId: 'listPets' } } },
+  });
+  const page = '---\napi:\n  file: pets.json\n  operationId: listPets\nhidden: false\n---\n';
+  const root = makeRepo({ 'reference/pets.json': spec, 'reference/Pets/pets/listpets.md': page });
+  try {
+    const res = validateAll(collectFiles(root), root, { fix: true });
+    assert.equal(res.length, 1);
+    assert.equal(res[0].fixable, false);
+    assert.equal(res[0].message.endsWith('(fixed)'), false);
+    // Had the sync run, it would have backfilled the category page and the
+    // _order.yaml files around the existing operation page.
+    assert.equal(fs.existsSync(path.join(root, 'reference/Pets/pets/index.md')), false);
+    assert.equal(fs.existsSync(path.join(root, 'reference/_order.yaml')), false);
+  } finally {
+    rmRepo(root);
+  }
+
+  // Control: the same spec with a fixable finding (a missing page) does sync.
+  const fixableRoot = makeRepo({ 'reference/pets.json': spec });
+  try {
+    const res = validateAll(collectFiles(fixableRoot), fixableRoot, { fix: true });
+    const missing = res.find((r) => r.message.includes('Missing page'));
+    assert.ok(missing && missing.fixable);
+    assert.ok(missing.message.endsWith('(fixed)'));
+    assert.ok(fs.existsSync(path.join(fixableRoot, 'reference/Pets/pets/listpets.md')));
+    // The unfixable warning is still reported, but never marked fixed.
+    const warning = res.find((r) => r.message.includes('x-readme.internal'));
+    assert.ok(warning && !warning.message.endsWith('(fixed)'));
+  } finally {
+    rmRepo(fixableRoot);
   }
 });

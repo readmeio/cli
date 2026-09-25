@@ -1124,6 +1124,29 @@ test('apply-tag-changes moves a retagged page to its new tag and removes the emp
   }
 });
 
+test('apply-tag-changes deletes an emptied generated tag folder even when its page carries the old tag\'s description', () => {
+  // The page was generated when the spec still declared `old` with a
+  // description, which became its excerpt. That tag has since left the spec,
+  // so there is nothing current to compare the excerpt against — it must
+  // still be recognized as generated and removed, not flattened into a stale
+  // `old.md` that keeps a sidebar entry alive.
+  const root = makeRepo({
+    ...RETAG_FILES,
+    'reference/Api/old/index.md': '---\ntitle: old\nexcerpt: The old tag\nhidden: false\n---\n',
+    'reference/api.json': retaggedSpec({ 'x-readme': { 'apply-tag-changes': true } }),
+  });
+  try {
+    const [result] = syncOas(root);
+    assert.equal(fs.existsSync(path.join(root, 'reference/Api/old')), false);
+    assert.equal(fs.existsSync(path.join(root, 'reference/Api/old.md')), false);
+    assert.ok(result.changes.deleted.includes('Api/old/index.md'));
+    assert.deepEqual(result.changes.moved, [{ from: 'Api/old/a.md', to: 'Api/new/a.md' }]);
+    assert.deepEqual(order(root, 'reference/Api/_order.yaml'), ['new']);
+  } finally {
+    rmRepo(root);
+  }
+});
+
 test('apply-tag-changes flattens an emptied tag folder whose category page was hand-edited', () => {
   const root = makeRepo({
     ...RETAG_FILES,
@@ -1215,6 +1238,32 @@ test('apply-tag-changes syncs an existing tag page\'s title and excerpt, keeping
   }
 });
 
+test('a tag page updated by both apply-tag-changes and x-internal is reported as updated once', () => {
+  const spec = JSON.stringify({
+    openapi: '3.0.0',
+    info: { title: 'Api' },
+    'x-readme': { 'apply-tag-changes': true },
+    'x-internal': true,
+    tags: [{ name: 't', description: 'Fresh' }],
+    paths: { '/a': { get: { operationId: 'a', tags: ['t'] } } },
+  });
+  const root = makeRepo({
+    'reference/api.json': spec,
+    'reference/Api/t/index.md': '---\ntitle: t\nexcerpt: stale\nhidden: false\n---\n',
+    'reference/Api/t/a.md': '---\napi:\n  file: api.json\n  operationId: a\nhidden: false\n---\n',
+  });
+  try {
+    const [result] = syncOas(root);
+    // Both passes really did write to it: excerpt synced, then hidden.
+    const index = fm(root, 'reference/Api/t/index.md');
+    assert.equal(index.excerpt, 'Fresh');
+    assert.equal(index.hidden, true);
+    assert.deepEqual(result.changes.updated.slice().sort(), ['Api/t/a.md', 'Api/t/index.md']);
+  } finally {
+    rmRepo(root);
+  }
+});
+
 test('apply-tag-changes must be exactly true and set at the root', () => {
   const root = makeRepo({
     ...RETAG_FILES,
@@ -1278,9 +1327,41 @@ test('apply-endpoint-order reorders endpoints to spec order, leaving other pages
   }
 });
 
+test('apply-endpoint-order collapses a duplicated slug in _order.yaml instead of writing "undefined"', () => {
+  const root = makeRepo({
+    ...ORDER_FILES,
+    'reference/Api/t/_order.yaml': '- a\n- guide\n- a\n- b\n',
+    'reference/api.json': orderedSpec({ 'x-readme': { 'apply-endpoint-order': true } }),
+  });
+  try {
+    syncOas(root);
+    const raw = fs.readFileSync(path.join(root, 'reference/Api/t/_order.yaml'), 'utf-8');
+    assert.equal(raw.includes('undefined'), false);
+    assert.deepEqual(order(root, 'reference/Api/t/_order.yaml'), ['c', 'guide', 'a', 'b']);
+  } finally {
+    rmRepo(root);
+  }
+});
+
 test('applyOASOrder refills only API slots and inserts new slugs after the last one', async () => {
   const { applyOASOrder } = await import('../src/commands/oas-sync.js');
   assert.deepEqual(applyOASOrder([], ['b', 'a']), ['b', 'a']);
   assert.deepEqual(applyOASOrder(['x', 'y'], ['a']), ['x', 'y', 'a']);
   assert.deepEqual(applyOASOrder(['a', 'x', 'b', 'y'], ['b', 'c', 'a']), ['b', 'x', 'c', 'a', 'y']);
+});
+
+test('applyOASOrder never emits undefined when the current order repeats a slug', async () => {
+  const { applyOASOrder } = await import('../src/commands/oas-sync.js');
+  // More slots than distinct slugs to fill them with.
+  assert.deepEqual(applyOASOrder(['a', 'a', 'b'], ['b', 'a']), ['b', 'a']);
+  assert.deepEqual(applyOASOrder(['a', 'x', 'a'], ['a']), ['a', 'x']);
+  assert.deepEqual(applyOASOrder(['b', 'x', 'b', 'a'], ['a', 'b']), ['a', 'x', 'b']);
+  // Duplicates in the requested order are collapsed too.
+  assert.deepEqual(applyOASOrder(['a', 'b'], ['b', 'b', 'a']), ['b', 'a']);
+  for (const result of [
+    applyOASOrder(['a', 'a', 'b'], ['b', 'a']),
+    applyOASOrder(['a', 'x', 'a'], ['a']),
+  ]) {
+    assert.ok(result.every((s) => typeof s === 'string'));
+  }
 });
