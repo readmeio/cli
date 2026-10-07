@@ -24,6 +24,16 @@ Syncs your `reference/` directory with your OpenAPI spec. It'll create, update, 
 npx @readme/cli oas:sync
 ```
 
+### OpenAPI Bundle
+
+Combines a spec that's split across multiple files (external `$ref`s to partials) into a single self-contained file. Handy when your spec is assembled at build time and you want to drop the result into `reference/` from CI.
+
+```bash
+npx @readme/cli oas:bundle path/to/openapi.yaml --out reference/api.json
+```
+
+Without `--out`, the bundled spec is printed to stdout. The output format follows the `--out` extension (`.yaml`/`.yml` for YAML, JSON otherwise). This command works from any directory, so you can run it in your API's source repo.
+
 ### Import
 
 Imports content from an external folder and converts it into ReadMe's format using Claude. Great for migrating existing docs.

@@ -27,6 +27,13 @@ npx @readme/cli oas:sync
 ```
 Syncs `reference/` directory with OpenAPI specs. Creates, updates, or removes pages based on spec operations. Run this when you see `oas-reference` errors.
 
+### OpenAPI Bundle
+```bash
+npx @readme/cli oas:bundle path/to/openapi.yaml --out reference/api.json
+```
+
+Combines a multi-file spec (external `$ref`s to partials) into one self-contained file. Prints to stdout without `--out`. Output format follows the `--out` extension. Works from any directory, so it can run in the API's source repo before copying into the docs repo.
+
 ### Import
 ```bash
 npx @readme/cli import
