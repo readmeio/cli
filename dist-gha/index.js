@@ -65515,7 +65515,7 @@ function createJsonReporter() {
 }
 
 ;// CONCATENATED MODULE: ./package.json
-const package_namespaceObject = {"rE":"0.0.30"};
+const package_namespaceObject = {"rE":"0.0.31"};
 ;// CONCATENATED MODULE: ./src/commands/lint.js
 
 
