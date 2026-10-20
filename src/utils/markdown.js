@@ -1,11 +1,13 @@
-import { CORE_SCHEMA, YAMLException, dump as dumpYAML, load as loadYAML } from 'js-yaml';
+import { YAMLException, dump as dumpYAML, load as loadYAML } from 'js-yaml';
 import removeUndefinedObjects from 'remove-undefined-objects';
 
 // Each retry rewrites one rejected line and parses again. A real page has a few of these.
 // Ten parses bounds a frontmatter block full of broken lines.
 const MAX_FRONTMATTER_YAML_ATTEMPTS = 10;
 
-const FRONTMATTER_RE = /^---\s*\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
+// Opening fence, optional YAML (must end with a newline when present), closing fence, body.
+// The YAML group is optional so empty headers (`---\n---\n# Body`) still yield the body.
+const FRONTMATTER_RE = /^---\s*\r?\n(?:([\s\S]*?)\r?\n)?---\r?\n?([\s\S]*)$/;
 const FRONTMATTER_NOEND_RE = /^---\s*\r?\n([\s\S]*)$/;
 
 // A mapping entry whose value is still a plain scalar: `description: POST : PATCH`.
@@ -100,7 +102,7 @@ function loadFrontmatterYAML(yamlContent) {
 
   for (let attempt = 0; ; attempt++) {
     try {
-      return loadYAML(source, { schema: CORE_SCHEMA });
+      return loadYAML(source);
     } catch (err) {
       const line =
         err instanceof YAMLException && err.reason === 'bad indentation of a mapping entry'
@@ -148,7 +150,8 @@ export function parseFrontmatter(content) {
   let body;
 
   if (match) {
-    yamlContent = match[1];
+    // Group 1 is absent for empty headers (`---\n---`).
+    yamlContent = match[1] ?? '';
     body = match[2] || '';
   } else {
     match = normalized.match(FRONTMATTER_NOEND_RE);

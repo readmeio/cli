@@ -315,6 +315,25 @@ link:
       });
     });
 
+    test('should handle empty frontmatter with adjacent fences', () => {
+      // No blank line between opening and closing ---
+      const content = '---\n---\n# Content';
+
+      assert.deepEqual(parseFrontmatter(content), {
+        content: '# Content',
+        data: {},
+      });
+    });
+
+    test('should keep quoted --- inside YAML values when fences are adjacent-safe', () => {
+      const content = '---\ntitle: "---"\n---\n# Content';
+
+      assert.deepEqual(parseFrontmatter(content), {
+        content: '# Content',
+        data: { title: '---' },
+      });
+    });
+
     test('should handle mixed line endings', () => {
       const content = '---\r\ntitle: Mixed\nexcerpt: Unix here\r\n---\n# Content';
 

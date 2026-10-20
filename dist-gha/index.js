@@ -46765,7 +46765,9 @@ function removeUndefinedObjects(obj, options) {
 // Ten parses bounds a frontmatter block full of broken lines.
 const MAX_FRONTMATTER_YAML_ATTEMPTS = 10;
 
-const FRONTMATTER_RE = /^---\s*\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
+// Opening fence, optional YAML (must end with a newline when present), closing fence, body.
+// The YAML group is optional so empty headers (`---\n---\n# Body`) still yield the body.
+const FRONTMATTER_RE = /^---\s*\r?\n(?:([\s\S]*?)\r?\n)?---\r?\n?([\s\S]*)$/;
 const FRONTMATTER_NOEND_RE = /^---\s*\r?\n([\s\S]*)$/;
 
 // A mapping entry whose value is still a plain scalar: `description: POST : PATCH`.
@@ -46860,7 +46862,7 @@ function loadFrontmatterYAML(yamlContent) {
 
   for (let attempt = 0; ; attempt++) {
     try {
-      return load(source, { schema: CORE_SCHEMA });
+      return load(source);
     } catch (err) {
       const line =
         err instanceof YAMLException && err.reason === 'bad indentation of a mapping entry'
@@ -46908,7 +46910,8 @@ function parseFrontmatter(content) {
   let body;
 
   if (match) {
-    yamlContent = match[1];
+    // Group 1 is absent for empty headers (`---\n---`).
+    yamlContent = match[1] ?? '';
     body = match[2] || '';
   } else {
     match = normalized.match(FRONTMATTER_NOEND_RE);
@@ -47561,11 +47564,11 @@ function frontmatter_validate({ content, filePath, relativePath, fix }) {
     if (keysToFix.length > 0) {
       let fileContent = external_node_fs_namespaceObject.readFileSync(filePath, 'utf-8');
 
-      // Only replace within the frontmatter block (between the --- delimiters).
-      const fmMatch = fileContent.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-      if (fmMatch) {
+      // Same header boundaries as parseFrontmatter: allow leading blank lines,
+      // and empty headers (`---\n---`) where the YAML group is absent.
+      const fmMatch = fileContent.match(/^[\r\n]*---\r?\n(?:([\s\S]*?)\r?\n)?---/);
+      if (fmMatch && fmMatch[1] != null) {
         let frontmatter = fmMatch[1];
-        const keysToFixSet = new Set(keysToFix);
         for (const key of keysToFix) {
           const regex = new RegExp(`^(${key}:)`, 'gm');
           frontmatter = frontmatter.replace(regex, `x-${key}:`);
@@ -47798,9 +47801,6 @@ function writeGithubActionsOutputs(fields) {
 
 
 
-const oas_sync_require = (0,external_node_module_namespaceObject.createRequire)(import.meta.url);
-const yaml = oas_sync_require('js-yaml');
-
 const command = 'oas:sync';
 const order = 2;
 const category = 'OAS Tooling';
@@ -47816,6 +47816,10 @@ function findOasFiles(refDir) {
   const entries = external_node_fs_namespaceObject.readdirSync(refDir);
   const oasFiles = [];
 
+  // `js-yaml` 5 defaults to `CORE_SCHEMA` without YAML merge keys (`<<: *anchor`). OpenAPI specs
+  // commonly reuse path items via merges; keep that working.
+  const LOAD_SCHEMA = CORE_SCHEMA.withTags(mergeTag);
+
   for (const entry of entries) {
     if (!/\.(json|yaml|yml)$/i.test(entry)) continue;
     const filePath = external_node_path_namespaceObject.join(refDir, entry);
@@ -47823,7 +47827,11 @@ function findOasFiles(refDir) {
 
     try {
       const raw = external_node_fs_namespaceObject.readFileSync(filePath, 'utf-8');
-      const parsed = entry.endsWith('.json') ? JSON.parse(raw) : yaml.load(raw);
+      const parsed = entry.endsWith('.json') ? JSON.parse(raw) : load(raw, {
+        // Load YAML with merge-key support (same defaults as `js-yaml` 4's `DEFAULT_SCHEMA`
+        // for `<<` anchors).
+        schema: LOAD_SCHEMA
+      });
 
       if (parsed && (parsed.openapi || parsed.swagger)) {
         oasFiles.push({ filename: entry, spec: parsed });

@@ -227,11 +227,11 @@ export function validate({ content, filePath, relativePath, fix }) {
     if (keysToFix.length > 0) {
       let fileContent = fs.readFileSync(filePath, 'utf-8');
 
-      // Only replace within the frontmatter block (between the --- delimiters).
-      const fmMatch = fileContent.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-      if (fmMatch) {
+      // Same header boundaries as parseFrontmatter: allow leading blank lines,
+      // and empty headers (`---\n---`) where the YAML group is absent.
+      const fmMatch = fileContent.match(/^[\r\n]*---\r?\n(?:([\s\S]*?)\r?\n)?---/);
+      if (fmMatch && fmMatch[1] != null) {
         let frontmatter = fmMatch[1];
-        const keysToFixSet = new Set(keysToFix);
         for (const key of keysToFix) {
           const regex = new RegExp(`^(${key}:)`, 'gm');
           frontmatter = frontmatter.replace(regex, `x-${key}:`);

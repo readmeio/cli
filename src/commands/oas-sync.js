@@ -1,12 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { createRequire } from 'node:module';
 import * as styles from '../utils/styles.js';
 import { writeGithubActionsOutputs } from '../utils/gha-output.js';
 import { parseFrontmatter, toFrontmatter, frontmatterWriteError } from '../utils/markdown.js';
-
-const require = createRequire(import.meta.url);
-const yaml = require('js-yaml');
+import { CORE_SCHEMA, load as loadYAML, mergeTag } from 'js-yaml';
 
 export const command = 'oas:sync';
 export const order = 2;
@@ -23,6 +20,10 @@ export function findOasFiles(refDir) {
   const entries = fs.readdirSync(refDir);
   const oasFiles = [];
 
+  // `js-yaml` 5 defaults to `CORE_SCHEMA` without YAML merge keys (`<<: *anchor`). OpenAPI specs
+  // commonly reuse path items via merges; keep that working.
+  const LOAD_SCHEMA = CORE_SCHEMA.withTags(mergeTag);
+
   for (const entry of entries) {
     if (!/\.(json|yaml|yml)$/i.test(entry)) continue;
     const filePath = path.join(refDir, entry);
@@ -30,7 +31,11 @@ export function findOasFiles(refDir) {
 
     try {
       const raw = fs.readFileSync(filePath, 'utf-8');
-      const parsed = entry.endsWith('.json') ? JSON.parse(raw) : yaml.load(raw);
+      const parsed = entry.endsWith('.json') ? JSON.parse(raw) : loadYAML(raw, {
+        // Load YAML with merge-key support (same defaults as `js-yaml` 4's `DEFAULT_SCHEMA`
+        // for `<<` anchors).
+        schema: LOAD_SCHEMA
+      });
 
       if (parsed && (parsed.openapi || parsed.swagger)) {
         oasFiles.push({ filename: entry, spec: parsed });

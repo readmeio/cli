@@ -2,7 +2,7 @@ import { createRequire } from 'node:module';
 import fs from 'fs';
 import path from 'path';
 import { compile, run } from '@readme/markdown';
-import yaml from 'js-yaml';
+import { load as loadYAML } from 'js-yaml';
 import { parseFrontmatter } from '../../utils/markdown.js';
 
 // Use createRequire to load react-dom/server at runtime,
@@ -36,7 +36,7 @@ function walkDir(dirPath, sectionDir, depth = 0) {
   let order = [];
   const orderPath = path.join(dirPath, '_order.yaml');
   if (fs.existsSync(orderPath)) {
-    order = yaml.load(fs.readFileSync(orderPath, 'utf-8')) || [];
+    order = loadYAML(fs.readFileSync(orderPath, 'utf-8')) || [];
   }
 
   // Get all items (exclude dotfiles and _-prefixed files)
@@ -254,7 +254,7 @@ function renderOasOperationPreview(specFile, operationId) {
   let spec;
   try {
     const rawSpec = fs.readFileSync(specPath, 'utf-8');
-    spec = specFile.toLowerCase().endsWith('.json') ? JSON.parse(rawSpec) : yaml.load(rawSpec);
+    spec = specFile.toLowerCase().endsWith('.json') ? JSON.parse(rawSpec) : loadYAML(rawSpec);
   } catch (e) {
     return `<p><em>Couldn't parse <code>reference/${specFile}</code>: ${escapeHtml(e.message)}</em></p>`;
   }
