@@ -94,7 +94,7 @@ async function fetchWithRetry(url, { headers = {}, retries = 3, baseDelayMs = 10
       lastError = err
       if (err.status && err.status >= 400 && err.status < 500) break
       if (attempt < maxAttempts) {
-        const delay = baseDelayMs * Math.pow(2, attempt - 1)
+        const delay = baseDelayMs * 2 ** (attempt - 1)
         await new Promise((resolve) => setTimeout(resolve, delay))
       }
     }
@@ -106,11 +106,11 @@ function withMdExtension(url) {
   try {
     const u = new URL(url)
     if (u.pathname.endsWith('.md')) return null
-    u.pathname = u.pathname.replace(/\/$/, '') + '.md'
+    u.pathname = `${u.pathname.replace(/\/$/, '')  }.md`
     return u.toString()
   } catch {
     if (url.endsWith('.md')) return null
-    return url.replace(/\/$/, '') + '.md'
+    return `${url.replace(/\/$/, '')  }.md`
   }
 }
 
@@ -167,7 +167,7 @@ async function prettifyPage({ source, title, relativePath, model, localComponent
   })) {
     if (message.type === 'result') {
       if (message.subtype !== 'success') {
-        throw new Error(`${message.subtype}${message.error?.message ? ' — ' + message.error.message : ''}`)
+        throw new Error(`${message.subtype}${message.error?.message ? ` — ${  message.error.message}` : ''}`)
       }
       structured = message.structured_output
       break
@@ -183,7 +183,7 @@ async function prettifyPage({ source, title, relativePath, model, localComponent
     try {
       oasPartial = JSON.parse(structured.oasPartialJson)
     } catch (e) {
-      throw new Error(`invalid oasPartialJson (${e.message}); first 200 chars: ${structured.oasPartialJson.slice(0, 200)}`)
+      throw new Error(`invalid oasPartialJson (${e.message}); first 200 chars: ${structured.oasPartialJson.slice(0, 200)}`, { cause: e })
     }
   }
 
@@ -256,7 +256,7 @@ export async function run(file, options, _cmd, ctx) {
   }
 
   styles.info(
-    `Prettifying ${styles.bold(String(files.length))} file${files.length === 1 ? '' : 's'} with ${styles.bold(options.model)}${options.jobs > 1 ? ` (${styles.bold('-j ' + options.jobs)})` : ''}${options.dryRun ? styles.dim(' (dry run)') : ''}.`,
+    `Prettifying ${styles.bold(String(files.length))} file${files.length === 1 ? '' : 's'} with ${styles.bold(options.model)}${options.jobs > 1 ? ` (${styles.bold(`-j ${  options.jobs}`)})` : ''}${options.dryRun ? styles.dim(' (dry run)') : ''}.`,
   )
   if (localComponents.length > 0) {
     styles.info(
@@ -306,7 +306,7 @@ export async function run(file, options, _cmd, ctx) {
       })
 
       if (typeof result?.body !== 'string') {
-        throw new Error('response missing "body" field')
+        throw new TypeError('response missing "body" field')
       }
 
       // Auto-install marketplace components Claude used in the body. We do
@@ -346,7 +346,7 @@ export async function run(file, options, _cmd, ctx) {
     } catch (err) {
       failures.push({ relativePath, message: err.message || String(err) })
       if (!process.stderr.isTTY) {
-        multi.log(`  ${styles.err('●')} ${relativePath} ${styles.dim('— ' + (err.message || String(err)))}`)
+        multi.log(`  ${styles.err('●')} ${relativePath} ${styles.dim(`— ${  err.message || String(err)}`)}`)
       }
     } finally {
       multi.clearLine(workerIdx)
@@ -365,7 +365,7 @@ export async function run(file, options, _cmd, ctx) {
   if (failures.length > 0) {
     console.log()
     for (const f of failures) {
-      console.log(`  ${styles.err('●')} ${styles.bold(f.relativePath)} ${styles.dim('— ' + f.message)}`)
+      console.log(`  ${styles.err('●')} ${styles.bold(f.relativePath)} ${styles.dim(`— ${  f.message}`)}`)
     }
     process.exit(1)
   }

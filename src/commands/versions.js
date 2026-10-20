@@ -73,7 +73,7 @@ export function run(_options, _cmd, ctx) {
     for (let i = 0; i < subs.length; i++) {
       const isLast = i === subs.length - 1;
       const connector = isLast ? '└─' : '├─';
-      console.log(`  ${styles.dim(connector)} ${styles.dim(version + '_')}${subs[i].name} ${styles.dim('(branch)')}`);
+      console.log(`  ${styles.dim(connector)} ${styles.dim(`${version  }_`)}${subs[i].name} ${styles.dim('(branch)')}`);
     }
   }
 

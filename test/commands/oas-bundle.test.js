@@ -92,7 +92,7 @@ test('writeBundle serializes as YAML when the output path ends in .yaml', async 
 
     const raw = fs.readFileSync(outPath, 'utf-8');
     expect(raw.startsWith('openapi: 3.0.0')).toBe(true, `expected YAML output, got:\n${raw.slice(0, 80)}`);
-    expect(raw.includes("$ref: '#/components/schemas/Pet'")).toBe(true);
+    expect(raw).toContain('$ref: \'#/components/schemas/Pet\'');
   } finally {
     rmRepo(root);
   }

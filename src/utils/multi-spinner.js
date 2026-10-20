@@ -42,7 +42,7 @@ export class MultiSpinner {
     if (this.isTTY && this.update) {
       this.update.persist(text);
     } else {
-      this.stream.write(text + '\n');
+      this.stream.write(`${text  }\n`);
     }
   }
 

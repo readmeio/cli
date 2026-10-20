@@ -35,15 +35,17 @@ export async function run(options, _cmd, ctx) {
   try {
     const pet = loadPet();
     if (pet?.color) setPalette(pet.color);
-  } catch {}
+  } catch {
+    // no-op
+  }
 
   // Suppress Next.js noisy compile/request logging
   for (const stream of [process.stdout, process.stderr]) {
     const original = stream.write.bind(stream);
-    stream.write = (chunk, ...args) => {
+    stream.write = (chunk, ...streamAgs) => {
       const str = typeof chunk === 'string' ? chunk : chunk.toString();
       if (/^ [○✓⨯▲ ]*(Compiled|Compiling|GET |POST |⚠|Warning:)/.test(str)) return true;
-      return original(chunk, ...args);
+      return original(chunk, ...streamAgs);
     };
   }
 
@@ -108,7 +110,7 @@ export async function run(options, _cmd, ctx) {
       binName: `${binName()} dev`,
     });
     for (const line of headerLines) {
-      console.log('  ' + line);
+      console.log(`  ${line}`);
     }
     console.log();
   }

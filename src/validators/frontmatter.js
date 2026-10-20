@@ -12,7 +12,7 @@ function getNestedValue(obj, instancePath) {
   const keys = instancePath.split('/').filter(Boolean);
   let current = obj;
   for (const key of keys) {
-    if (current == null || typeof current !== 'object') return undefined;
+    if (current == null || typeof current !== 'object') return;
     current = current[key];
   }
   return current;

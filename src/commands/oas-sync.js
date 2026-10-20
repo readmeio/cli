@@ -263,7 +263,7 @@ function parseOrderYaml(content) {
 }
 
 function writeOrderYaml(filePath, slugs) {
-  const content = slugs.map((s) => `- ${yamlSafeSlug(s)}`).join('\n') + '\n';
+  const content = `${slugs.map((s) => `- ${yamlSafeSlug(s)}`).join('\n')  }\n`;
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, content);
 }

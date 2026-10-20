@@ -66,11 +66,11 @@ function styleMessage(message, color) {
 function summaryLine(errorCount, warningCount) {
   const parts = [];
   if (errorCount > 0)
-    parts.push(`${errorCount} ${errorCount === 1 ? "error" : "errors"}`);
+    {parts.push(`${errorCount} ${errorCount === 1 ? "error" : "errors"}`);}
   if (warningCount > 0)
-    parts.push(
+    {parts.push(
       `${warningCount} ${warningCount === 1 ? "warning" : "warnings"}`,
-    );
+    );}
   return parts.join(" and ");
 }
 

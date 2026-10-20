@@ -259,15 +259,15 @@ function boxLine(content = '', bg = null) {
 }
 
 function boxTop() {
-  return chalk.dim('┌' + '─'.repeat(BOX_WIDTH - 2) + '┐');
+  return chalk.dim(`┌${  '─'.repeat(BOX_WIDTH - 2)  }┐`);
 }
 
 function boxBottom() {
-  return chalk.dim('└' + '─'.repeat(BOX_WIDTH - 2) + '┘');
+  return chalk.dim(`└${  '─'.repeat(BOX_WIDTH - 2)  }┘`);
 }
 
 function boxDivider() {
-  return chalk.dim('├' + '─'.repeat(BOX_WIDTH - 2) + '┤');
+  return chalk.dim(`├${  '─'.repeat(BOX_WIDTH - 2)  }┤`);
 }
 
 const STATUS_LEFT = 22; // inner width of left column
@@ -282,7 +282,7 @@ function statusRow(leftContent, rightContent) {
 }
 
 function statusDivider() {
-  return chalk.dim('─'.repeat(STATUS_LEFT) + '┼' + '─'.repeat(STATUS_RIGHT));
+  return chalk.dim(`${'─'.repeat(STATUS_LEFT)  }┼${  '─'.repeat(STATUS_RIGHT)}`);
 }
 
 function renderStatus(pet) {
@@ -496,7 +496,7 @@ export async function startGame() {
       } else if (trickSceneOverlay && (trickSceneOverlay.right || trickSceneOverlay[r])) {
         if (trickSceneOverlay.left) leftStr = padRight(trickSceneOverlay.left[r] || '', effLeft);
         if (trickSceneOverlay.right) rightStr = padRight(trickSceneOverlay.right[r] || '', effRight);
-        if (!trickSceneOverlay.left && !trickSceneOverlay.right) rightStr = padRight(' ' + (trickSceneOverlay[r] || ''), effRight);
+        if (!trickSceneOverlay.left && !trickSceneOverlay.right) rightStr = padRight(` ${  trickSceneOverlay[r] || ''}`, effRight);
       }
 
       return leftStr + iconLine + rightStr;
@@ -524,21 +524,21 @@ export async function startGame() {
     const footer = chalk.dim('[r] reset  [q] quit');
     const footerVis = '[r] reset  [q] quit'.length;
     console.log('');
-    console.log('  ' + ' '.repeat(BOX_WIDTH - 2 - footerVis + 1) + footer);
-    console.log('  ' + boxTop());
+    console.log(`  ${  ' '.repeat(BOX_WIDTH - 2 - footerVis + 1)  }${footer}`);
+    console.log(`  ${  boxTop()}`);
     const sceneBg = petState.sleeping ? '#05051a' : null;
     const handLines = getPetHand();
     if (handLines.length) {
       // Hand takes 2 rows, so skip the empty top row and trim the last scene row
-      console.log('  ' + boxLine(handLines[0], sceneBg));
-      console.log('  ' + boxLine(handLines[1], sceneBg));
+      console.log(`  ${  boxLine(handLines[0], sceneBg)}`);
+      console.log(`  ${  boxLine(handLines[1], sceneBg)}`);
       for (let i = 0; i < sceneRows.length - 1; i++) {
-        console.log('  ' + boxLine(sceneRows[i], sceneBg));
+        console.log(`  ${  boxLine(sceneRows[i], sceneBg)}`);
       }
     } else {
-      console.log('  ' + boxLine('', sceneBg));
+      console.log(`  ${  boxLine('', sceneBg)}`);
       for (const row of sceneRows) {
-        console.log('  ' + boxLine(row, sceneBg));
+        console.log(`  ${  boxLine(row, sceneBg)}`);
       }
     }
     // Message centered between scene and vitals
@@ -547,25 +547,25 @@ export async function startGame() {
     if (boxVisLen(displayMsg) > inner) {
       // Strip ANSI, truncate, re-apply no color (plain truncation)
       const plain = displayMsg.replace(/\x1b\[[0-9;]*m/g, '');
-      displayMsg = plain.slice(0, inner - 1) + '…';
+      displayMsg = `${plain.slice(0, inner - 1)  }…`;
     }
     const msgVis = boxVisLen(displayMsg);
     const msgPadL = Math.max(0, Math.floor((inner - msgVis) / 2));
     const msgPadR = Math.max(0, inner - msgVis - msgPadL);
-    console.log('  ' + boxDivider());
-    console.log('  ' + chalk.dim('│') + ' '.repeat(msgPadL) + displayMsg + ' '.repeat(msgPadR) + chalk.dim('│'));
-    console.log('  ' + chalk.dim('├' + '─'.repeat(STATUS_LEFT) + '┬' + '─'.repeat(STATUS_RIGHT) + '┤'));
+    console.log(`  ${  boxDivider()}`);
+    console.log(`  ${  chalk.dim('│')  }${' '.repeat(msgPadL)  }${displayMsg  }${' '.repeat(msgPadR)  }${chalk.dim('│')}`);
+    console.log(`  ${  chalk.dim(`├${  '─'.repeat(STATUS_LEFT)  }┬${  '─'.repeat(STATUS_RIGHT)  }┤`)}`);
     for (const line of statusLines) {
-      console.log('  ' + boxLine(line));
+      console.log(`  ${  boxLine(line)}`);
     }
-    console.log('  ' + chalk.dim('├' + '─'.repeat(STATUS_LEFT) + '┴' + '─'.repeat(STATUS_RIGHT) + '┤'));
+    console.log(`  ${  chalk.dim(`├${  '─'.repeat(STATUS_LEFT)  }┴${  '─'.repeat(STATUS_RIGHT)  }┤`)}`);
     for (const line of actionLines) {
-      console.log('  ' + boxLine(line));
+      console.log(`  ${  boxLine(line)}`);
     }
-    console.log('  ' + boxBottom());
+    console.log(`  ${  boxBottom()}`);
     if (confirmingReset) {
       console.log('');
-      console.log('  ' + chalk.hex('#ff6b6b')(`Reset ${petState.name}? They'll be gone forever!`) + chalk.dim('  [y] yes  [n] no'));
+      console.log(`  ${  chalk.hex('#ff6b6b')(`Reset ${petState.name}? They'll be gone forever!`)  }${chalk.dim('  [y] yes  [n] no')}`);
     } else {
       console.log('');
     }
@@ -796,13 +796,13 @@ export async function startGame() {
       }
       case 'spin': {
         for (const f of ['left', 'up-left', 'up-right', 'right', 'up-right', 'up-left', 'left', 'up-left', 'right'])
-          await setFrame(f, 110);
+          {await setFrame(f, 110);}
         break;
       }
       case 'fetch': {
         iconHShift = -8;
         const method = chalk.hex('#63D2FF')('POST');
-        const pending = chalk.dim('○') + ' ' + method + ' /api/pets';
+        const pending = `${chalk.dim('○')  } ${  method  } /api/pets`;
         const d = chalk.dim;
         const json = [
           d('  "id": 1,'),
@@ -843,7 +843,7 @@ export async function startGame() {
       }
       case 'bow': {
         for (const [f, ms] of [['right', 200], ['right:up', 300], ['right:up', 300], ['squint', 500], ['right:up', 300], ['right', 200]])
-          await setFrame(f, ms);
+          {await setFrame(f, ms);}
         break;
       }
       case 'chameleon': {
@@ -880,7 +880,7 @@ export async function startGame() {
         setPalette('owl');
         const hoot = chalk.hex('#ffd93d');
         for (const [f, ms] of [['left', 200], ['right', 200], ['left', 200], ['right', 200]])
-          await setFrame(f, ms);
+          {await setFrame(f, ms);}
         const rpad = () => ' '.repeat(2 + Math.floor(Math.random() * 8));
         trickSceneOverlay = { right: [rpad() + hoot('hoot!'), '', '', ''] };
         await setFrame('up-right', 500);
@@ -912,7 +912,7 @@ export async function startGame() {
       }
       default: {
         for (const f of ['right:up', 'right', 'right:up', 'right'])
-          await setFrame(f, 150);
+          {await setFrame(f, 150);}
       }
     }
     frameOverride = null;

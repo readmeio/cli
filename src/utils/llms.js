@@ -20,7 +20,7 @@ const MAX_SECTION_ITEMS = 200
 //     breadcrumb sits between the url and the description and is matched-and-discarded:
 //       `[text](url) (Breadcrumb > path): description`
 // Captures: [prefix, text, url, description] (prefix and description may be empty).
-const LINK_LINE_RE = /^\s*(?:[-*+]\s+)?([^\[\n]*?)\s*\[([^\]]+)\] ?\(([^)\s]+)\)(?:\s+\([^)]*\))?(?:\s*[:—–-]\s*(.+?))?\s*$/
+const LINK_LINE_RE = /^\s*(?:[-*+]\s+)?([^[\n]*?)\s*\[([^\]]+)\] ?\(([^)\s]+)\)(?:\s+\([^)]*\))?(?:\s*[:—–-]\s*(.+?))?\s*$/
 const BLOCKQUOTE_RE = /^\s*>/
 const FENCE_RE = /^\s*(?:```|~~~)/
 
@@ -169,7 +169,7 @@ function parseListLink(line, llmsUrl, options = {}) {
 
 function normalizeUrl(rawUrl, llmsUrl, options = {}) {
   const trimmed = String(rawUrl || '').trim().replace(/[.,;]+$/, '')
-  if (!trimmed || /^#/.test(trimmed) || /^(mailto|javascript):/i.test(trimmed)) return null
+  if (!trimmed || trimmed.startsWith('#') || /^(mailto|javascript):/i.test(trimmed)) return null
 
   try {
     const url = llmsUrl ? new URL(resolveLlmsRelativeUrl(trimmed, llmsUrl, options), llmsUrl) : new URL(trimmed)

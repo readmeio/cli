@@ -173,12 +173,12 @@ async function runShow(name, options) {
   console.log(`  ${styles.heading(comp.name)}  ${styles.dim(comp.htmlUrl)}`);
   if (comp.readme) {
     console.log();
-    console.log(comp.readme.split('\n').map((l) => '  ' + l).join('\n'));
+    console.log(comp.readme.split('\n').map((l) => `  ${l}`).join('\n'));
   }
   console.log();
   console.log(`  ${styles.bold('Source')} ${styles.dim(`(${comp.name}.mdx)`)}`);
   console.log();
-  console.log(comp.mdx.split('\n').map((l) => '    ' + l).join('\n'));
+  console.log(comp.mdx.split('\n').map((l) => `    ${l}`).join('\n'));
   console.log();
 }
 
@@ -243,7 +243,7 @@ async function runNew(gitRoot, description, options) {
         }
       } else if (message.type === 'result') {
         if (message.subtype && message.subtype !== 'success') {
-          throw new Error(`${message.subtype}${message.error?.message ? ' — ' + message.error.message : ''}`);
+          throw new Error(`${message.subtype}${message.error?.message ? ` — ${message.error.message}` : ''}`);
         }
         break;
       }
@@ -269,7 +269,7 @@ async function runNew(gitRoot, description, options) {
     if (!ok) { styles.info('Aborted.'); return; }
   }
 
-  fs.writeFileSync(file, mdx + '\n', 'utf-8');
+  fs.writeFileSync(file, `${mdx}\n`, 'utf-8');
   console.log();
   styles.ok(`Created ${styles.bold(name)} → ${styles.dim(path.relative(gitRoot, file))}`);
   styles.info(`Use it in any docs page as ${styles.bold(`<${name} ... />`)}.`);

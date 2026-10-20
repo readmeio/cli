@@ -253,7 +253,7 @@ export function header(opts = {}) {
   const icon = eyes(expression);
   const gap = '  ';
 
-  const title = chalk.bold.hex(currentPalette.body)('The ReadMe CLI') + (version ? ' ' + chalk.dim(`v${version}`) : '');
+  const title = chalk.bold.hex(currentPalette.body)('The ReadMe CLI') + (version ? ` ${  chalk.dim(`v${version}`)}` : '');
   const bin = binName ? chalk.white(binName) : '';
   const greetLine = greeting ? chalk.dim(greeting) : '';
 
@@ -296,7 +296,7 @@ export function animate(name, opts = {}) {
   const headerLines = [];
   if (version || bin) {
     const gap = '  ';
-    headerLines[0] = gap + chalk.bold.hex(currentPalette.body)('The ReadMe CLI') + (version ? ' ' + chalk.dim(`v${version}`) : '');
+    headerLines[0] = gap + chalk.bold.hex(currentPalette.body)('The ReadMe CLI') + (version ? ` ${  chalk.dim(`v${version}`)}` : '');
     headerLines[1] = gap + (bin ? chalk.white(bin) : '');
     if (subtitle) headerLines[2] = gap + subtitle;
   }
@@ -340,7 +340,7 @@ export function animate(name, opts = {}) {
       firstDraw = false;
 
       for (const line of lines) {
-        process.stdout.write(indent + line + '\n');
+        process.stdout.write(`${indent + line  }\n`);
       }
 
       const duration = anim.durations[i % anim.durations.length];

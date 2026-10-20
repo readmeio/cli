@@ -112,10 +112,10 @@ function canonicalUrlPreferenceRank(url) {
   try {
     const pathname = new URL(url).pathname
     const lower = pathname.toLowerCase()
-    if (/\.md$/.test(lower)) return 0
-    if (/\.txt$/.test(lower)) return 1
-    if (!/\/$/.test(pathname) && !/\/index\.html?$/.test(lower) && !/\.[^/]+$/.test(lower)) return 2
-    if (/\/$/.test(pathname)) return 3
+    if (lower.endsWith('.md')) return 0
+    if (lower.endsWith('.txt')) return 1
+    if (!pathname.endsWith('/') && !/\/index\.html?$/.test(lower) && !/\.[^/]+$/.test(lower)) return 2
+    if (pathname.endsWith('/')) return 3
     if (/\/index\.html?$/.test(lower)) return 4
     return 5
   } catch {

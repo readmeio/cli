@@ -11,6 +11,7 @@ A CLI tool for writing, previewing, and managing ReadMe docs from the terminal. 
 ## Commands
 
 ### Linting
+
 ```bash
 npx @readme/cli lint          # Check docs for errors
 npx @readme/cli lint --fix    # Automatically fix common issues
@@ -22,12 +23,15 @@ Validates: frontmatter, ordering, duplicates, OAS references, OAS schema, MDX co
 Always try `lint --fix` before attempting manual fixes.
 
 ### OpenAPI Sync
+
 ```bash
 npx @readme/cli oas:sync
 ```
+
 Syncs `reference/` directory with OpenAPI specs. Creates, updates, or removes pages based on spec operations. Run this when you see `oas-reference` errors.
 
 ### OpenAPI Bundle
+
 ```bash
 npx @readme/cli oas:bundle path/to/openapi.yaml --out reference/api.json
 ```
@@ -35,26 +39,33 @@ npx @readme/cli oas:bundle path/to/openapi.yaml --out reference/api.json
 Combines a multi-file spec (external `$ref`s to partials) into one self-contained file. Prints to stdout without `--out`. Output format follows the `--out` extension. Works from any directory, so it can run in the API's source repo before copying into the docs repo.
 
 ### Import
+
 ```bash
 npx @readme/cli import
 ```
+
 Imports content from an external folder and converts it into ReadMe's format using Claude.
 
 ### Versions
+
 ```bash
 npx @readme/cli versions
 ```
+
 Lists all doc versions and their branches.
 
 ### Dev Server
+
 ```bash
 npx @readme/cli dev
 ```
+
 Starts a local dev server to preview docs with live reload.
 
 ## Prerequisites
 
 The CLI expects to be run inside a git repo that has:
+
 - A version branch matching `v[0-9]*` (e.g., `v1`, `v2.0`)
 - A `docs/` and/or `reference/` directory at the repo root
 

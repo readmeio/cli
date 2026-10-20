@@ -590,7 +590,7 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
   } else if (archbeeNav) {
     scraped = { title: archbeeNav.title, categories: archbeeNav.categories }
   } else {
-    styles.info(`Scraping sidebar nav from ${styles.bold(sourceUrl.toString())}${firecrawlKey ? ' ' + styles.dim('(via Firecrawl)') : ''}...`)
+    styles.info(`Scraping sidebar nav from ${styles.bold(sourceUrl.toString())}${firecrawlKey ? ` ${  styles.dim('(via Firecrawl)')}` : ''}...`)
     scrapeStart = Date.now()
     const scrapeOasSink = []
     scraped = await timePhase('scrape nav', () => scrapeNavFromSite(sourceUrl.toString(), knownUrls, firecrawlKey, scrapeDiagnostics, scrapeOasSink))
@@ -620,7 +620,7 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
     const coverage = nonReferenceKnown.length > 0 ? scrapedPages / nonReferenceKnown.length : 1
     if (coverage < 0.75) {
       styles.info(
-        `Scrape covered ${styles.bold(Math.round(coverage * 100) + '%')} of llms.txt pages (need ≥75%${nonReferenceKnown.length < knownUrls.length ? `, ${knownUrls.length - nonReferenceKnown.length} api-reference pages excluded` : ''}) — discarding scrape and organizing from llms.txt.`,
+        `Scrape covered ${styles.bold(`${Math.round(coverage * 100)  }%`)} of llms.txt pages (need ≥75%${nonReferenceKnown.length < knownUrls.length ? `, ${knownUrls.length - nonReferenceKnown.length} api-reference pages excluded` : ''}) — discarding scrape and organizing from llms.txt.`,
       )
       scraped = null
       scrapeDiscardedForCoverage = true
@@ -992,7 +992,7 @@ async function runOasImport(sourcePath, options, startedAt, phases, timePhase) {
     try {
       parsed = ext === '.json' ? JSON.parse(raw) : yamlRequire().load(raw)
     } catch (e) {
-      throw new Error(`Couldn't parse ${absPath} as ${ext === '.json' ? 'JSON' : 'YAML'}: ${e.message}`)
+      throw new Error(`Couldn't parse ${absPath} as ${ext === '.json' ? 'JSON' : 'YAML'}: ${e.message}`, { cause: e })
     }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       throw new Error(`File isn't a usable object: ${absPath}`)
@@ -1022,7 +1022,7 @@ async function runOasImport(sourcePath, options, startedAt, phases, timePhase) {
         return { spec: parsed, opCount: countOperations(parsed), wasFixed: false }
       } catch (validateErr) {
         throw new Error(
-          `Spec is invalid and couldn't be auto-fixed.\n  Validation error: ${validateErr.message.split('\n')[0]}\n  Fix attempt error: ${bundleErr.message.split('\n')[0]}`,
+          `Spec is invalid and couldn't be auto-fixed.\n  Validation error: ${validateErr.message.split('\n')[0]}\n  Fix attempt error: ${bundleErr.message.split('\n')[0]}`, { cause: validateErr },
         )
       }
     }
@@ -1034,7 +1034,7 @@ async function runOasImport(sourcePath, options, startedAt, phases, timePhase) {
 
   const title = spec.info?.title || basename
   const version = spec.info?.version || null
-  styles.ok(`Parsed OpenAPI ${version ? 'v' + version + ' ' : ''}spec — ${styles.bold(title)} (${styles.bold(String(opCount))} operation${opCount === 1 ? '' : 's'}).`)
+  styles.ok(`Parsed OpenAPI ${version ? `v${  version  } ` : ''}spec — ${styles.bold(title)} (${styles.bold(String(opCount))} operation${opCount === 1 ? '' : 's'}).`)
   console.log()
 
   const stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'readme-import-'))
@@ -2948,7 +2948,7 @@ function slotOrphansByPath(scraped, knownPages) {
     let bestCat = null
     let bestLen = -1
     for (const [navPath, cat] of pathToCategory) {
-      if (navPath && (norm === navPath || norm.startsWith(navPath + '/'))) {
+      if (navPath && (norm === navPath || norm.startsWith(`${navPath  }/`))) {
         if (navPath.length > bestLen) {
           bestCat = cat
           bestLen = navPath.length
@@ -3618,7 +3618,7 @@ async function organizeFromSections(parsed, model) {
   const result = await runJsonQuery({ systemPrompt, userPrompt, model, schema: organizeFromSectionsOutputSchema })
   const raw = result.sections
   if (!Array.isArray(raw)) {
-    throw new Error('Fast-path expected a JSON array of {title, icon} entries.')
+    throw new TypeError('Fast-path expected a JSON array of {title, icon} entries.')
   }
 
   const categories = sections.map((s, i) => {
@@ -3884,7 +3884,7 @@ function narrowToDocsSubtreeIfNeeded(llms, sourceUrl, hits) {
   }
   if (!docsSegment) return null
 
-  const prefix = '/' + docsSegment
+  const prefix = `/${  docsSegment}`
   let kept = 0
   let dropped = 0
   const keptSections = []
@@ -3893,7 +3893,7 @@ function narrowToDocsSubtreeIfNeeded(llms, sourceUrl, hits) {
     for (const item of section.items) {
       try {
         const pn = new URL(item.url).pathname.toLowerCase()
-        if (pn === prefix || pn.startsWith(prefix + '/')) {
+        if (pn === prefix || pn.startsWith(`${prefix  }/`)) {
           items.push(item)
           kept++
         } else {
@@ -4275,7 +4275,7 @@ function extractNestedLlmsUrls(parsed, originScope) {
  */
 function expandLlmsFrontier(currentPath, parsed) {
   const next = []
-  const prefix = currentPath === '/' || currentPath === '' ? '/' : currentPath + '/'
+  const prefix = currentPath === '/' || currentPath === '' ? '/' : `${currentPath  }/`
 
   if (currentPath && currentPath !== '/') {
     const parent = currentPath.replace(/\/[^/]+$/, '') || '/'
@@ -4322,7 +4322,7 @@ async function discoverLlmsTxt(sourceUrl) {
   const startSegs = sourceUrl.pathname.split('/').filter(Boolean)
   const initial = []
   for (let i = startSegs.length; i >= 0; i--) {
-    initial.push('/' + startSegs.slice(0, i).join('/'))
+    initial.push(`/${  startSegs.slice(0, i).join('/')}`)
   }
 
   let frontier = initial
@@ -4539,7 +4539,7 @@ function deriveSitemapScope(sourceUrl) {
   const segs = sourceUrl.pathname.split('/').filter(Boolean)
   for (let i = segs.length - 1; i >= 0; i--) {
     if (WELL_KNOWN_DOC_SEGMENTS.has(segs[i].toLowerCase())) {
-      return '/' + segs.slice(0, i + 1).join('/') + '/'
+      return `/${  segs.slice(0, i + 1).join('/')  }/`
     }
   }
   return null
@@ -4562,7 +4562,7 @@ function buildSitemapCandidates(sourceUrl) {
   const segs = sourceUrl.pathname.split('/').filter(Boolean)
   for (let i = segs.length; i >= 0; i--) {
     const prefix = segs.slice(0, i).join('/')
-    add(`${origin}${prefix ? '/' + prefix : ''}/sitemap.xml`)
+    add(`${origin}${prefix ? `/${  prefix}` : ''}/sitemap.xml`)
   }
   return out
 }
@@ -4696,7 +4696,7 @@ function sitemapUrlsToKnownUrls(urls, oasSink) {
 function printPagesTree(pages, indentLevel) {
   const indent = '  '.repeat(indentLevel)
   for (const page of pages) {
-    const desc = page.description ? ` ${styles.dim('— ' + page.description)}` : ''
+    const desc = page.description ? ` ${styles.dim(`— ${  page.description}`)}` : ''
     const url = page.url ? ` ${styles.dim(page.url)}` : ''
     console.log(`${indent}${styles.dim('·')} ${page.title}${url}${desc}`)
     if (page.pages && page.pages.length > 0) {
@@ -4936,14 +4936,14 @@ function stageOrganized(organized, stagingDir, opts = {}) {
   // Per-directory _order.yaml preserves input order in the sidebar.
   for (const [dir, slugs] of byDir) {
     const orderPath = path.join(stagingDir, dir, '_order.yaml')
-    const body = slugs.map((s) => `- ${yamlSafeSlug(s)}`).join('\n') + '\n'
+    const body = `${slugs.map((s) => `- ${yamlSafeSlug(s)}`).join('\n')  }\n`
     fs.writeFileSync(orderPath, body)
   }
 
   // Top-level _order.yaml (e.g. docs/_order.yaml) lists category subfolders.
   for (const [topDir, subs] of subDirsByTopDir) {
     const orderPath = path.join(stagingDir, topDir, '_order.yaml')
-    const body = subs.map((s) => `- ${yamlSafeSlug(s)}`).join('\n') + '\n'
+    const body = `${subs.map((s) => `- ${yamlSafeSlug(s)}`).join('\n')  }\n`
     fs.writeFileSync(orderPath, body)
   }
 
@@ -5066,7 +5066,7 @@ function finalizeChangelogs(stagingDir) {
     const entries = yamlRequire().load(fs.readFileSync(docsOrderPath, 'utf-8'))
     const filtered = Array.isArray(entries) ? entries.filter((entry) => entry !== 'Changelog') : []
     if (filtered.length > 0) {
-      fs.writeFileSync(docsOrderPath, filtered.map((entry) => `- ${yamlSafeSlug(entry)}`).join('\n') + '\n')
+      fs.writeFileSync(docsOrderPath, `${filtered.map((entry) => `- ${yamlSafeSlug(entry)}`).join('\n')  }\n`)
     } else {
       fs.rmSync(docsOrderPath)
     }

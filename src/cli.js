@@ -46,12 +46,12 @@ export async function main() {
 
   if (!isRunningInClaude) {
     program.addHelpText('beforeAll', () => {
-      return '\n' + header({
+      return `\n${header({
         version: pkg.version,
         binName: styles.binName(),
         greeting: petGreeting,
         expression: petExpression,
-      }).map(l => '  ' + l).join('\n') + '\n';
+      }).map(l => `  ${  l}`).join('\n')}\n`;
     });
   }
 
@@ -158,10 +158,12 @@ export async function main() {
     if (tip) {
       let output = '';
       const origLog = console.log;
-      console.log = (...args) => { output += args.join(' ') + '\n'; };
+      console.log = (...args) => {
+        output += `${args.join(' ')  }\n`;
+      };
       tip.render();
       console.log = origLog;
-      return '\n' + output;
+      return `\n${output}`;
     }
     return '';
   });
