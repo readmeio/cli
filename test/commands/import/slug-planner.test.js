@@ -1,6 +1,5 @@
-import { test } from 'node:test'
-import assert from 'node:assert/strict'
-import { ensureUniqueSlugs } from './import.js'
+import { test, expect } from 'vitest'
+import { ensureUniqueSlugs } from '../../../src/commands/import.js'
 
 function assignedSlug(categories, page) {
   return ensureUniqueSlugs(categories).get(page)
@@ -9,8 +8,8 @@ function assignedSlug(categories, page) {
 test('ensureUniqueSlugs: generic docs terminal paths fall back to introduction', () => {
   for (const segment of ['doc', 'docs', 'documentation', 'documentations']) {
     const page = { title: segment, url: `https://example.com/${segment}` }
-    assert.equal(
-      assignedSlug([{ title: 'Documentation', pages: [page] }], page),
+    expect(
+      assignedSlug([{ title: 'Documentation', pages: [page] }], page)).toBe(
       'introduction',
     )
   }
@@ -19,8 +18,8 @@ test('ensureUniqueSlugs: generic docs terminal paths fall back to introduction',
 test('ensureUniqueSlugs: terminal generic docs paths use introduction under non-generic categories', () => {
   const page = { title: 'Docs', url: 'https://example.com/docs' }
 
-  assert.equal(
-    assignedSlug([{ title: 'Guides', pages: [page] }], page),
+  expect(
+    assignedSlug([{ title: 'Guides', pages: [page] }], page)).toBe(
     'introduction',
   )
 })
@@ -33,15 +32,15 @@ test('ensureUniqueSlugs: category segment disambiguates introduction collisions'
     { title: 'API', pages: [apiPage] },
   ])
 
-  assert.equal(slugs.get(guidesPage), 'guides-introduction')
-  assert.equal(slugs.get(apiPage), 'api-introduction')
+  expect(slugs.get(guidesPage)).toBe('guides-introduction')
+  expect(slugs.get(apiPage)).toBe('api-introduction')
 })
 
 test('ensureUniqueSlugs: generic docs category does not prefix an available page slug', () => {
   const page = { title: 'Getting Started', url: 'https://example.com/docs/getting-started' }
 
-  assert.equal(
-    assignedSlug([{ title: 'Docs', pages: [page] }], page),
+  expect(
+    assignedSlug([{ title: 'Docs', pages: [page] }], page)).toBe(
     'getting-started',
   )
 })
@@ -54,8 +53,8 @@ test('ensureUniqueSlugs: generic docs categories use existing numeric suffix fal
     { title: 'Documentation', pages: [second] },
   ])
 
-  assert.equal(slugs.get(first), 'getting-started')
-  assert.equal(slugs.get(second), 'getting-started-2')
+  expect(slugs.get(first)).toBe('getting-started')
+  expect(slugs.get(second)).toBe('getting-started-2')
 })
 
 test('ensureUniqueSlugs: generic docs category is assigned before non-generic categories', () => {
@@ -66,8 +65,8 @@ test('ensureUniqueSlugs: generic docs category is assigned before non-generic ca
     { title: 'Docs', pages: [docsPage] },
   ])
 
-  assert.equal(slugs.get(docsPage), 'getting-started')
-  assert.equal(slugs.get(aiPage), 'ai-getting-started')
+  expect(slugs.get(docsPage)).toBe('getting-started')
+  expect(slugs.get(aiPage)).toBe('ai-getting-started')
 })
 
 test('ensureUniqueSlugs: non-generic docs paths keep current base slug behavior', () => {
@@ -79,8 +78,8 @@ test('ensureUniqueSlugs: non-generic docs paths keep current base slug behavior'
     { title: 'Guides', pages: [api, gettingStarted, docsApi, documentationSettings] },
   ])
 
-  assert.equal(slugs.get(api), 'api')
-  assert.equal(slugs.get(gettingStarted), 'getting-started')
-  assert.equal(slugs.get(docsApi), 'docs-api')
-  assert.equal(slugs.get(documentationSettings), 'documentation-settings')
+  expect(slugs.get(api)).toBe('api')
+  expect(slugs.get(gettingStarted)).toBe('getting-started')
+  expect(slugs.get(docsApi)).toBe('docs-api')
+  expect(slugs.get(documentationSettings)).toBe('documentation-settings')
 })

@@ -1,11 +1,10 @@
-import { afterEach, test } from 'node:test'
-import assert from 'node:assert/strict'
+import { afterEach, test, expect } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { Command } from 'commander'
-import { args, __test__ } from './import.js'
-import { parseFrontmatter, toFrontmatter } from '../utils/markdown.js'
+import { args, __test__ } from '../../../src/commands/import.js'
+import { parseFrontmatter, toFrontmatter } from '../../../src/utils/markdown.js'
 
 const { stageOrganized, finalizeChangelogs, allocateChangelogFilenames } = __test__
 
@@ -47,27 +46,27 @@ test('stageOrganized writes parent pages as index.md and leaves as slug.md', () 
     const leafFile = path.join(stagingDir, 'docs', 'Guides', 'pricing.md')
     const siblingParent = path.join(stagingDir, 'docs', 'Guides', 'getting-started.md')
 
-    assert.equal(fs.existsSync(parentIndex), true)
-    assert.equal(fs.existsSync(child), true)
-    assert.equal(fs.existsSync(leafFile), true)
-    assert.equal(fs.existsSync(siblingParent), false)
+    expect(fs.existsSync(parentIndex)).toBe(true)
+    expect(fs.existsSync(child)).toBe(true)
+    expect(fs.existsSync(leafFile)).toBe(true)
+    expect(fs.existsSync(siblingParent)).toBe(false)
 
-    assert.equal(readFm(parentIndex).title, 'Getting Started')
-    assert.equal(readFm(parentIndex)['x-import'], 'https://example.com/docs/getting-started')
-    assert.equal(readFm(child).title, 'Install')
-    assert.equal(readFm(leafFile).title, 'Pricing')
+    expect(readFm(parentIndex).title).toBe('Getting Started')
+    expect(readFm(parentIndex)['x-import']).toBe('https://example.com/docs/getting-started')
+    expect(readFm(child).title).toBe('Install')
+    expect(readFm(leafFile).title).toBe('Pricing')
 
     const guidesOrder = fs.readFileSync(path.join(stagingDir, 'docs', 'Guides', '_order.yaml'), 'utf8')
-    assert.match(guidesOrder, /^- getting-started$/m)
-    assert.match(guidesOrder, /^- pricing$/m)
-    assert.doesNotMatch(guidesOrder, /^- index$/m)
+    expect(guidesOrder).toMatch(/^- getting-started$/m)
+    expect(guidesOrder).toMatch(/^- pricing$/m)
+    expect(guidesOrder).not.toMatch(/^- index$/m)
 
     const nestedOrder = fs.readFileSync(
       path.join(stagingDir, 'docs', 'Guides', 'getting-started', '_order.yaml'),
       'utf8',
     )
-    assert.match(nestedOrder, /^- install$/m)
-    assert.equal(result.fileCount, 3)
+    expect(nestedOrder).toMatch(/^- install$/m)
+    expect(result.fileCount).toBe(3)
   })
 })
 
@@ -93,16 +92,16 @@ test('stageOrganized rescues /api/docs pages when skipping API reference categor
       { skipApiReference: true },
     )
 
-    assert.equal(result.skippedApiRef, 1)
-    assert.equal(fs.existsSync(path.join(stagingDir, 'reference')), false)
+    expect(result.skippedApiRef).toBe(1)
+    expect(fs.existsSync(path.join(stagingDir, 'reference'))).toBe(false)
 
     const rescuedDir = path.join(stagingDir, 'docs', 'API Docs')
     const guides = path.join(rescuedDir, 'intro.md')
     const pricing = path.join(rescuedDir, 'introduction', 'pricing.md')
-    assert.equal(fs.existsSync(guides), true)
-    assert.equal(fs.existsSync(pricing), true)
-    assert.equal(readFm(guides)['x-import'], 'https://example.com/api/docs/guides/intro')
-    assert.equal(readFm(pricing)['x-import'], 'https://example.com/api/docs/pricing')
+    expect(fs.existsSync(guides)).toBe(true)
+    expect(fs.existsSync(pricing)).toBe(true)
+    expect(readFm(guides)['x-import']).toBe('https://example.com/api/docs/guides/intro')
+    expect(readFm(pricing)['x-import']).toBe('https://example.com/api/docs/pricing')
   })
 })
 
@@ -123,15 +122,15 @@ test('stageOrganized namespaces nested category folders that would otherwise sha
     const nestedPage = path.join(nestedDir, 'sql.md')
     const nestedIndex = path.join(nestedDir, 'index.md')
 
-    assert.equal(fs.existsSync(topLevel), true)
-    assert.equal(fs.existsSync(nestedPage), true)
-    assert.equal(fs.existsSync(nestedIndex), true)
-    assert.equal(readFm(nestedIndex).title, 'Fundamentals')
-    assert.equal('x-import' in readFm(nestedIndex), false)
+    expect(fs.existsSync(topLevel)).toBe(true)
+    expect(fs.existsSync(nestedPage)).toBe(true)
+    expect(fs.existsSync(nestedIndex)).toBe(true)
+    expect(readFm(nestedIndex).title).toBe('Fundamentals')
+    expect('x-import' in readFm(nestedIndex)).toBe(false)
 
     const docsOrder = fs.readFileSync(path.join(stagingDir, 'docs', '_order.yaml'), 'utf8')
-    assert.match(docsOrder, /^- Fundamentals$/m)
-    assert.match(docsOrder, /^- cockroach\/cockroach-fundamentals$/m)
+    expect(docsOrder).toMatch(/^- Fundamentals$/m)
+    expect(docsOrder).toMatch(/^- cockroach\/cockroach-fundamentals$/m)
   })
 })
 
@@ -153,18 +152,18 @@ test('finalizeChangelogs emits flat canonical changelogs without an order file a
     )
     fs.writeFileSync(path.join(stagingDir, 'docs', '_order.yaml'), '- Changelog\n')
 
-    assert.equal(finalizeChangelogs(stagingDir), 3)
+    expect(finalizeChangelogs(stagingDir)).toBe(3)
 
     const outputDir = path.join(stagingDir, 'changelogs')
-    assert.deepEqual(fs.readdirSync(outputDir).sort(), ['foo-Bar.md', 'foo-bar-2.md', 'unchanged.md'])
-    assert.equal(fs.existsSync(path.join(outputDir, '_order.yaml')), false)
-    assert.equal(fs.existsSync(path.join(stagingDir, 'changelog')), false)
-    assert.equal(fs.existsSync(path.join(stagingDir, 'docs', 'Changelog')), false)
-    assert.equal(fs.existsSync(path.join(stagingDir, 'docs', '_order.yaml')), false)
-    assert.equal(readFm(path.join(outputDir, 'foo-Bar.md')).icon, undefined)
-    assert.equal(readFm(path.join(outputDir, 'foo-Bar.md'))['x-import'], 'https://example.com/nested')
-    assert.equal(readFm(path.join(outputDir, 'foo-bar-2.md'))['x-import'], 'https://example.com/root')
-    assert.equal(readFm(path.join(outputDir, 'unchanged.md'))['x-import'], 'https://example.com/unchanged')
+    expect(fs.readdirSync(outputDir).sort()).toStrictEqual(['foo-Bar.md', 'foo-bar-2.md', 'unchanged.md'])
+    expect(fs.existsSync(path.join(outputDir, '_order.yaml'))).toBe(false)
+    expect(fs.existsSync(path.join(stagingDir, 'changelog'))).toBe(false)
+    expect(fs.existsSync(path.join(stagingDir, 'docs', 'Changelog'))).toBe(false)
+    expect(fs.existsSync(path.join(stagingDir, 'docs', '_order.yaml'))).toBe(false)
+    expect(readFm(path.join(outputDir, 'foo-Bar.md')).icon).toBeUndefined()
+    expect(readFm(path.join(outputDir, 'foo-Bar.md'))['x-import']).toBe('https://example.com/nested')
+    expect(readFm(path.join(outputDir, 'foo-bar-2.md'))['x-import']).toBe('https://example.com/root')
+    expect(readFm(path.join(outputDir, 'unchanged.md'))['x-import']).toBe('https://example.com/unchanged')
   })
 })
 
@@ -178,23 +177,23 @@ test('stageOrganized retains case-only changelog names before finalization', () 
       stagingDir,
       { slugFor: new Map([[upper, 'A'], [lower, 'a'], [independent, 'a-2']]) },
     )
-    assert.equal(finalizeChangelogs(stagingDir), 3)
+    expect(finalizeChangelogs(stagingDir)).toBe(3)
 
     const outputDir = path.join(stagingDir, 'changelogs')
-    assert.deepEqual(fs.readdirSync(outputDir).sort(), ['A.md', 'a-2.md', 'a-3.md'])
-    assert.equal(readFm(path.join(outputDir, 'A.md')).title, 'Upper A')
-    assert.equal(readFm(path.join(outputDir, 'a-3.md')).title, 'Lower a')
-    assert.equal(readFm(path.join(outputDir, 'a-2.md')).title, 'Independent a-2')
+    expect(fs.readdirSync(outputDir).sort()).toStrictEqual(['A.md', 'a-2.md', 'a-3.md'])
+    expect(readFm(path.join(outputDir, 'A.md')).title).toBe('Upper A')
+    expect(readFm(path.join(outputDir, 'a-3.md')).title).toBe('Lower a')
+    expect(readFm(path.join(outputDir, 'a-2.md')).title).toBe('Independent a-2')
   })
 })
 
 test('allocateChangelogFilenames preserves an independent numeric-suffix filename', () => {
-  assert.deepEqual(
+  expect(
     allocateChangelogFilenames([
       { ancestors: [], slug: 'A' },
       { ancestors: [], slug: 'a' },
       { ancestors: [], slug: 'a-2' },
-    ]),
+    ])).toStrictEqual(
     ['A', 'a-3', 'a-2'],
   )
 })
@@ -203,7 +202,7 @@ test('import command has no conditional changelog layout option', () => {
   const cmd = new Command()
   args(cmd)
 
-  assert.equal(cmd.options.some((option) => option.long === '--separate-changelog'), false)
+  expect(cmd.options.some((option) => option.long === '--separate-changelog')).toBe(false)
 })
 
 test('stageOrganized quotes YAML-unsafe slugs in _order.yaml', () => {
@@ -224,7 +223,7 @@ test('stageOrganized quotes YAML-unsafe slugs in _order.yaml', () => {
     )
 
     const order = fs.readFileSync(path.join(stagingDir, 'docs', 'Guides', '_order.yaml'), 'utf8')
-    assert.match(order, /^- "true"$/m)
-    assert.match(order, /^- "null"$/m)
+    expect(order).toMatch(/^- "true"$/m)
+    expect(order).toMatch(/^- "null"$/m)
   })
 })

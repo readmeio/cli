@@ -1,10 +1,9 @@
-import { test } from 'node:test';
-import assert from 'node:assert/strict';
+import { expect, test } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { collectFiles } from '../src/utils/lint.js';
-import { validateAll } from '../src/validators/ordering.js';
-import { makeRepo, rmRepo } from './helpers.js';
+import { collectFiles } from '../../src/utils/lint.js';
+import { validateAll } from '../../src/validators/ordering.js';
+import { makeRepo, rmRepo } from '../helpers.js';
 
 test('stale and index entries in _order.yaml are flagged', () => {
   const root = makeRepo({
@@ -13,9 +12,9 @@ test('stale and index entries in _order.yaml are flagged', () => {
   });
   try {
     const res = validateAll(collectFiles(root), root, {});
-    assert.ok(res.some((r) => r.message.includes('Stale entry: "ghost"')), 'flags ghost');
-    assert.ok(res.some((r) => r.message.includes('Invalid entry: "index"')), 'flags index');
-    assert.ok(!res.some((r) => r.message.includes('foo')), 'does not flag valid foo');
+    expect(res.some((r) => r.message.includes('Stale entry: "ghost"')), 'flags ghost').toBe(true);
+    expect(res.some((r) => r.message.includes('Invalid entry: "index"')), 'flags index').toBe(true);
+    expect(!res.some((r) => r.message.includes('foo')), 'does not flag valid foo').toBe(true);
   } finally {
     rmRepo(root);
   }
@@ -29,7 +28,7 @@ test('--fix removes stale and index entries', () => {
   try {
     validateAll(collectFiles(root), root, { fix: true });
     const after = fs.readFileSync(path.join(root, 'docs/_order.yaml'), 'utf-8').trim();
-    assert.equal(after, '- foo');
+    expect(after).toBe('- foo');
   } finally {
     rmRepo(root);
   }
@@ -43,7 +42,7 @@ test('--fix removals preserve comments and blank lines', () => {
   try {
     validateAll(collectFiles(root), root, { fix: true });
     const after = fs.readFileSync(path.join(root, 'docs/_order.yaml'), 'utf-8');
-    assert.equal(after, '# getting started\n- foo\n\n# stale below\n');
+    expect(after).toBe('# getting started\n- foo\n\n# stale below\n');
   } finally {
     rmRepo(root);
   }
@@ -56,15 +55,15 @@ test('entries with inline comments are matched and preserved', () => {
   });
   try {
     const res = validateAll(collectFiles(root), root, {});
-    assert.ok(
+    expect(
       !res.some((r) => r.message.includes('Stale entry: "overview"')),
       'commented entry is not stale',
-    );
-    assert.ok(res.some((r) => r.message.includes('Stale entry: "ghost"')), 'ghost still flagged');
+    ).toBe(true);
+    expect(res.some((r) => r.message.includes('Stale entry: "ghost"')), 'ghost still flagged').toBe(true);
 
     validateAll(collectFiles(root), root, { fix: true });
     const after = fs.readFileSync(path.join(root, 'docs/_order.yaml'), 'utf-8');
-    assert.equal(after, '- overview # keep this first\n');
+    expect(after).toBe('- overview # keep this first\n');
   } finally {
     rmRepo(root);
   }
@@ -80,7 +79,7 @@ test('--fix adds missing entries in sorted order', () => {
   try {
     validateAll(collectFiles(root), root, { fix: true });
     const after = fs.readFileSync(path.join(root, 'docs/_order.yaml'), 'utf-8');
-    assert.equal(after, '- c\n- a\n- b\n');
+    expect(after).toBe('- c\n- a\n- b\n');
   } finally {
     rmRepo(root);
   }
@@ -94,7 +93,7 @@ test('stale entries are caught in reference too', () => {
   });
   try {
     const res = validateAll(collectFiles(root), root, {});
-    assert.ok(res.some((r) => r.message.includes('Stale entry: "deleted-op"')));
+    expect(res.some((r) => r.message.includes('Stale entry: "deleted-op"'))).toBe(true);
   } finally {
     rmRepo(root);
   }
@@ -109,8 +108,8 @@ test('--fix adds a file missing from _order.yaml', () => {
   try {
     validateAll(collectFiles(root), root, { fix: true });
     const after = fs.readFileSync(path.join(root, 'docs/_order.yaml'), 'utf-8');
-    assert.match(after, /- bar/);
-    assert.match(after, /- foo/);
+    expect(after).toMatch(/- bar/);
+    expect(after).toMatch(/- foo/);
   } finally {
     rmRepo(root);
   }
@@ -123,10 +122,10 @@ test('a folder entry with no markdown children is not flagged stale', () => {
   });
   try {
     const res = validateAll(collectFiles(root), root, {});
-    assert.ok(
+    expect(
       !res.some((r) => /Stale entry: "sub"/.test(r.message)),
       'a subfolder with no .md children still counts as on-disk',
-    );
+    ).toBe(true);
   } finally {
     rmRepo(root);
   }
