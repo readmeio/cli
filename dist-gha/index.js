@@ -49699,6 +49699,25 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
     ...[...groupsByFolder.keys()].filter((folder) => !declaredOrder.includes(folder)),
   ];
 
+  // Groups that will hold at least one of this spec's pages after this run:
+  // a new page is created in its folder, an existing page already lives there,
+  // or `apply-tag-changes` will move one in (see the move pass below). A group
+  // whose pages were all moved somewhere else (another category, or a folder
+  // spelled differently) gets no category page — creating one would leave an
+  // empty index.md with no children.
+  const populatedFolders = new Set();
+  for (const [key, op] of specOps) {
+    const { folder } = operationGroup(op);
+    const page = pagesByOpId.get(key);
+    if (
+      !page ||
+      external_node_path_namespaceObject.dirname(page.filePath) === external_node_path_namespaceObject.join(apiDir, foldersBySlug.get(folder) || folder) ||
+      (applyTagChanges && isWithin(apiDir, page.filePath) && external_node_path_namespaceObject.basename(page.filePath) !== 'index.md')
+    ) {
+      populatedFolders.add(folder);
+    }
+  }
+
   const groupDirs = new Map();
   const createdIndexes = new Set();
   for (const folder of orderedFolders) {
@@ -49706,9 +49725,11 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
     const actualFolder = foldersBySlug.get(folder) || folder;
     const pageDir = external_node_path_namespaceObject.join(refDir, infoTitle, actualFolder);
     if (!isWithin(refDir, pageDir)) continue;
-    groupDirs.set(folder, pageDir);
 
     const indexPath = external_node_path_namespaceObject.join(pageDir, 'index.md');
+    if (!populatedFolders.has(folder) && !external_node_fs_namespaceObject.existsSync(indexPath)) continue;
+    groupDirs.set(folder, pageDir);
+
     if (!external_node_fs_namespaceObject.existsSync(indexPath)) {
       // Never overwrite an existing index.md — it may be a hand-written category.
       external_node_fs_namespaceObject.mkdirSync(pageDir, { recursive: true });
@@ -65515,7 +65536,7 @@ function createJsonReporter() {
 }
 
 ;// CONCATENATED MODULE: ./package.json
-const package_namespaceObject = {"rE":"0.0.31"};
+const package_namespaceObject = {"rE":"0.1.0"};
 ;// CONCATENATED MODULE: ./src/commands/lint.js
 
 
