@@ -168,9 +168,9 @@ test('a tag whose pages all live in another category gets no empty category page
   });
   try {
     const [result] = syncOas(root);
-    assert.deepEqual(result.changes.added, []);
-    assert.equal(fs.existsSync(path.join(root, 'reference/Sites API')), false);
-    assert.equal(fs.readFileSync(path.join(root, 'reference/_order.yaml'), 'utf-8'), '- Applications\n');
+    expect(result.changes.added).toEqual([]);
+    expect(fs.existsSync(path.join(root, 'reference/Sites API'))).toBe(false);
+    expect(fs.readFileSync(path.join(root, 'reference/_order.yaml'), 'utf-8')).toBe('- Applications\n');
   } finally {
     rmRepo(root);
   }
@@ -190,8 +190,8 @@ test('a tag whose pages live in a differently spelled folder of the same categor
   });
   try {
     const [result] = syncOas(root);
-    assert.deepEqual(result.changes.added, []);
-    assert.equal(fs.existsSync(path.join(root, 'reference/Site API/site-api-v1-0')), false);
+    expect(result.changes.added).toEqual([]);
+    expect(fs.existsSync(path.join(root, 'reference/Site API/site-api-v1-0'))).toBe(false);
   } finally {
     rmRepo(root);
   }
@@ -213,15 +213,15 @@ test('a tag whose only page is nested under its folder still gets its category p
   try {
     const [result] = syncOas(root);
     const indexPath = path.join(root, 'reference/API/t/index.md');
-    assert.ok(fs.existsSync(indexPath), 'expected the category index.md to be restored');
+    expect(fs.existsSync(indexPath), 'expected the category index.md to be restored').toBe(true);
     const { data } = parseFrontmatter(fs.readFileSync(indexPath, 'utf-8'));
-    assert.equal(data.title, 't');
-    assert.equal(data.excerpt, 'Tag t');
-    assert.ok(fs.existsSync(path.join(root, 'reference/API/t/custom/a.md')));
-    assert.equal(fs.existsSync(path.join(root, 'reference/API/t/a.md')), false);
-    assert.deepEqual(result.changes.added, ['API/t/index.md']);
-    assert.deepEqual(order(root, 'reference/API/_order.yaml'), ['t']);
-    assert.deepEqual(order(root, 'reference/_order.yaml'), ['API']);
+    expect(data.title).toBe('t');
+    expect(data.excerpt).toBe('Tag t');
+    expect(fs.existsSync(path.join(root, 'reference/API/t/custom/a.md'))).toBe(true);
+    expect(fs.existsSync(path.join(root, 'reference/API/t/a.md'))).toBe(false);
+    expect(result.changes.added).toEqual(['API/t/index.md']);
+    expect(order(root, 'reference/API/_order.yaml')).toEqual(['t']);
+    expect(order(root, 'reference/_order.yaml')).toEqual(['API']);
   } finally {
     rmRepo(root);
   }
@@ -242,9 +242,9 @@ test('a tag with pages elsewhere still gets its category page when a new operati
   });
   try {
     syncOas(root);
-    assert.ok(fs.existsSync(path.join(root, 'reference/API/t/index.md')));
-    assert.ok(fs.existsSync(path.join(root, 'reference/API/t/new.md')));
-    assert.ok(fs.existsSync(path.join(root, 'reference/Elsewhere/old.md')));
+    expect(fs.existsSync(path.join(root, 'reference/API/t/index.md'))).toBe(true);
+    expect(fs.existsSync(path.join(root, 'reference/API/t/new.md'))).toBe(true);
+    expect(fs.existsSync(path.join(root, 'reference/Elsewhere/old.md'))).toBe(true);
   } finally {
     rmRepo(root);
   }
@@ -263,9 +263,9 @@ test('with apply-tag-changes, a tag whose pages all live in another category sti
   });
   try {
     const [result] = syncOas(root);
-    assert.deepEqual(result.changes.added, []);
-    assert.equal(fs.existsSync(path.join(root, 'reference/API')), false);
-    assert.ok(fs.existsSync(path.join(root, 'reference/Elsewhere/a.md')));
+    expect(result.changes.added).toEqual([]);
+    expect(fs.existsSync(path.join(root, 'reference/API'))).toBe(false);
+    expect(fs.existsSync(path.join(root, 'reference/Elsewhere/a.md'))).toBe(true);
   } finally {
     rmRepo(root);
   }
