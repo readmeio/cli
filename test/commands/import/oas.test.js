@@ -67,7 +67,7 @@ test('buildWellKnownOasProbeUrls covers both origins and path-kind docs bases wi
   expect(urls.includes('https://foo.com/v3/api-docs')).toBe(true)
   expect(urls.includes('https://foo.com/docs/openapi.yaml')).toBe(true)
   expect(urls.includes('https://foo.com/docs/openapi.yml')).toBe(false)
-  expect(new Set(urls)).toHaveLength(urls.length)
+  expect(new Set(urls).size).toBe(urls.length)
 
   const subdomain = buildWellKnownOasProbeUrls(
     new URL('https://docs.foo.com/'),
