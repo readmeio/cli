@@ -1,9 +1,8 @@
-import { afterEach, test } from 'node:test'
-import assert from 'node:assert/strict'
+import { afterEach, test, expect } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { __test__ } from './import.js'
+import { __test__ } from '../../../src/commands/import.js'
 
 const {
   sniffOasContent,
@@ -49,51 +48,51 @@ function mockProbeFetch(routes) {
 }
 
 test('sniffOasContent accepts JSON and YAML specs, rejects HTML and random content', () => {
-  assert.equal(sniffOasContent(JSON_SPEC), true)
-  assert.equal(sniffOasContent(JSON.stringify({ swagger: '2.0', paths: {} })), true)
-  assert.equal(sniffOasContent(YAML_SPEC), true)
-  assert.equal(sniffOasContent('swagger: "2.0"\npaths: {}\n'), true)
-  assert.equal(sniffOasContent("'openapi': 3.1.0\n"), true)
-  assert.equal(sniffOasContent(HTML_SHELL), false)
-  assert.equal(sniffOasContent('  <svg></svg>'), false)
-  assert.equal(sniffOasContent(JSON.stringify({ name: 'pkg', version: '1.0.0' })), false)
-  assert.equal(sniffOasContent(''), false)
-  assert.equal(sniffOasContent('just some prose about openapi stuff'), false)
+  expect(sniffOasContent(JSON_SPEC)).toBe(true)
+  expect(sniffOasContent(JSON.stringify({ swagger: '2.0', paths: {} }))).toBe(true)
+  expect(sniffOasContent(YAML_SPEC)).toBe(true)
+  expect(sniffOasContent('swagger: "2.0"\npaths: {}\n')).toBe(true)
+  expect(sniffOasContent("'openapi': 3.1.0\n")).toBe(true)
+  expect(sniffOasContent(HTML_SHELL)).toBe(false)
+  expect(sniffOasContent('  <svg></svg>')).toBe(false)
+  expect(sniffOasContent(JSON.stringify({ name: 'pkg', version: '1.0.0' }))).toBe(false)
+  expect(sniffOasContent('')).toBe(false)
+  expect(sniffOasContent('just some prose about openapi stuff')).toBe(false)
 })
 
 test('buildWellKnownOasProbeUrls covers both origins and path-kind docs bases without duplicates', () => {
   const docsBase = { kind: 'path', url: new URL('https://foo.com/docs/') }
   const urls = buildWellKnownOasProbeUrls(new URL('https://foo.com/docs/'), docsBase, 'https://foo.com')
-  assert(urls.includes('https://foo.com/openapi.json'))
-  assert(urls.includes('https://foo.com/v3/api-docs'))
-  assert(urls.includes('https://foo.com/docs/openapi.yaml'))
-  assert(!urls.includes('https://foo.com/docs/openapi.yml'))
-  assert.equal(new Set(urls).size, urls.length)
+  expect(urls.includes('https://foo.com/openapi.json')).toBe(true)
+  expect(urls.includes('https://foo.com/v3/api-docs')).toBe(true)
+  expect(urls.includes('https://foo.com/docs/openapi.yaml')).toBe(true)
+  expect(urls.includes('https://foo.com/docs/openapi.yml')).toBe(false)
+  expect(new Set(urls)).toHaveLength(urls.length)
 
   const subdomain = buildWellKnownOasProbeUrls(
     new URL('https://docs.foo.com/'),
     { kind: 'subdomain', url: new URL('https://docs.foo.com/') },
     'https://foo.com',
   )
-  assert(subdomain.includes('https://docs.foo.com/openapi.json'))
-  assert(subdomain.includes('https://foo.com/openapi.json'))
+  expect(subdomain.includes('https://docs.foo.com/openapi.json')).toBe(true)
+  expect(subdomain.includes('https://foo.com/openapi.json')).toBe(true)
 })
 
 test('probeWellKnownOasPaths returns zero hits when every path 200s with HTML', async () => {
   const seen = mockProbeFetch({ '*': { body: HTML_SHELL } })
   const hits = await probeWellKnownOasPaths(new URL('https://foo.com/'), null, 'https://foo.com')
-  assert.equal(hits.length, 0)
-  assert(seen.length <= 27)
+  expect(hits).toHaveLength(0)
+  expect(seen.length <= 27).toBe(true)
 })
 
 test('probeWellKnownOasPaths returns a hit with prefetched body for a real YAML spec', async () => {
   mockProbeFetch({ 'https://foo.com/openapi.yaml': { body: YAML_SPEC } })
   const hits = await probeWellKnownOasPaths(new URL('https://foo.com/'), null, 'https://foo.com')
-  assert.equal(hits.length, 1)
-  assert.equal(hits[0].url, 'https://foo.com/openapi.yaml')
-  assert.equal(hits[0].source, 'probe')
-  assert(Buffer.isBuffer(hits[0].body))
-  assert.equal(hits[0].body.toString('utf8'), YAML_SPEC)
+  expect(hits).toHaveLength(1)
+  expect(hits[0].url).toBe('https://foo.com/openapi.yaml')
+  expect(hits[0].source).toBe('probe')
+  expect(Buffer.isBuffer(hits[0].body)).toBe(true)
+  expect(hits[0].body.toString('utf8')).toBe(YAML_SPEC)
 })
 
 test('probeWellKnownOasPaths skips hits that redirect off the probe origins', async () => {
@@ -102,7 +101,7 @@ test('probeWellKnownOasPaths skips hits that redirect off the probe origins', as
     'https://foo.com/swagger.json': { body: JSON_SPEC },
   })
   const hits = await probeWellKnownOasPaths(new URL('https://foo.com/'), null, 'https://foo.com')
-  assert.deepEqual(hits.map((h) => h.url), ['https://foo.com/swagger.json'])
+  expect(hits.map((h) => h.url)).toStrictEqual(['https://foo.com/swagger.json'])
 })
 
 test('extractMintlifyOasCandidates handles string, string[], {source}, and nested nav nodes', () => {
@@ -120,13 +119,13 @@ test('extractMintlifyOasCandidates handles string, string[], {source}, and neste
   }
   const items = extractMintlifyOasCandidates(config, 'https://foo.com')
   const urls = items.map((i) => i.url)
-  assert.deepEqual(urls, [
+  expect(urls).toStrictEqual([
     'https://foo.com/specs/root.json',
     'https://cdn.foo.com/a.yaml',
     'https://foo.com/specs/b.json',
     'https://foo.com/specs/c.json',
   ])
-  assert(items.every((i) => i.source === 'mintlify' && i.text === null))
+  expect(items.every((i) => i.source === 'mintlify' && i.text === null)).toBe(true)
 })
 
 test('extractMintlifyOasCandidates ignores non-url values and dedupes', () => {
@@ -136,15 +135,15 @@ test('extractMintlifyOasCandidates ignores non-url values and dedupes', () => {
     },
   }
   const items = extractMintlifyOasCandidates(config, 'https://foo.com')
-  assert.deepEqual(items.map((i) => i.url), ['https://foo.com/spec.json'])
+  expect(items.map((i) => i.url)).toStrictEqual(['https://foo.com/spec.json'])
 })
 
 test('extractOasUrlsFromHtml finds Swagger UI single url and urls arrays', () => {
   const single = `<script>SwaggerUIBundle({ dom_id: '#swagger', url: "/openapi.json" })</script>`
-  assert.deepEqual(extractOasUrlsFromHtml(single, 'https://foo.com/reference'), ['https://foo.com/openapi.json'])
+  expect(extractOasUrlsFromHtml(single, 'https://foo.com/reference')).toStrictEqual(['https://foo.com/openapi.json'])
 
   const multi = `<script>SwaggerUI({ urls: [{ url: "https://foo.com/v1.json", name: "v1" }, { url: '/v2.yaml', name: "v2" }] })</script>`
-  assert.deepEqual(extractOasUrlsFromHtml(multi, 'https://foo.com/reference'), [
+  expect(extractOasUrlsFromHtml(multi, 'https://foo.com/reference')).toStrictEqual([
     'https://foo.com/v1.json',
     'https://foo.com/v2.yaml',
   ])
@@ -156,26 +155,28 @@ test('extractOasUrlsFromHtml finds redoc in every quoting variant plus Redoc.ini
     "<redoc spec-url='/spec.yaml'></redoc>",
     '<redoc lazy-rendering spec-url=/spec.yaml></redoc>',
   ]) {
-    assert.deepEqual(extractOasUrlsFromHtml(html, 'https://foo.com/api'), ['https://foo.com/spec.yaml'])
+    expect(extractOasUrlsFromHtml(html, 'https://foo.com/api')).toStrictEqual(['https://foo.com/spec.yaml'])
   }
   const init = `<script>Redoc.init("https://foo.com/openapi.json", {}, document.getElementById('redoc'))</script>`
-  assert.deepEqual(extractOasUrlsFromHtml(init, 'https://foo.com/api'), ['https://foo.com/openapi.json'])
+  expect(extractOasUrlsFromHtml(init, 'https://foo.com/api')).toStrictEqual(['https://foo.com/openapi.json'])
 })
 
 test('extractOasUrlsFromHtml finds Scalar script tags in both attribute orders', () => {
   const a = '<script id="api-reference" data-url="/openapi.json"></script>'
   const b = "<script data-url='/openapi.json' id='api-reference'></script>"
-  assert.deepEqual(extractOasUrlsFromHtml(a, 'https://foo.com/'), ['https://foo.com/openapi.json'])
-  assert.deepEqual(extractOasUrlsFromHtml(b, 'https://foo.com/'), ['https://foo.com/openapi.json'])
+  expect(extractOasUrlsFromHtml(a, 'https://foo.com/')).toStrictEqual(['https://foo.com/openapi.json'])
+  expect(extractOasUrlsFromHtml(b, 'https://foo.com/')).toStrictEqual(['https://foo.com/openapi.json'])
+
   const noId = '<script data-url="/openapi.json"></script>'
-  assert.deepEqual(extractOasUrlsFromHtml(noId, 'https://foo.com/'), [])
+  expect(extractOasUrlsFromHtml(noId, 'https://foo.com/')).toStrictEqual([])
 })
 
 test('extractOasUrlsFromHtml finds Stoplight apiDescriptionUrl and skips marketing pages', () => {
   const stoplight = '<elements-api apiDescriptionUrl="https://foo.com/api.yaml" router="hash" />'
-  assert.deepEqual(extractOasUrlsFromHtml(stoplight, 'https://foo.com/'), ['https://foo.com/api.yaml'])
+  expect(extractOasUrlsFromHtml(stoplight, 'https://foo.com/')).toStrictEqual(['https://foo.com/api.yaml'])
+
   const marketing = '<html><body><a href="/pricing">Pricing</a><script>analytics.track("url: nope")</script></body></html>'
-  assert.deepEqual(extractOasUrlsFromHtml(marketing, 'https://foo.com/'), [])
+  expect(extractOasUrlsFromHtml(marketing, 'https://foo.com/')).toStrictEqual([])
 })
 
 test('sitemapUrlsToKnownUrls routes spec-shaped locs to the sink instead of known pages', () => {
@@ -189,12 +190,9 @@ test('sitemapUrlsToKnownUrls routes spec-shaped locs to the sink instead of know
     ],
     sink,
   )
-  assert.deepEqual(known.map((k) => k.url), ['https://foo.com/docs/getting-started'])
-  assert.deepEqual(
-    sink.map((s) => s.url),
-    ['https://foo.com/openapi.json', 'https://foo.com/specs/api.yaml', 'https://foo.com/specs/api.yml'],
-  )
-  assert(sink.every((s) => s.source === 'sitemap'))
+  expect(known.map((k) => k.url)).toStrictEqual(['https://foo.com/docs/getting-started'])
+  expect(sink.map((s) => s.url)).toStrictEqual(['https://foo.com/openapi.json', 'https://foo.com/specs/api.yaml', 'https://foo.com/specs/api.yml'])
+  expect(sink.every((s) => s.source === 'sitemap')).toBe(true)
 })
 
 test('extractOasSpecUrlsFromParsed captures .yaml links too and prunes emptied sections', () => {
@@ -211,12 +209,12 @@ test('extractOasSpecUrlsFromParsed captures .yaml links too and prunes emptied s
     ],
   }
   const captured = extractOasSpecUrlsFromParsed(parsed)
-  assert.deepEqual(captured, [
+  expect(captured).toStrictEqual([
     { url: 'https://foo.com/openapi.yaml', text: 'OpenAPI', source: 'llms' },
     { url: 'https://foo.com/spec.json', text: 'Spec', source: 'llms' },
   ])
-  assert.equal(parsed.sections.length, 1)
-  assert.deepEqual(parsed.sections[0].items.map((i) => i.url), ['https://foo.com/docs/intro'])
+  expect(parsed.sections).toHaveLength(1)
+  expect(parsed.sections[0].items.map((i) => i.url)).toStrictEqual(['https://foo.com/docs/intro'])
 })
 
 test('downloadOasSpecs writes prefetched bodies without fetching and preserves extensions', async () => {
@@ -233,12 +231,13 @@ test('downloadOasSpecs writes prefetched bodies without fetching and preserves e
     ],
     stagingDir,
   )
-  assert.equal(written, 2)
-  assert.deepEqual(seen, ['https://foo.com/specs/api.yaml'])
+  expect(written).toBe(2)
+  expect(seen).toStrictEqual(['https://foo.com/specs/api.yaml'])
+
   const files = fs.readdirSync(path.join(stagingDir, 'oas')).sort()
-  assert.deepEqual(files, ['api.yaml', 'openapi.json'])
-  assert.equal(fs.readFileSync(path.join(stagingDir, 'oas', 'openapi.json'), 'utf8'), JSON_SPEC)
-  assert.equal(fs.readFileSync(path.join(stagingDir, 'oas', 'api.yaml'), 'utf8'), YAML_SPEC)
+  expect(files).toStrictEqual(['api.yaml', 'openapi.json'])
+  expect(fs.readFileSync(path.join(stagingDir, 'oas', 'openapi.json'), 'utf8')).toStrictEqual(JSON_SPEC)
+  expect(fs.readFileSync(path.join(stagingDir, 'oas', 'api.yaml'), 'utf8')).toStrictEqual(YAML_SPEC)
 })
 
 test('downloadOasSpecs sniffs an extension for extensionless URLs', async () => {
@@ -250,9 +249,10 @@ test('downloadOasSpecs sniffs an extension for extensionless URLs', async () => 
     ],
     stagingDir,
   )
-  assert.equal(written, 2)
+  expect(written).toBe(2)
+
   const files = fs.readdirSync(path.join(stagingDir, 'oas')).sort()
-  assert.deepEqual(files, ['api-docs.json', 'latest.yaml'])
+  expect(files).toStrictEqual(['api-docs.json', 'latest.yaml'])
 })
 
 test('downloadOasSpecs skips HTML bodies and suffixes filename collisions', async () => {
@@ -271,7 +271,8 @@ test('downloadOasSpecs skips HTML bodies and suffixes filename collisions', asyn
     ],
     stagingDir,
   )
-  assert.equal(written, 2)
+  expect(written).toBe(2)
+
   const files = fs.readdirSync(path.join(stagingDir, 'oas')).sort()
-  assert.deepEqual(files, ['openapi-2.json', 'openapi.json'])
+  expect(files).toStrictEqual(['openapi-2.json', 'openapi.json'])
 })

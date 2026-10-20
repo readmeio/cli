@@ -1,5 +1,4 @@
-import { test } from 'node:test';
-import assert from 'node:assert/strict';
+import { test, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { bundleOas, writeBundle } from '../../src/commands/oas-bundle.js';
@@ -50,12 +49,12 @@ test('bundles external YAML and JSON partials into one document with only intern
   try {
     const spec = await bundleOas({ file: 'specs/openapi.yaml', cwd: root });
 
-    assert.equal(spec.paths['/pets'].get.operationId, 'listPets');
-    assert.deepEqual(spec.components.schemas.Pet, JSON.parse(PET_PARTIAL));
+    expect(spec.paths['/pets'].get.operationId).toBe('listPets');
+    expect(spec.components.schemas.Pet).toStrictEqual(JSON.parse(PET_PARTIAL));
 
     const refs = collectRefs(spec);
-    assert.ok(refs.every((r) => r.startsWith('#/')), `expected only internal refs, got ${refs.join(', ')}`);
-    assert.ok(refs.includes('#/components/schemas/Pet'), 'cross-file ref should be rewritten to an internal pointer');
+    expect(refs.every((r) => r.startsWith('#/'))).toBe(true, `expected only internal refs, got ${refs.join(', ')}`);
+    expect(refs).toContain('#/components/schemas/Pet', 'cross-file ref should be rewritten to an internal pointer');
   } finally {
     rmRepo(root);
   }
@@ -66,7 +65,7 @@ test('resolves relative partials against the spec file, not the working director
   try {
     // cwd is the repo root; the spec lives in specs/ and its refs are relative to specs/.
     const spec = await bundleOas({ file: 'specs/openapi.yaml', cwd: root });
-    assert.equal(spec.paths['/pets'].get.operationId, 'listPets');
+    expect(spec.paths['/pets'].get.operationId).toBe('listPets');
   } finally {
     rmRepo(root);
   }
@@ -76,11 +75,11 @@ test('writeBundle writes JSON by default and creates parent directories', async 
   const root = makeRepo(MULTI_FILE);
   try {
     const { outPath } = await writeBundle({ file: 'specs/openapi.yaml', out: 'reference/api.json', cwd: root });
+    expect(outPath).toBe(path.join(root, 'reference/api.json'));
 
-    assert.equal(outPath, path.join(root, 'reference/api.json'));
     const written = JSON.parse(fs.readFileSync(outPath, 'utf-8'));
-    assert.equal(written.info.title, 'Pets');
-    assert.equal(collectRefs(written).some((r) => !r.startsWith('#/')), false);
+    expect(written.info.title).toBe('Pets');
+    expect(collectRefs(written).some((r) => !r.startsWith('#/'))).toBe(false);
   } finally {
     rmRepo(root);
   }
@@ -92,8 +91,8 @@ test('writeBundle serializes as YAML when the output path ends in .yaml', async 
     const { outPath } = await writeBundle({ file: 'specs/openapi.yaml', out: 'reference/api.yaml', cwd: root });
 
     const raw = fs.readFileSync(outPath, 'utf-8');
-    assert.ok(raw.startsWith('openapi: 3.0.0'), `expected YAML output, got:\n${raw.slice(0, 80)}`);
-    assert.ok(raw.includes("$ref: '#/components/schemas/Pet'"));
+    expect(raw.startsWith('openapi: 3.0.0')).toBe(true, `expected YAML output, got:\n${raw.slice(0, 80)}`);
+    expect(raw.includes("$ref: '#/components/schemas/Pet'")).toBe(true);
   } finally {
     rmRepo(root);
   }
@@ -106,9 +105,9 @@ test('rejects with a clear error when a referenced partial is missing', async ()
     // partials/pet.json intentionally omitted
   });
   try {
-    await assert.rejects(
-      () => bundleOas({ file: 'specs/openapi.yaml', cwd: root }),
-      (err) => /pet\.json/.test(err.message),
+    await expect(
+      () => bundleOas({ file: 'specs/openapi.yaml', cwd: root })).rejects.toThrow(
+      /pet\.json/
     );
   } finally {
     rmRepo(root);
@@ -118,9 +117,9 @@ test('rejects with a clear error when a referenced partial is missing', async ()
 test('rejects when the spec file does not exist', async () => {
   const root = makeRepo({});
   try {
-    await assert.rejects(
-      () => bundleOas({ file: 'nope.yaml', cwd: root }),
-      (err) => /nope\.yaml/.test(err.message),
+    await expect(
+      () => bundleOas({ file: 'nope.yaml', cwd: root })).rejects.toThrow(
+      /nope\.yaml/
     );
   } finally {
     rmRepo(root);

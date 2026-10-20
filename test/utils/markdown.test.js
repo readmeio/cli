@@ -1,19 +1,18 @@
-import { describe, test } from 'node:test';
-import assert from 'node:assert/strict';
+import { describe, expect, test } from 'vitest';
 import { parseFrontmatter, toFrontmatter, frontmatterWriteError } from '../../src/utils/markdown.js';
 
 describe('#frontmatterWriteError()', () => {
   test('frontmatterWriteError guards write paths against failed parses', () => {
     const ok = parseFrontmatter('---\ntitle: ok\n---\n# Body');
-    assert.equal(frontmatterWriteError(ok), null);
+    expect(frontmatterWriteError(ok)).toBeNull();
 
     const bad = parseFrontmatter('---\na: 1\n  b: 2\n---\n# Body');
     const writeError = frontmatterWriteError(bad);
-    assert.ok(writeError instanceof Error);
-    assert.match(writeError.message, /^Invalid frontmatter:/);
+    expect(writeError).toBeInstanceOf(Error);
+    expect(writeError.message).toMatch(/^Invalid frontmatter:/);
 
     // Empty data + body must not be treated as a safe rewrite target
-    assert.deepEqual(bad.data, {});
+    expect(bad.data).toStrictEqual({});
   });
 });
 
@@ -30,7 +29,9 @@ link:
 ---
 # Hello world`;
 
-    assert.deepEqual(parseFrontmatter(content), {
+    expect(
+      parseFrontmatter(content),
+    ).toStrictEqual({
       content: '# Hello world',
       data: {
         deprecated: true,
@@ -59,7 +60,9 @@ metadata:
 ---
 # Body`;
 
-    assert.deepEqual(parseFrontmatter(content), {
+    expect(
+      parseFrontmatter(content),
+    ).toStrictEqual({
       content: '# Body',
       data: {
         title: 'test5',
@@ -86,7 +89,9 @@ recipe:
 ---
 # Body`;
 
-    assert.deepEqual(parseFrontmatter(content), {
+    expect(
+      parseFrontmatter(content),
+    ).toStrictEqual({
       content: '# Body',
       data: {
         title: 'Upsert a contact from a CRM',
@@ -109,7 +114,9 @@ metadata:
 ---
 # Body`;
 
-    assert.deepEqual(parseFrontmatter(content), {
+    expect(
+      parseFrontmatter(content),
+    ).toStrictEqual({
       content: '# Body',
       data: {
         title: 'Sync',
@@ -132,7 +139,9 @@ description: POST : PATCH
 ---
 # Body`;
 
-    assert.deepEqual(parseFrontmatter(content), {
+    expect(
+      parseFrontmatter(content),
+    ).toStrictEqual({
       content: '# Body',
       data: {
         title: 'ok',
@@ -149,7 +158,9 @@ description: POST :\tPATCH # note
 ---
 # Body`;
 
-    assert.deepEqual(parseFrontmatter(content), {
+    expect(
+      parseFrontmatter(content),
+    ).toStrictEqual({
       content: '# Body',
       data: {
         description: 'POST :\tPATCH',
@@ -163,7 +174,9 @@ description: POST : PATCH\u00a0#tag
 ---
 # Body`;
 
-    assert.deepEqual(parseFrontmatter(content), {
+    expect(
+      parseFrontmatter(content),
+    ).toStrictEqual({
       content: '# Body',
       data: {
         description: 'POST : PATCH\u00a0#tag',
@@ -175,7 +188,9 @@ description: POST : PATCH\u00a0#tag
     const fields = Array.from({ length: 9 }, (_, index) => `field${index}: value : ${index}`).join('\n');
     const content = `---\n${fields}\n---\n# Body`;
 
-    assert.deepEqual(parseFrontmatter(content), {
+    expect(
+      parseFrontmatter(content),
+    ).toStrictEqual({
       content: '# Body',
       data: Object.fromEntries(Array.from({ length: 9 }, (_, index) => [`field${index}`, `value : ${index}`])),
     });
@@ -186,9 +201,9 @@ description: POST : PATCH\u00a0#tag
     const content = `---\n${fields}\n---\n# Body`;
 
     const result = parseFrontmatter(content);
-    assert.equal(result.content, '# Body');
-    assert.deepEqual(result.data, {});
-    assert.ok(result.error, 'YAML failure is surfaced on `error`');
+    expect(result.content).toBe('# Body');
+    expect(result.data).toStrictEqual({});
+    expect(result.error, 'YAML failure is surfaced on `error`').toBeTruthy();
   });
 
   test('should leave frontmatter empty when a mapping is mis-indented', () => {
@@ -199,9 +214,9 @@ a: 1
 # Body`;
 
     const result = parseFrontmatter(content);
-    assert.equal(result.content, '# Body');
-    assert.deepEqual(result.data, {});
-    assert.ok(result.error, 'YAML failure is surfaced on `error`');
+    expect(result.content).toBe('# Body');
+    expect(result.data).toStrictEqual({});
+    expect(result.error, 'YAML failure is surfaced on `error`').toBeTruthy();
   });
 
    test('should parse and extract metadata from a piece sparsely-populated content', () => {
@@ -210,7 +225,9 @@ title: Hello world!
 ---
 `;
 
-    assert.deepEqual(parseFrontmatter(content), {
+    expect(
+      parseFrontmatter(content),
+    ).toStrictEqual({
       content: '',
       data: {
         title: 'Hello world!',
@@ -232,7 +249,9 @@ link:
 ---
 # Hello world`;
 
-      assert.deepEqual(parseFrontmatter(content), {
+      expect(
+        parseFrontmatter(content),
+      ).toStrictEqual({
         content: '# Hello world',
         data: {
           deprecated: true,
@@ -247,7 +266,9 @@ link:
       // When there's a blank line after ---, preserve it in the body
       const content = '---\nname: test\n---\n\n# Content';
 
-      assert.deepEqual(parseFrontmatter(content), {
+      expect(
+        parseFrontmatter(content),
+      ).toStrictEqual({
         content: '\n# Content',
         data: {
           name: 'test',
@@ -259,7 +280,9 @@ link:
       // When there's no blank line after ---, body starts immediately
       const content = '---\nname: test\n---\n# Content';
 
-      assert.deepEqual(parseFrontmatter(content), {
+      expect(
+        parseFrontmatter(content),
+      ).toStrictEqual({
         content: '# Content',
         data: {
           name: 'test',
@@ -271,7 +294,9 @@ link:
       // Add BOM character (U+FEFF) to the beginning of content
       const contentWithBOM = '\uFEFF---\ntitle: Hello BOM!\n---\n# Content with BOM';
 
-      assert.deepEqual(parseFrontmatter(contentWithBOM), {
+      expect(
+        parseFrontmatter(contentWithBOM),
+      ).toStrictEqual({
         content: '# Content with BOM',
         data: {
           title: 'Hello BOM!',
@@ -282,7 +307,9 @@ link:
     test('should strip BOM even when there is no frontmatter', () => {
       const contentWithBOM = '\uFEFF# Just content with BOM';
 
-      assert.deepEqual(parseFrontmatter(contentWithBOM), {
+      expect(
+        parseFrontmatter(contentWithBOM),
+      ).toStrictEqual({
         content: '# Just content with BOM',
         data: {},
       });
@@ -291,7 +318,9 @@ link:
     test('should handle windows line endings', () => {
       const content = '---\r\ntitle: windows line ending\r\n---\r\n# Content with windows line endings\r\n';
 
-      assert.deepEqual(parseFrontmatter(content), {
+      expect(
+        parseFrontmatter(content),
+      ).toStrictEqual({
         content: '# Content with windows line endings\n',
         data: { title: 'windows line ending' },
       });
@@ -300,7 +329,9 @@ link:
     test('should handle partial header with windows line endings', () => {
       const content = '---\r\ntitle: windows line ending\r\n';
 
-      assert.deepEqual(parseFrontmatter(content), {
+      expect(
+        parseFrontmatter(content),
+      ).toStrictEqual({
         content: '',
         data: { title: 'windows line ending' },
       });
@@ -309,7 +340,9 @@ link:
     test('should handle empty frontmatter', () => {
       const content = '---\n\n---\n# Content';
 
-      assert.deepEqual(parseFrontmatter(content), {
+      expect(
+        parseFrontmatter(content),
+      ).toStrictEqual({
         content: '# Content',
         data: {},
       });
@@ -319,7 +352,9 @@ link:
       // No blank line between opening and closing ---
       const content = '---\n---\n# Content';
 
-      assert.deepEqual(parseFrontmatter(content), {
+      expect(
+        parseFrontmatter(content),
+      ).toStrictEqual({
         content: '# Content',
         data: {},
       });
@@ -330,7 +365,9 @@ link:
       // used a later `---` as the closing fence and dropped everything before it.
       const content = '---\n---\n# Intro\n\n---\n\nMore content';
 
-      assert.deepEqual(parseFrontmatter(content), {
+      expect(
+        parseFrontmatter(content),
+      ).toStrictEqual({
         content: '# Intro\n\n---\n\nMore content',
         data: {},
       });
@@ -339,7 +376,9 @@ link:
     test('should allow trailing spaces and tabs on fence lines', () => {
       const content = '--- \ntitle: spaced\n---\t\n# Content';
 
-      assert.deepEqual(parseFrontmatter(content), {
+      expect(
+        parseFrontmatter(content),
+      ).toStrictEqual({
         content: '# Content',
         data: { title: 'spaced' },
       });
@@ -348,7 +387,9 @@ link:
     test('should allow trailing whitespace on adjacent empty fences', () => {
       const content = '--- \n---\t\n# Content';
 
-      assert.deepEqual(parseFrontmatter(content), {
+      expect(
+        parseFrontmatter(content),
+      ).toStrictEqual({
         content: '# Content',
         data: {},
       });
@@ -357,7 +398,9 @@ link:
     test('should keep quoted --- inside YAML values when fences are adjacent-safe', () => {
       const content = '---\ntitle: "---"\n---\n# Content';
 
-      assert.deepEqual(parseFrontmatter(content), {
+      expect(
+        parseFrontmatter(content),
+      ).toStrictEqual({
         content: '# Content',
         data: { title: '---' },
       });
@@ -366,7 +409,9 @@ link:
     test('should handle mixed line endings', () => {
       const content = '---\r\ntitle: Mixed\nexcerpt: Unix here\r\n---\n# Content';
 
-      assert.deepEqual(parseFrontmatter(content), {
+      expect(
+        parseFrontmatter(content),
+      ).toStrictEqual({
         content: '# Content',
         data: { title: 'Mixed', excerpt: 'Unix here' },
       });
@@ -375,7 +420,9 @@ link:
     test('should handle frontmatter without a closing delimiter', () => {
       const content = '---\ntitle: Test\nexcerpt: No closing delimiter';
 
-      assert.deepEqual(parseFrontmatter(content), {
+      expect(
+        parseFrontmatter(content),
+      ).toStrictEqual({
         content: '',
         data: {
           title: 'Test',
@@ -390,7 +437,9 @@ link:
       // after the opening --- as frontmatter if there's no closing ---
       const content = '---\ntitle: Test\n';
 
-      assert.deepEqual(parseFrontmatter(content), {
+      expect(
+        parseFrontmatter(content),
+      ).toStrictEqual({
         content: '',
         data: {
           title: 'Test',
@@ -403,7 +452,9 @@ link:
     test('should return empty object when frontmatter is a boolean', () => {
       const content = '---\ntrue\n---\n# Content';
 
-      assert.deepEqual(parseFrontmatter(content), {
+      expect(
+        parseFrontmatter(content),
+      ).toStrictEqual({
         content: '# Content',
         data: {},
       });
@@ -412,7 +463,9 @@ link:
     test('should return empty object when frontmatter is a string', () => {
       const content = '---\njust a string\n---\n# Content';
 
-      assert.deepEqual(parseFrontmatter(content), {
+      expect(
+        parseFrontmatter(content),
+      ).toStrictEqual({
         content: '# Content',
         data: {},
       });
@@ -421,7 +474,9 @@ link:
     test('should return empty object when frontmatter is a number', () => {
       const content = '---\n42\n---\n# Content';
 
-      assert.deepEqual(parseFrontmatter(content), {
+      expect(
+        parseFrontmatter(content),
+      ).toStrictEqual({
         content: '# Content',
         data: {},
       });
@@ -430,7 +485,9 @@ link:
     test('should return empty object when frontmatter is an array', () => {
       const content = '---\n- one\n- two\n---\n# Content';
 
-      assert.deepEqual(parseFrontmatter(content), {
+      expect(
+        parseFrontmatter(content),
+      ).toStrictEqual({
         content: '# Content',
         data: {},
       });
@@ -442,7 +499,7 @@ link:
 describe('#toFrontmatter()', () => {
   describe('given an empty object', () => {
     test('should not generate any frontmatter', () => {
-      assert.equal(toFrontmatter({}), '');
+      expect(toFrontmatter({})).toBe('');
     });
   });
 
@@ -468,41 +525,38 @@ describe('#toFrontmatter()', () => {
         api: null,
       };
 
-      assert.equal(
+      expect(
         toFrontmatter(data),
-        `---
+      ).toBe(`---
 title: Getting Started
----`,
-      );
+---`);
     });
   });
 
   describe('given a changelog author', () => {
     test('should serialize it', () => {
-      assert.equal(
+      expect(
         toFrontmatter({
-          title: 'Launch week',
-          author: 'Buster',
-          published_at: '2026-08-07T00:00:00.000Z',
+        title: 'Launch week',
+        author: 'Buster',
+        published_at: '2026-08-07T00:00:00.000Z',
         }),
-        `---
+      ).toBe(`---
 title: Launch week
 author: Buster
 published_at: '2026-08-07T00:00:00.000Z'
----`,
-      );
+---`);
     });
 
     test('should drop the key entirely when null, which is how a byline is cleared', () => {
-      assert.equal(
+      expect(
         toFrontmatter({
-          title: 'Launch week',
-          author: null,
+        title: 'Launch week',
+        author: null,
         }),
-        `---
+      ).toBe(`---
 title: Launch week
----`,
-      );
+---`);
     });
   });
 
@@ -542,9 +596,9 @@ title: Launch week
         },
       };
 
-      assert.equal(
+      expect(
         toFrontmatter(data),
-        `---
+      ).toBe(`---
 title: Getting Started
 excerpt: This is the excerpt
 deprecated: true
@@ -569,8 +623,7 @@ next:
     - title: External Link
       type: link
       url: https://example.com
----`,
-      );
+---`);
     });
 
     test('should be ordered properly', () => {
@@ -609,9 +662,9 @@ next:
         },
       };
 
-      assert.equal(
+      expect(
         toFrontmatter(data),
-        `---
+      ).toBe(`---
 title: Getting Started
 excerpt: This is the excerpt
 deprecated: true
@@ -636,8 +689,7 @@ next:
     - title: External Link
       type: link
       url: https://example.com
----`,
-      );
+---`);
     });
 
     test('should keep unknown top-level and metadata keys', () => {
@@ -653,9 +705,9 @@ next:
         },
       };
 
-      assert.equal(
+      expect(
         toFrontmatter(data),
-        `---
+      ).toBe(`---
 title: test5
 anotherCustomValue: anotherCustomValue
 deprecated: true
@@ -665,8 +717,7 @@ metadata:
   keywords:
     - string
   robots: index
----`,
-      );
+---`);
     });
   });
 });

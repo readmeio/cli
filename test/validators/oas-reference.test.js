@@ -1,5 +1,4 @@
-import { test } from 'node:test';
-import assert from 'node:assert/strict';
+import { expect, test } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { collectFiles } from '../../src/utils/lint.js';
@@ -24,7 +23,7 @@ test('mismatched title/excerpt no longer reported as out of sync', () => {
   });
   try {
     const res = validateAll(collectFiles(root), root, {});
-    assert.ok(!res.some((r) => r.message.includes('Out of sync')), 'no out-of-sync results');
+    expect(!res.some((r) => r.message.includes('Out of sync')), 'no out-of-sync results').toBe(true);
   } finally {
     rmRepo(root);
   }
@@ -38,7 +37,7 @@ test('operation not found is still reported', () => {
   });
   try {
     const res = validateAll(collectFiles(root), root, {});
-    assert.ok(res.some((r) => r.message.includes('Operation not found')));
+    expect(res.some((r) => r.message.includes('Operation not found'))).toBe(true);
   } finally {
     rmRepo(root);
   }
@@ -61,7 +60,7 @@ test('a page for a spec webhook is not reported as "Operation not found"', () =>
   });
   try {
     const res = validateAll(collectFiles(root), root, {});
-    assert.ok(!res.some((r) => r.message.includes('Operation not found')));
+    expect(res.some((r) => r.message.includes('Operation not found'))).toBe(false);
   } finally {
     rmRepo(root);
   }
@@ -87,8 +86,8 @@ test('a path page and a webhook page sharing an operationId are both recognized,
   });
   try {
     const res = validateAll(collectFiles(root), root, {});
-    assert.ok(!res.some((r) => r.message.includes('Operation not found')));
-    assert.ok(!res.some((r) => r.message.includes('Missing page')));
+    expect(res.some((r) => r.message.includes('Operation not found'))).toBe(false);
+    expect(res.some((r) => r.message.includes('Missing page'))).toBe(false);
   } finally {
     rmRepo(root);
   }
@@ -112,11 +111,12 @@ test('x-readme.internal is warned about at the root and on operations, x-interna
     const res = validateAll(collectFiles(root), root, {}).filter((r) =>
       r.message.includes('x-readme.internal'),
     );
-    assert.deepEqual(
-      res.map((r) => r.message.match(/\((.+?)\)/)[1]),
-      ['root', 'GET /pets', 'webhook POST newPet'],
-    );
-    assert.ok(res.every((r) => r.file === 'reference/pets.json' && r.severity === 'warning' && !r.fixable));
+    expect(res.map((r) => r.message.match(/\((.+?)\)/)[1])).toStrictEqual([
+      'root',
+      'GET /pets',
+      'webhook POST newPet',
+    ]);
+    expect(res.every((r) => r.file === 'reference/pets.json' && r.severity === 'warning' && !r.fixable)).toBe(true);
   } finally {
     rmRepo(root);
   }
@@ -135,13 +135,13 @@ test('lint --fix leaves the reference alone when every finding is unfixable', ()
   const root = makeRepo({ 'reference/pets.json': spec, 'reference/Pets/pets/listpets.md': page });
   try {
     const res = validateAll(collectFiles(root), root, { fix: true });
-    assert.equal(res.length, 1);
-    assert.equal(res[0].fixable, false);
-    assert.equal(res[0].message.endsWith('(fixed)'), false);
+    expect(res).toHaveLength(1);
+    expect(res[0].fixable).toBe(false);
+    expect(res[0].message.endsWith('(fixed)')).toBe(false);
     // Had the sync run, it would have backfilled the category page and the
     // _order.yaml files around the existing operation page.
-    assert.equal(fs.existsSync(path.join(root, 'reference/Pets/pets/index.md')), false);
-    assert.equal(fs.existsSync(path.join(root, 'reference/_order.yaml')), false);
+    expect(fs.existsSync(path.join(root, 'reference/Pets/pets/index.md'))).toBe(false);
+    expect(fs.existsSync(path.join(root, 'reference/_order.yaml'))).toBe(false);
   } finally {
     rmRepo(root);
   }
@@ -151,12 +151,12 @@ test('lint --fix leaves the reference alone when every finding is unfixable', ()
   try {
     const res = validateAll(collectFiles(fixableRoot), fixableRoot, { fix: true });
     const missing = res.find((r) => r.message.includes('Missing page'));
-    assert.ok(missing && missing.fixable);
-    assert.ok(missing.message.endsWith('(fixed)'));
-    assert.ok(fs.existsSync(path.join(fixableRoot, 'reference/Pets/pets/listpets.md')));
+    expect(missing && missing.fixable).toBe(true);
+    expect(missing.message.endsWith('(fixed)')).toBe(true);
+    expect(fs.existsSync(path.join(fixableRoot, 'reference/Pets/pets/listpets.md'))).toBe(true);
     // The unfixable warning is still reported, but never marked fixed.
     const warning = res.find((r) => r.message.includes('x-readme.internal'));
-    assert.ok(warning && !warning.message.endsWith('(fixed)'));
+    expect(warning && !warning.message.endsWith('(fixed)')).toBe(true);
   } finally {
     rmRepo(fixableRoot);
   }

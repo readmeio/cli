@@ -1,5 +1,4 @@
-import { test } from 'node:test';
-import assert from 'node:assert/strict';
+import { test, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseFrontmatter, toFrontmatter } from '../../src/utils/markdown.js';
@@ -33,14 +32,15 @@ paths:
   const root = makeRepo({ 'reference/pets.yaml': yaml });
   try {
     const files = findOasFiles(path.join(root, 'reference'));
-    assert.equal(files.length, 1);
-    assert.equal(files[0].filename, 'pets.yaml');
-    assert.equal(files[0].spec.paths['/pets'].get?.operationId, 'listPets');
-    assert.equal('<<' in files[0].spec.paths['/pets'], false);
+    expect(files).toHaveLength(1);
+    expect(files[0].filename).toBe('pets.yaml');
+    expect(files[0].spec.paths['/pets'].get?.operationId).toBe('listPets');
+    expect('<<' in files[0].spec.paths['/pets']).toBe(false);
 
     syncOas(root);
+
     const page = path.join(root, 'reference/Pets/pets/listpets.md');
-    assert.ok(fs.existsSync(page), 'expected page for merge-expanded operation');
+    expect(fs.existsSync(page), 'expected page for merge-expanded operation').toBe(true);
   } finally {
     rmRepo(root);
   }
@@ -53,14 +53,16 @@ test('generated reference page has only api frontmatter (no title/excerpt)', () 
     // Untagged operations group by path ("/pets" -> "pets"), not a shared
     // "Other" folder. Slugs are lowercased to match the platform's OAS-upload output.
     const page = path.join(root, 'reference/Pets/pets/listpets.md');
-    assert.ok(fs.existsSync(page), 'expected generated page');
+    expect(fs.existsSync(page), 'expected generated page').toBe(true);
+
     const { data } = parseFrontmatter(fs.readFileSync(page, 'utf-8'));
-    assert.equal(data.api.file, 'pets.json');
-    assert.equal(data.api.operationId, 'listPets');
+    expect(data.api.file).toBe('pets.json');
+    expect(data.api.operationId).toBe('listPets');
+
     // Mirrors upload: new pages are always stamped hidden: false.
-    assert.equal(data.hidden, false);
-    assert.equal('title' in data, false);
-    assert.equal('excerpt' in data, false);
+    expect(data.hidden).toBe(false);
+    expect('title' in data).toBe(false);
+    expect('excerpt' in data).toBe(false);
   } finally {
     rmRepo(root);
   }
@@ -79,16 +81,17 @@ test('sync generates a tag index.md with the tag description from the spec', () 
   try {
     syncOas(root);
     const indexPath = path.join(root, 'reference/Sample API/users/index.md');
-    assert.ok(fs.existsSync(indexPath), 'expected tag index.md');
+    expect(fs.existsSync(indexPath), 'expected tag index.md').toBe(true);
+
     const { data } = parseFrontmatter(fs.readFileSync(indexPath, 'utf-8'));
-    assert.equal(data.title, 'users');
-    assert.equal(data.excerpt, 'User management operations');
-    assert.equal(data.hidden, false);
+    expect(data.title).toBe('users');
+    expect(data.excerpt).toBe('User management operations');
+    expect(data.hidden).toBe(false);
 
     // index must not be listed in the tag's _order.yaml.
     const order = fs.readFileSync(path.join(root, 'reference/Sample API/users/_order.yaml'), 'utf-8');
-    assert.equal(order.includes('index'), false);
-    assert.match(order, /- listusers/);
+    expect(order.includes('index')).toBe(false);
+    expect(order).toMatch(/- listusers/);
   } finally {
     rmRepo(root);
   }
@@ -99,8 +102,8 @@ test('sync maintains the root reference/_order.yaml', () => {
   try {
     syncOas(root);
     const rootOrder = path.join(root, 'reference/_order.yaml');
-    assert.ok(fs.existsSync(rootOrder), 'expected root _order.yaml');
-    assert.match(fs.readFileSync(rootOrder, 'utf-8'), /- Pets/);
+    expect(fs.existsSync(rootOrder), 'expected root _order.yaml').toBe(true);
+    expect(fs.readFileSync(rootOrder, 'utf-8')).toMatch(/- Pets/);
   } finally {
     rmRepo(root);
   }
@@ -126,18 +129,18 @@ test('sync backfills a missing tag index.md even when all op pages already exist
   });
   try {
     const indexPath = path.join(root, 'reference/API/widgets/index.md');
-    assert.equal(fs.existsSync(indexPath), false, 'precondition: no index.md yet');
+    expect(fs.existsSync(indexPath), 'precondition: no index.md yet').toBe(false);
 
     syncOas(root);
 
-    assert.ok(fs.existsSync(indexPath), 'expected the category index.md to be backfilled');
+    expect(fs.existsSync(indexPath), 'expected the category index.md to be backfilled').toBe(true);
     const { data } = parseFrontmatter(fs.readFileSync(indexPath, 'utf-8'));
-    assert.equal(data.title, 'widgets');
-    assert.equal(data.excerpt, 'Widget operations');
+    expect(data.title).toBe('widgets');
+    expect(data.excerpt).toBe('Widget operations');
 
     // A second run is a no-op (index now present).
     const [second] = syncOas(root);
-    assert.equal(second.changes.added.length, 0);
+    expect(second.changes.added).toHaveLength(0);
   } finally {
     rmRepo(root);
   }
@@ -161,8 +164,8 @@ test('sync does not overwrite an existing tag index.md', () => {
   try {
     syncOas(root);
     const content = fs.readFileSync(path.join(root, 'reference/Pets/other/index.md'), 'utf-8');
-    assert.match(content, /Hand-written category/);
-    assert.match(content, /Custom intro/);
+    expect(content).toMatch(/Hand-written category/);
+    expect(content).toMatch(/Custom intro/);
   } finally {
     rmRepo(root);
   }
@@ -186,22 +189,22 @@ test('an operation named "index" does not clobber the tag index.md', () => {
 
     // index.md is the category page, never an operation.
     const indexData = parseFrontmatter(fs.readFileSync(path.join(dir, 'index.md'), 'utf-8')).data;
-    assert.equal(indexData.title, 'pets');
-    assert.equal('api' in indexData, false);
+    expect(indexData.title).toBe('pets');
+    expect('api' in indexData).toBe(false);
 
     // Each colliding operation gets a distinct numeric slug.
-    assert.ok(fs.existsSync(path.join(dir, 'index-1.md')), 'expected index-1.md');
-    assert.ok(fs.existsSync(path.join(dir, 'index-2.md')), 'expected index-2.md');
+    expect(fs.existsSync(path.join(dir, 'index-1.md')), 'expected index-1.md').toBe(true);
+    expect(fs.existsSync(path.join(dir, 'index-2.md')), 'expected index-2.md').toBe(true);
     const opIds = ['index-1', 'index-2'].map(
       (s) => parseFrontmatter(fs.readFileSync(path.join(dir, `${s}.md`), 'utf-8')).data.api.operationId,
     );
-    assert.deepEqual([...opIds].sort(), ['INDEX', 'index']);
+    expect([...opIds].sort()).toStrictEqual(['INDEX', 'index']);
 
     // _order.yaml lists the operation slugs but not the reserved index page.
     const order = fs.readFileSync(path.join(dir, '_order.yaml'), 'utf-8');
-    assert.match(order, /- index-1/);
-    assert.match(order, /- index-2/);
-    assert.equal(/^- index$/m.test(order), false);
+    expect(order).toMatch(/- index-1/);
+    expect(order).toMatch(/- index-2/);
+    expect(/^- index$/m.test(order)).toBe(false);
   } finally {
     rmRepo(root);
   }
@@ -222,17 +225,17 @@ test('spec-derived names cannot escape the reference directory', () => {
     syncOas(root);
 
     const refDir = path.join(root, 'reference');
-    assert.equal(fs.existsSync(path.join(root, '..', 'escaped-title')), false);
-    assert.equal(fs.existsSync(path.join(root, 'escaped-title')), false);
+    expect(fs.existsSync(path.join(root, '..', 'escaped-title'))).toBe(false);
+    expect(fs.existsSync(path.join(root, 'escaped-title'))).toBe(false);
 
     // The page is still generated, under sanitized single-segment names. The
     // tag folder is additionally slugified (dots and hyphens collapse to one
     // hyphen, then trimmed), unlike the title folder which only has slashes
     // swapped for hyphens.
     const page = path.join(refDir, '..-..-escaped-title', 'escaped-tag', '..-escaped-op.md');
-    assert.ok(fs.existsSync(page), 'expected sanitized page inside reference/');
+    expect(fs.existsSync(page), 'expected sanitized page inside reference/').toBe(true);
     const { data } = parseFrontmatter(fs.readFileSync(page, 'utf-8'));
-    assert.equal(data.api.operationId, '../escaped-op', 'frontmatter keeps the raw operationId');
+    expect(data.api.operationId, 'frontmatter keeps the raw operationId').toBe('../escaped-op');
   } finally {
     rmRepo(root);
   }
@@ -252,20 +255,20 @@ test('operations whose sanitized names collide get distinct suffixed slugs', () 
     const [first] = syncOas(root);
     // Both operations get their own page; the second collides and is suffixed.
     const opPages = first.changes.added.filter((p) => !p.endsWith('index.md'));
-    assert.equal(opPages.length, 2);
-    assert.equal(first.changes.skipped.length, 0);
+    expect(opPages).toHaveLength(2);
+    expect(first.changes.skipped).toHaveLength(0);
 
     // Tag "Other" is lowercased to the folder "other".
     const base = path.join(root, 'reference/Pets/other/foo-bar.md');
     const suffixed = path.join(root, 'reference/Pets/other/foo-bar-1.md');
-    assert.ok(fs.existsSync(base) && fs.existsSync(suffixed), 'expected foo-bar.md and foo-bar-1.md');
+    expect(fs.existsSync(base) && fs.existsSync(suffixed), 'expected foo-bar.md and foo-bar-1.md').toBe(true);
     const ops = [base, suffixed].map((p) => parseFrontmatter(fs.readFileSync(p, 'utf-8')).data.api.operationId);
-    assert.deepEqual([...ops].sort(), ['foo/bar', 'foo\\bar']);
+    expect([...ops].sort()).toStrictEqual(['foo/bar', 'foo\\bar']);
 
     // Re-running is stable: both pages already exist (matched by operationId).
     const [second] = syncOas(root);
-    assert.equal(second.changes.added.length, 0);
-    assert.equal(second.changes.skipped.length, 0);
+    expect(second.changes.added).toHaveLength(0);
+    expect(second.changes.skipped).toHaveLength(0);
   } finally {
     rmRepo(root);
   }
@@ -282,13 +285,13 @@ test('sync gives an operation a unique slug rather than overwriting a hand-writt
     syncOas(root);
     // The hand-written page is untouched...
     const hand = fs.readFileSync(path.join(root, 'reference/Pets/Other/listpets.md'), 'utf-8');
-    assert.match(hand, /Hand-written page/);
-    assert.match(hand, /Custom content/);
+    expect(hand).toMatch(/Hand-written page/);
+    expect(hand).toMatch(/Custom content/);
     // ...and the operation gets its own suffixed page, under its path-derived
     // group folder ("/pets" -> "pets"), since "listpets" is already taken.
     const opPage = path.join(root, 'reference/Pets/pets/listpets-1.md');
-    assert.ok(fs.existsSync(opPage), 'expected listpets-1.md for the operation');
-    assert.equal(parseFrontmatter(fs.readFileSync(opPage, 'utf-8')).data.api.operationId, 'listPets');
+    expect(fs.existsSync(opPage), 'expected listpets-1.md for the operation').toBe(true);
+    expect(parseFrontmatter(fs.readFileSync(opPage, 'utf-8')).data.api.operationId).toBe('listPets');
   } finally {
     rmRepo(root);
   }
@@ -308,9 +311,9 @@ test('reference slugs are unique across tags (flat namespace), not per-folder', 
     syncOas(root);
     // Same base slug in two different tags: the second is suffixed even though
     // it's in a different folder, because reference slugs share one namespace.
-    assert.ok(fs.existsSync(path.join(root, 'reference/Pets/alpha/thing.md')));
-    assert.ok(fs.existsSync(path.join(root, 'reference/Pets/beta/thing-1.md')));
-    assert.equal(fs.existsSync(path.join(root, 'reference/Pets/beta/thing.md')), false);
+    expect(fs.existsSync(path.join(root, 'reference/Pets/alpha/thing.md'))).toBe(true);
+    expect(fs.existsSync(path.join(root, 'reference/Pets/beta/thing-1.md'))).toBe(true);
+    expect(fs.existsSync(path.join(root, 'reference/Pets/beta/thing.md'))).toBe(false);
   } finally {
     rmRepo(root);
   }
@@ -333,13 +336,12 @@ test('a slug taken by a category folder (folder/index.md) is not reused by an op
   try {
     syncOas(root);
     // The operation slug "guides" is taken by the folder, so it is suffixed.
-    assert.ok(fs.existsSync(path.join(root, 'reference/Pets/other/guides-1.md')));
-    assert.equal(fs.existsSync(path.join(root, 'reference/Pets/other/guides.md')), false);
+    expect(fs.existsSync(path.join(root, 'reference/Pets/other/guides-1.md'))).toBe(true);
+    expect(fs.existsSync(path.join(root, 'reference/Pets/other/guides.md'))).toBe(false);
     // The category folder's index.md is untouched.
-    assert.match(
+    expect(
       fs.readFileSync(path.join(root, 'reference/Pets/other/guides/index.md'), 'utf-8'),
-      /A sub-category/,
-    );
+    ).toMatch(/A sub-category/);
   } finally {
     rmRepo(root);
   }
@@ -358,9 +360,9 @@ test('existing reference page title is not overwritten by sync', () => {
     const { data } = parseFrontmatter(
       fs.readFileSync(path.join(root, 'reference/Pets/Other/listPets.md'), 'utf-8'),
     );
-    assert.equal(data.title, 'My custom title');
-    assert.equal(data.api.file, 'pets.json');
-    assert.equal(data.api.operationId, 'listPets');
+    expect(data.title).toBe('My custom title');
+    expect(data.api.file).toBe('pets.json');
+    expect(data.api.operationId).toBe('listPets');
   } finally {
     rmRepo(root);
   }
@@ -389,25 +391,25 @@ test('untagged operations group by path, one folder per unique path, not a share
     const refDir = path.join(root, 'reference/Pets');
 
     // No shared "Other" folder — every unique path gets its own group.
-    assert.equal(fs.existsSync(path.join(refDir, 'Other')), false);
+    expect(fs.existsSync(path.join(refDir, 'Other'))).toBe(false);
 
     // Operations sharing a path share a folder.
-    assert.ok(fs.existsSync(path.join(refDir, 'pets/listpets.md')));
-    assert.ok(fs.existsSync(path.join(refDir, 'pets/createpet.md')));
-    assert.ok(fs.existsSync(path.join(refDir, 'petspetid/getpet.md')));
+    expect(fs.existsSync(path.join(refDir, 'pets/listpets.md'))).toBe(true);
+    expect(fs.existsSync(path.join(refDir, 'pets/createpet.md'))).toBe(true);
+    expect(fs.existsSync(path.join(refDir, 'petspetid/getpet.md'))).toBe(true);
     // The "search" folder itself reserves the slug "search" (it's the category
     // page's slug), so the operationId "search" collides with its own folder
     // name and is suffixed — matches real platform-upload output.
-    assert.ok(fs.existsSync(path.join(refDir, 'search/search-1.md')));
-    assert.equal(fs.existsSync(path.join(refDir, 'search/search.md')), false);
+    expect(fs.existsSync(path.join(refDir, 'search/search-1.md'))).toBe(true);
+    expect(fs.existsSync(path.join(refDir, 'search/search.md'))).toBe(false);
 
     // The category page's title is the raw path, not the sanitized folder name.
     const petsIndex = parseFrontmatter(fs.readFileSync(path.join(refDir, 'pets/index.md'), 'utf-8')).data;
-    assert.equal(petsIndex.title, '/pets');
-    assert.equal('excerpt' in petsIndex, false);
+    expect(petsIndex.title).toBe('/pets');
+    expect('excerpt' in petsIndex).toBe(false);
 
     const petIdIndex = parseFrontmatter(fs.readFileSync(path.join(refDir, 'petspetid/index.md'), 'utf-8')).data;
-    assert.equal(petIdIndex.title, '/pets/{petId}');
+    expect(petIdIndex.title).toBe('/pets/{petId}');
   } finally {
     rmRepo(root);
   }
@@ -426,10 +428,10 @@ test('an operation with a real tag still groups under that tag, not its path', (
   try {
     syncOas(root);
     const refDir = path.join(root, 'reference/Pets');
-    assert.ok(fs.existsSync(path.join(refDir, 'pets/listpets.md')));
+    expect(fs.existsSync(path.join(refDir, 'pets/listpets.md'))).toBe(true);
     const index = parseFrontmatter(fs.readFileSync(path.join(refDir, 'pets/index.md'), 'utf-8')).data;
-    assert.equal(index.title, 'pets');
-    assert.equal(index.excerpt, 'Pet operations');
+    expect(index.title).toBe('pets');
+    expect(index.excerpt).toBe('Pet operations');
   } finally {
     rmRepo(root);
   }
@@ -442,10 +444,16 @@ test('generated pages end at the closing fence with no trailing blank line', () 
     // Matches platform-generated pages, which end immediately after "---"
     // with no trailing newline.
     const opContent = fs.readFileSync(path.join(root, 'reference/Pets/pets/listpets.md'), 'utf-8');
-    assert.ok(opContent.endsWith('---'), `expected no trailing newline, got: ${JSON.stringify(opContent.slice(-5))}`);
+    expect(
+      opContent.endsWith('---'),
+      `expected no trailing newline, got: ${JSON.stringify(opContent.slice(-5))}`,
+    ).toBe(true);
 
     const indexContent = fs.readFileSync(path.join(root, 'reference/Pets/pets/index.md'), 'utf-8');
-    assert.ok(indexContent.endsWith('---'), `expected no trailing newline, got: ${JSON.stringify(indexContent.slice(-5))}`);
+    expect(
+      indexContent.endsWith('---'),
+      `expected no trailing newline, got: ${JSON.stringify(indexContent.slice(-5))}`,
+    ).toBe(true);
   } finally {
     rmRepo(root);
   }
@@ -467,7 +475,7 @@ test('tag order follows the spec\'s own `tags` array, not the order operations a
   try {
     syncOas(root);
     const order = fs.readFileSync(path.join(root, 'reference/Pets/_order.yaml'), 'utf-8');
-    assert.deepEqual(order.trim().split('\n'), ['- beta', '- alpha']);
+    expect(order.trim().split('\n')).toStrictEqual(['- beta', '- alpha']);
   } finally {
     rmRepo(root);
   }
@@ -489,7 +497,7 @@ test('a tag used by an operation but not declared in `tags` is ordered after eve
   try {
     syncOas(root);
     const order = fs.readFileSync(path.join(root, 'reference/Pets/_order.yaml'), 'utf-8');
-    assert.deepEqual(order.trim().split('\n'), ['- alpha', '- undeclared']);
+    expect(order.trim().split('\n')).toStrictEqual(['- alpha', '- undeclared']);
   } finally {
     rmRepo(root);
   }
@@ -519,20 +527,19 @@ test('deleting one of two existing owners of a shared slug does not free it for 
     syncOas(root);
 
     // The orphaned page is gone...
-    assert.equal(fs.existsSync(path.join(root, 'reference/Pets/a/shared.md')), false);
+    expect(fs.existsSync(path.join(root, 'reference/Pets/a/shared.md'))).toBe(false);
     // ...but the still-existing category folder still owns "shared", so the
     // new operation is suffixed rather than colliding with it.
-    assert.ok(fs.existsSync(path.join(root, 'reference/Pets/a/shared-1.md')));
+    expect(fs.existsSync(path.join(root, 'reference/Pets/a/shared-1.md'))).toBe(true);
     const opId = parseFrontmatter(
       fs.readFileSync(path.join(root, 'reference/Pets/a/shared-1.md'), 'utf-8'),
     ).data.api.operationId;
-    assert.equal(opId, 'shared');
+    expect(opId).toBe('shared');
 
     // The hand-authored survivor is untouched.
-    assert.match(
+    expect(
       fs.readFileSync(path.join(root, 'reference/Pets/b/shared/index.md'), 'utf-8'),
-      /Hand-authored/,
-    );
+    ).toMatch(/Hand-authored/);
   } finally {
     rmRepo(root);
   }
@@ -554,16 +561,16 @@ test('a mixed-case tag gets a lowercased folder, but keeps its original case as 
   try {
     syncOas(root);
     const refDir = path.join(root, 'reference/Pets');
-    assert.ok(fs.existsSync(path.join(refDir, 'mixedcasetag/geta.md')));
+    expect(fs.existsSync(path.join(refDir, 'mixedcasetag/geta.md'))).toBe(true);
     // Check the actual on-disk directory name (not just existsSync, which
     // some filesystems like macOS's default APFS resolve case-insensitively).
-    assert.ok(fs.readdirSync(refDir).includes('mixedcasetag'));
+    expect(fs.readdirSync(refDir).includes('mixedcasetag')).toBe(true);
 
     const index = parseFrontmatter(fs.readFileSync(path.join(refDir, 'mixedcasetag/index.md'), 'utf-8')).data;
-    assert.equal(index.title, 'MixedCaseTag');
+    expect(index.title).toBe('MixedCaseTag');
 
     const order = fs.readFileSync(path.join(refDir, '_order.yaml'), 'utf-8');
-    assert.deepEqual(order.trim().split('\n'), ['- mixedcasetag']);
+    expect(order.trim().split('\n')).toStrictEqual(['- mixedcasetag']);
   } finally {
     rmRepo(root);
   }
@@ -592,9 +599,9 @@ test('a space-separated tag folder lands on the platform\'s existing hyphenated 
     syncOas(root);
     const refDir = path.join(root, 'reference/Pets');
 
-    assert.ok(fs.existsSync(path.join(refDir, 'shipping-labels/geta.md')));
-    assert.equal(fs.existsSync(path.join(refDir, 'shipping labels')), false);
-    assert.equal(fs.readdirSync(refDir).includes('shipping labels'), false);
+    expect(fs.existsSync(path.join(refDir, 'shipping-labels/geta.md'))).toBe(true);
+    expect(fs.existsSync(path.join(refDir, 'shipping labels'))).toBe(false);
+    expect(fs.readdirSync(refDir).includes('shipping labels')).toBe(false);
   } finally {
     rmRepo(root);
   }
@@ -622,12 +629,12 @@ test('a pre-existing space-separated tag folder is reused as-is, not replaced by
     syncOas(root);
     const refDir = path.join(root, 'reference/Pets');
 
-    assert.ok(fs.existsSync(path.join(refDir, 'shipping labels/geta.md')));
-    assert.equal(fs.existsSync(path.join(refDir, 'shipping-labels')), false);
-    assert.equal(fs.readdirSync(refDir).includes('shipping-labels'), false);
+    expect(fs.existsSync(path.join(refDir, 'shipping labels/geta.md'))).toBe(true);
+    expect(fs.existsSync(path.join(refDir, 'shipping-labels'))).toBe(false);
+    expect(fs.readdirSync(refDir).includes('shipping-labels')).toBe(false);
 
     const order = fs.readFileSync(path.join(refDir, '_order.yaml'), 'utf-8');
-    assert.deepEqual(order.trim().split('\n'), ['- shipping labels']);
+    expect(order.trim().split('\n')).toStrictEqual(['- shipping labels']);
   } finally {
     rmRepo(root);
   }
@@ -658,9 +665,9 @@ test('a tag folder missing its category index.md is backfilled in place, regardl
     syncOas(root);
     const refDir = path.join(root, 'reference/Pets');
 
-    assert.ok(fs.existsSync(path.join(refDir, 'shipping labels/index.md')));
-    assert.ok(fs.existsSync(path.join(refDir, 'shipping labels/geta.md')));
-    assert.equal(fs.existsSync(path.join(refDir, 'shipping-labels')), false);
+    expect(fs.existsSync(path.join(refDir, 'shipping labels/index.md'))).toBe(true);
+    expect(fs.existsSync(path.join(refDir, 'shipping labels/geta.md'))).toBe(true);
+    expect(fs.existsSync(path.join(refDir, 'shipping-labels'))).toBe(false);
   } finally {
     rmRepo(root);
   }
@@ -691,16 +698,16 @@ test('deleting a legacy operation page literally named index.md releases its fol
   });
   try {
     const [result] = syncOas(root);
-    assert.ok(result.changes.deleted.some((p) => p.endsWith('sometag/index.md')));
+    expect(result.changes.deleted.some((p) => p.endsWith('sometag/index.md'))).toBe(true);
 
     // The base slug is free again — no unnecessary numeric suffix.
-    assert.ok(fs.existsSync(path.join(root, 'reference/Pets/other-tag/sometag.md')));
-    assert.equal(fs.existsSync(path.join(root, 'reference/Pets/other-tag/sometag-1.md')), false);
+    expect(fs.existsSync(path.join(root, 'reference/Pets/other-tag/sometag.md'))).toBe(true);
+    expect(fs.existsSync(path.join(root, 'reference/Pets/other-tag/sometag-1.md'))).toBe(false);
 
     // The dangling "- index" entry is removed from the folder's own order
     // file (not the folder name — that was never what was listed there).
     const orderPath = path.join(root, 'reference/Pets/sometag/_order.yaml');
-    assert.equal(fs.existsSync(orderPath), false, 'expected the now-empty _order.yaml to be removed');
+    expect(fs.existsSync(orderPath), 'expected the now-empty _order.yaml to be removed').toBe(false);
   } finally {
     rmRepo(root);
   }
@@ -720,17 +727,17 @@ test('sync generates a page for a webhook, marked with api.webhook: true', () =>
   try {
     syncOas(root);
     const page = path.join(root, 'reference/Payments/paymentcompleted/post_paymentcompleted.md');
-    assert.ok(fs.existsSync(page), 'expected a generated webhook page');
+    expect(fs.existsSync(page), 'expected a generated webhook page').toBe(true);
     const { data } = parseFrontmatter(fs.readFileSync(page, 'utf-8'));
-    assert.equal(data.api.file, 'payments.json');
-    assert.equal(data.api.operationId, 'post_paymentcompleted');
-    assert.equal(data.api.webhook, true);
+    expect(data.api.file).toBe('payments.json');
+    expect(data.api.operationId).toBe('post_paymentcompleted');
+    expect(data.api.webhook).toBe(true);
 
     // The category page's title is the webhook's own name, not the folder.
     const index = parseFrontmatter(
       fs.readFileSync(path.join(root, 'reference/Payments/paymentcompleted/index.md'), 'utf-8'),
     ).data;
-    assert.equal(index.title, 'paymentCompleted');
+    expect(index.title).toBe('paymentCompleted');
   } finally {
     rmRepo(root);
   }
@@ -743,7 +750,7 @@ test('a path operation is not stamped api.webhook', () => {
     const { data } = parseFrontmatter(
       fs.readFileSync(path.join(root, 'reference/Pets/pets/listpets.md'), 'utf-8'),
     );
-    assert.equal('webhook' in data.api, false);
+    expect('webhook' in data.api).toBe(false);
   } finally {
     rmRepo(root);
   }
@@ -766,10 +773,10 @@ test('sync no longer deletes an existing webhook page on every run', () => {
   });
   try {
     const [result] = syncOas(root);
-    assert.deepEqual(result.changes.deleted, []);
-    assert.ok(
+    expect(result.changes.deleted).toStrictEqual([]);
+    expect(
       fs.existsSync(path.join(root, 'reference/Payments/paymentcompleted/post_paymentcompleted.md')),
-    );
+    ).toBe(true);
   } finally {
     rmRepo(root);
   }
@@ -795,8 +802,8 @@ test('an untagged webhook and an untagged path operation with the same sanitized
   try {
     syncOas(root);
     const refDir = path.join(root, 'reference/Payments');
-    assert.ok(fs.existsSync(path.join(refDir, 'orders/listorders.md')));
-    assert.ok(fs.existsSync(path.join(refDir, 'orders/post_orders.md')));
+    expect(fs.existsSync(path.join(refDir, 'orders/listorders.md'))).toBe(true);
+    expect(fs.existsSync(path.join(refDir, 'orders/post_orders.md'))).toBe(true);
   } finally {
     rmRepo(root);
   }
@@ -821,15 +828,15 @@ test('a path and a webhook whose synthesized operationIds collide both still get
     // Both pages generated — neither silently dropped by an internal Map
     // collision keyed only on the (identical) synthesized operationId.
     const added = result.changes.added.filter((p) => !p.endsWith('index.md'));
-    assert.equal(added.length, 2, `expected 2 pages, got: ${JSON.stringify(added)}`);
+    expect(added, `expected 2 pages, got: ${JSON.stringify(added)}`).toHaveLength(2);
 
     const refDir = path.join(root, 'reference/Payments/orders');
     const pathPage = parseFrontmatter(fs.readFileSync(path.join(refDir, 'post_orders.md'), 'utf-8')).data;
     const webhookPage = parseFrontmatter(
       fs.readFileSync(path.join(refDir, 'post_orders-1.md'), 'utf-8'),
     ).data;
-    assert.equal('webhook' in pathPage.api, false);
-    assert.equal(webhookPage.api.webhook, true);
+    expect('webhook' in pathPage.api).toBe(false);
+    expect(webhookPage.api.webhook).toBe(true);
   } finally {
     rmRepo(root);
   }
@@ -854,10 +861,10 @@ test('a webhook that is a $ref to components.pathItems is resolved', () => {
   try {
     syncOas(root);
     const page = path.join(root, 'reference/Payments/paymentcompleted/onpaymentcompleted.md');
-    assert.ok(fs.existsSync(page), 'expected the $ref-resolved webhook to generate a page');
+    expect(fs.existsSync(page), 'expected the $ref-resolved webhook to generate a page').toBe(true);
     const { data } = parseFrontmatter(fs.readFileSync(page, 'utf-8'));
-    assert.equal(data.api.operationId, 'onPaymentCompleted');
-    assert.equal(data.api.webhook, true);
+    expect(data.api.operationId).toBe('onPaymentCompleted');
+    expect(data.api.webhook).toBe(true);
   } finally {
     rmRepo(root);
   }
@@ -884,8 +891,8 @@ test('a $ref to a pathItem that is itself a $ref is followed to the literal Path
   try {
     syncOas(root);
     const page = path.join(root, 'reference/Payments/paymentcompleted/onpaymentcompleted.md');
-    assert.ok(fs.existsSync(page), 'expected the chained $ref to be followed to the literal Path Item');
-    assert.equal(parseFrontmatter(fs.readFileSync(page, 'utf-8')).data.api.operationId, 'onPaymentCompleted');
+    expect(fs.existsSync(page), 'expected the chained $ref to be followed to the literal Path Item').toBe(true);
+    expect(parseFrontmatter(fs.readFileSync(page, 'utf-8')).data.api.operationId).toBe('onPaymentCompleted');
   } finally {
     rmRepo(root);
   }
@@ -909,7 +916,7 @@ test('a circular pathItem $ref is left unresolved rather than looping forever', 
   try {
     // Must return (not hang) and simply generate nothing for the cycle.
     const [result] = syncOas(root);
-    assert.equal(result.changes.added.filter((p) => !p.endsWith('index.md')).length, 0);
+    expect(result.changes.added.filter((p) => !p.endsWith('index.md'))).toHaveLength(0);
   } finally {
     rmRepo(root);
   }
@@ -929,7 +936,7 @@ test('a pathItem $ref with a malformed percent-escape is left unresolved rather 
   try {
     // Must not throw; the malformed ref is simply left unresolved.
     const [result] = syncOas(root);
-    assert.equal(result.changes.added.filter((p) => !p.endsWith('index.md')).length, 0);
+    expect(result.changes.added.filter((p) => !p.endsWith('index.md'))).toHaveLength(0);
   } finally {
     rmRepo(root);
   }
@@ -959,8 +966,8 @@ test('an inline operation alongside a $ref sibling is not discarded', () => {
     syncOas(root);
     const refDir = path.join(root, 'reference/Payments/paymentcompleted');
     // Both the referenced pathItem's operation and the inline sibling exist.
-    assert.ok(fs.existsSync(path.join(refDir, 'onpaymentcompleted.md')), 'expected the referenced operation');
-    assert.ok(fs.existsSync(path.join(refDir, 'inlineupdate.md')), 'expected the inline sibling operation');
+    expect(fs.existsSync(path.join(refDir, 'onpaymentcompleted.md')), 'expected the referenced operation').toBe(true);
+    expect(fs.existsSync(path.join(refDir, 'inlineupdate.md')), 'expected the inline sibling operation').toBe(true);
   } finally {
     rmRepo(root);
   }
@@ -994,10 +1001,10 @@ test('x-internal: operation-level value wins over root, absent falls back to roo
   const root = makeRepo({ 'reference/api.json': spec });
   try {
     syncOas(root);
-    assert.equal(fm(root, 'reference/Api/pets/a.md').hidden, false);
-    assert.equal(fm(root, 'reference/Api/pets/b.md').hidden, true);
+    expect(fm(root, 'reference/Api/pets/a.md').hidden).toBe(false);
+    expect(fm(root, 'reference/Api/pets/b.md').hidden).toBe(true);
     // One child visible, so the tag page stays visible.
-    assert.equal(fm(root, 'reference/Api/pets/index.md').hidden, false);
+    expect(fm(root, 'reference/Api/pets/index.md').hidden).toBe(false);
   } finally {
     rmRepo(root);
   }
@@ -1016,9 +1023,9 @@ test('x-internal: a new tag page is hidden when every operation in it is interna
   const root = makeRepo({ 'reference/api.json': spec });
   try {
     syncOas(root);
-    assert.equal(fm(root, 'reference/Api/secret/index.md').hidden, true);
-    assert.equal(fm(root, 'reference/Api/open/index.md').hidden, false);
-    assert.equal(fm(root, 'reference/Api/open/c.md').hidden, false);
+    expect(fm(root, 'reference/Api/secret/index.md').hidden).toBe(true);
+    expect(fm(root, 'reference/Api/open/index.md').hidden).toBe(false);
+    expect(fm(root, 'reference/Api/open/c.md').hidden).toBe(false);
   } finally {
     rmRepo(root);
   }
@@ -1042,19 +1049,19 @@ test('x-internal: resync applies the spec value to existing pages in both direct
   });
   try {
     let [result] = syncOas(root);
-    assert.deepEqual(result.changes.updated, ['Api/t/a.md']);
-    assert.equal(fm(root, 'reference/Api/t/a.md').hidden, true);
-    assert.match(fs.readFileSync(path.join(root, 'reference/Api/t/a.md'), 'utf-8'), /Custom body/);
+    expect(result.changes.updated).toStrictEqual(['Api/t/a.md']);
+    expect(fm(root, 'reference/Api/t/a.md').hidden).toBe(true);
+    expect(fs.readFileSync(path.join(root, 'reference/Api/t/a.md'), 'utf-8')).toMatch(/Custom body/);
     // No x-internal on b: its manual hidden: true is preserved.
-    assert.equal(fm(root, 'reference/Api/t/b.md').hidden, true);
+    expect(fm(root, 'reference/Api/t/b.md').hidden).toBe(true);
 
     fs.writeFileSync(path.join(root, 'reference/api.json'), spec(false));
     [result] = syncOas(root);
-    assert.equal(fm(root, 'reference/Api/t/a.md').hidden, false);
+    expect(fm(root, 'reference/Api/t/a.md').hidden).toBe(false);
 
     // Re-running is a no-op.
     [result] = syncOas(root);
-    assert.deepEqual(result.changes.updated, []);
+    expect(result.changes.updated).toStrictEqual([]);
   } finally {
     rmRepo(root);
   }
@@ -1072,7 +1079,7 @@ test('x-internal: removing the extension does not unhide an existing page', () =
   });
   try {
     syncOas(root);
-    assert.equal(fm(root, 'reference/Api/t/a.md').hidden, true);
+    expect(fm(root, 'reference/Api/t/a.md').hidden).toBe(true);
   } finally {
     rmRepo(root);
   }
@@ -1093,12 +1100,12 @@ test('x-internal: an existing tag page is hidden once all its operations are int
   });
   try {
     syncOas(root);
-    assert.equal(fm(root, 'reference/Api/t/index.md').hidden, true);
+    expect(fm(root, 'reference/Api/t/index.md').hidden).toBe(true);
 
     fs.writeFileSync(path.join(root, 'reference/api.json'), spec(false));
     syncOas(root);
-    assert.equal(fm(root, 'reference/Api/t/a.md').hidden, false);
-    assert.equal(fm(root, 'reference/Api/t/index.md').hidden, true);
+    expect(fm(root, 'reference/Api/t/a.md').hidden).toBe(false);
+    expect(fm(root, 'reference/Api/t/index.md').hidden).toBe(true);
   } finally {
     rmRepo(root);
   }
@@ -1128,9 +1135,9 @@ test('without apply-tag-changes, a retagged page stays where it is', () => {
   const root = makeRepo({ ...RETAG_FILES, 'reference/api.json': retaggedSpec() });
   try {
     const [result] = syncOas(root);
-    assert.ok(fs.existsSync(path.join(root, 'reference/Api/old/a.md')));
-    assert.equal(fs.existsSync(path.join(root, 'reference/Api/new/a.md')), false);
-    assert.deepEqual(result.changes.moved, []);
+    expect(fs.existsSync(path.join(root, 'reference/Api/old/a.md'))).toBe(true);
+    expect(fs.existsSync(path.join(root, 'reference/Api/new/a.md'))).toBe(false);
+    expect(result.changes.moved).toStrictEqual([]);
   } finally {
     rmRepo(root);
   }
@@ -1143,12 +1150,12 @@ test('apply-tag-changes moves a retagged page to its new tag and removes the emp
   });
   try {
     const [result] = syncOas(root);
-    assert.ok(fs.existsSync(path.join(root, 'reference/Api/new/a.md')));
-    assert.equal(fs.existsSync(path.join(root, 'reference/Api/old')), false);
-    assert.deepEqual(result.changes.moved, [{ from: 'Api/old/a.md', to: 'Api/new/a.md' }]);
-    assert.ok(result.changes.deleted.includes('Api/old/index.md'));
-    assert.deepEqual(order(root, 'reference/Api/_order.yaml'), ['new']);
-    assert.deepEqual(order(root, 'reference/Api/new/_order.yaml'), ['a']);
+    expect(fs.existsSync(path.join(root, 'reference/Api/new/a.md'))).toBe(true);
+    expect(fs.existsSync(path.join(root, 'reference/Api/old'))).toBe(false);
+    expect(result.changes.moved).toStrictEqual([{ from: 'Api/old/a.md', to: 'Api/new/a.md' }]);
+    expect(result.changes.deleted.includes('Api/old/index.md')).toBe(true);
+    expect(order(root, 'reference/Api/_order.yaml')).toStrictEqual(['new']);
+    expect(order(root, 'reference/Api/new/_order.yaml')).toStrictEqual(['a']);
   } finally {
     rmRepo(root);
   }
@@ -1167,11 +1174,11 @@ test('apply-tag-changes deletes an emptied generated tag folder after a rename t
   });
   try {
     const [result] = syncOas(root);
-    assert.equal(fs.existsSync(path.join(root, 'reference/Api/old')), false);
-    assert.equal(fs.existsSync(path.join(root, 'reference/Api/old.md')), false);
-    assert.ok(result.changes.deleted.includes('Api/old/index.md'));
-    assert.deepEqual(result.changes.moved, [{ from: 'Api/old/a.md', to: 'Api/new/a.md' }]);
-    assert.deepEqual(order(root, 'reference/Api/_order.yaml'), ['new']);
+    expect(fs.existsSync(path.join(root, 'reference/Api/old'))).toBe(false);
+    expect(fs.existsSync(path.join(root, 'reference/Api/old.md'))).toBe(false);
+    expect(result.changes.deleted.includes('Api/old/index.md')).toBe(true);
+    expect(result.changes.moved).toStrictEqual([{ from: 'Api/old/a.md', to: 'Api/new/a.md' }]);
+    expect(order(root, 'reference/Api/_order.yaml')).toStrictEqual(['new']);
   } finally {
     rmRepo(root);
   }
@@ -1188,11 +1195,11 @@ test('apply-tag-changes flattens, never deletes, an emptied tag folder whose exc
   });
   try {
     const [result] = syncOas(root);
-    assert.equal(fs.existsSync(path.join(root, 'reference/Api/old')), false);
-    assert.equal(fm(root, 'reference/Api/old.md').excerpt, 'My own words');
-    assert.deepEqual(result.changes.deleted, []);
-    assert.ok(result.changes.moved.some((m) => m.from === 'Api/old/index.md' && m.to === 'Api/old.md'));
-    assert.deepEqual(order(root, 'reference/Api/_order.yaml'), ['old', 'new']);
+    expect(fs.existsSync(path.join(root, 'reference/Api/old'))).toBe(false);
+    expect(fm(root, 'reference/Api/old.md').excerpt).toBe('My own words');
+    expect(result.changes.deleted).toStrictEqual([]);
+    expect(result.changes.moved.some((m) => m.from === 'Api/old/index.md' && m.to === 'Api/old.md')).toBe(true);
+    expect(order(root, 'reference/Api/_order.yaml')).toStrictEqual(['old', 'new']);
   } finally {
     rmRepo(root);
   }
@@ -1206,9 +1213,9 @@ test('apply-tag-changes flattens an emptied tag folder whose category page was h
   });
   try {
     syncOas(root);
-    assert.equal(fs.existsSync(path.join(root, 'reference/Api/old')), false);
-    assert.match(fs.readFileSync(path.join(root, 'reference/Api/old.md'), 'utf-8'), /Hand-written intro/);
-    assert.deepEqual(order(root, 'reference/Api/_order.yaml'), ['old', 'new']);
+    expect(fs.existsSync(path.join(root, 'reference/Api/old'))).toBe(false);
+    expect(fs.readFileSync(path.join(root, 'reference/Api/old.md'), 'utf-8')).toMatch(/Hand-written intro/);
+    expect(order(root, 'reference/Api/_order.yaml')).toStrictEqual(['old', 'new']);
   } finally {
     rmRepo(root);
   }
@@ -1222,9 +1229,9 @@ test('apply-tag-changes keeps an old tag folder that still has other pages', () 
   });
   try {
     syncOas(root);
-    assert.ok(fs.existsSync(path.join(root, 'reference/Api/old/index.md')));
-    assert.ok(fs.existsSync(path.join(root, 'reference/Api/old/guide.md')));
-    assert.ok(fs.existsSync(path.join(root, 'reference/Api/new/a.md')));
+    expect(fs.existsSync(path.join(root, 'reference/Api/old/index.md'))).toBe(true);
+    expect(fs.existsSync(path.join(root, 'reference/Api/old/guide.md'))).toBe(true);
+    expect(fs.existsSync(path.join(root, 'reference/Api/new/a.md'))).toBe(true);
   } finally {
     rmRepo(root);
   }
@@ -1249,11 +1256,11 @@ test('apply-tag-changes pulls a hand-nested page back to its tag folder, but lea
   });
   try {
     syncOas(root);
-    assert.ok(fs.existsSync(path.join(root, 'reference/Api/t/a.md')));
-    assert.ok(fs.existsSync(path.join(root, 'reference/Elsewhere/b.md')));
-    assert.equal(fs.existsSync(path.join(root, 'reference/Api/t/b.md')), false);
+    expect(fs.existsSync(path.join(root, 'reference/Api/t/a.md'))).toBe(true);
+    expect(fs.existsSync(path.join(root, 'reference/Elsewhere/b.md'))).toBe(true);
+    expect(fs.existsSync(path.join(root, 'reference/Api/t/b.md'))).toBe(false);
     // The user's custom parent was hand-edited, so it's flattened, not deleted.
-    assert.match(fs.readFileSync(path.join(root, 'reference/Api/t/custom.md'), 'utf-8'), /Mine/);
+    expect(fs.readFileSync(path.join(root, 'reference/Api/t/custom.md'), 'utf-8')).toMatch(/Mine/);
   } finally {
     rmRepo(root);
   }
@@ -1278,12 +1285,12 @@ test('apply-tag-changes syncs an existing tag page\'s title and excerpt, keeping
   try {
     syncOas(root);
     const pets = parseFrontmatter(fs.readFileSync(path.join(root, 'reference/Api/pets/index.md'), 'utf-8'));
-    assert.equal(pets.data.title, 'Pets');
-    assert.equal(pets.data.excerpt, 'All about pets');
-    assert.match(pets.content, /Body/);
+    expect(pets.data.title).toBe('Pets');
+    expect(pets.data.excerpt).toBe('All about pets');
+    expect(pets.content).toMatch(/Body/);
     const plain = fm(root, 'reference/Api/plain/index.md');
-    assert.equal(plain.title, 'Plain');
-    assert.equal('excerpt' in plain, false);
+    expect(plain.title).toBe('Plain');
+    expect('excerpt' in plain).toBe(false);
   } finally {
     rmRepo(root);
   }
@@ -1307,9 +1314,9 @@ test('a tag page updated by both apply-tag-changes and x-internal is reported as
     const [result] = syncOas(root);
     // Both passes really did write to it: excerpt synced, then hidden.
     const index = fm(root, 'reference/Api/t/index.md');
-    assert.equal(index.excerpt, 'Fresh');
-    assert.equal(index.hidden, true);
-    assert.deepEqual(result.changes.updated.slice().sort(), ['Api/t/a.md', 'Api/t/index.md']);
+    expect(index.excerpt).toBe('Fresh');
+    expect(index.hidden).toBe(true);
+    expect(result.changes.updated.slice().sort()).toStrictEqual(['Api/t/a.md', 'Api/t/index.md']);
   } finally {
     rmRepo(root);
   }
@@ -1322,7 +1329,7 @@ test('apply-tag-changes must be exactly true and set at the root', () => {
   });
   try {
     syncOas(root);
-    assert.ok(fs.existsSync(path.join(root, 'reference/Api/old/a.md')));
+    expect(fs.existsSync(path.join(root, 'reference/Api/old/a.md'))).toBe(true);
   } finally {
     rmRepo(root);
   }
@@ -1355,7 +1362,7 @@ test('without apply-endpoint-order, new endpoints are appended and existing orde
   const root = makeRepo({ ...ORDER_FILES, 'reference/api.json': orderedSpec() });
   try {
     syncOas(root);
-    assert.deepEqual(order(root, 'reference/Api/t/_order.yaml'), ['a', 'guide', 'b', 'c']);
+    expect(order(root, 'reference/Api/t/_order.yaml')).toStrictEqual(['a', 'guide', 'b', 'c']);
   } finally {
     rmRepo(root);
   }
@@ -1368,11 +1375,11 @@ test('apply-endpoint-order reorders endpoints to spec order, leaving other pages
   });
   try {
     const [result] = syncOas(root);
-    assert.deepEqual(order(root, 'reference/Api/t/_order.yaml'), ['c', 'guide', 'a', 'b']);
-    assert.ok(result.changes.updated.includes('Api/t/_order.yaml'));
+    expect(order(root, 'reference/Api/t/_order.yaml')).toStrictEqual(['c', 'guide', 'a', 'b']);
+    expect(result.changes.updated.includes('Api/t/_order.yaml')).toBe(true);
 
     const [again] = syncOas(root);
-    assert.deepEqual(again.changes.updated, []);
+    expect(again.changes.updated).toStrictEqual([]);
   } finally {
     rmRepo(root);
   }
@@ -1387,31 +1394,31 @@ test('apply-endpoint-order collapses a duplicated slug in _order.yaml instead of
   try {
     syncOas(root);
     const raw = fs.readFileSync(path.join(root, 'reference/Api/t/_order.yaml'), 'utf-8');
-    assert.equal(raw.includes('undefined'), false);
-    assert.deepEqual(order(root, 'reference/Api/t/_order.yaml'), ['c', 'guide', 'a', 'b']);
+    expect(raw.includes('undefined')).toBe(false);
+    expect(order(root, 'reference/Api/t/_order.yaml')).toStrictEqual(['c', 'guide', 'a', 'b']);
   } finally {
     rmRepo(root);
   }
 });
 
 test('applyOASOrder refills only API slots and inserts new slugs after the last one', async () => {
-  assert.deepEqual(applyOASOrder([], ['b', 'a']), ['b', 'a']);
-  assert.deepEqual(applyOASOrder(['x', 'y'], ['a']), ['x', 'y', 'a']);
-  assert.deepEqual(applyOASOrder(['a', 'x', 'b', 'y'], ['b', 'c', 'a']), ['b', 'x', 'c', 'a', 'y']);
+  expect(applyOASOrder([], ['b', 'a'])).toStrictEqual(['b', 'a']);
+  expect(applyOASOrder(['x', 'y'], ['a'])).toStrictEqual(['x', 'y', 'a']);
+  expect(applyOASOrder(['a', 'x', 'b', 'y'], ['b', 'c', 'a'])).toStrictEqual(['b', 'x', 'c', 'a', 'y']);
 });
 
 test('applyOASOrder never emits undefined when the current order repeats a slug', async () => {
   // More slots than distinct slugs to fill them with.
-  assert.deepEqual(applyOASOrder(['a', 'a', 'b'], ['b', 'a']), ['b', 'a']);
-  assert.deepEqual(applyOASOrder(['a', 'x', 'a'], ['a']), ['a', 'x']);
-  assert.deepEqual(applyOASOrder(['b', 'x', 'b', 'a'], ['a', 'b']), ['a', 'x', 'b']);
+  expect(applyOASOrder(['a', 'a', 'b'], ['b', 'a'])).toStrictEqual(['b', 'a']);
+  expect(applyOASOrder(['a', 'x', 'a'], ['a'])).toStrictEqual(['a', 'x']);
+  expect(applyOASOrder(['b', 'x', 'b', 'a'], ['a', 'b'])).toStrictEqual(['a', 'x', 'b']);
 
   // Duplicates in the requested order are collapsed too.
-  assert.deepEqual(applyOASOrder(['a', 'b'], ['b', 'b', 'a']), ['b', 'a']);
+  expect(applyOASOrder(['a', 'b'], ['b', 'b', 'a'])).toStrictEqual(['b', 'a']);
   for (const result of [
     applyOASOrder(['a', 'a', 'b'], ['b', 'a']),
     applyOASOrder(['a', 'x', 'a'], ['a']),
   ]) {
-    assert.ok(result.every((s) => typeof s === 'string'));
+    expect(result.every((s) => typeof s === 'string')).toBe(true);
   }
 });
