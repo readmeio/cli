@@ -48526,7 +48526,8 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
   ];
 
   // Groups that will hold at least one of this spec's pages after this run:
-  // a new page is created in its folder, an existing page already lives there,
+  // a new page is created in its folder, an existing page already lives
+  // anywhere under it (a direct child, or nested in a hand-made subfolder),
   // or `apply-tag-changes` will move one in (see the move pass below). A group
   // whose pages were all moved somewhere else (another category, or a folder
   // spelled differently) gets no category page — creating one would leave an
@@ -48535,9 +48536,10 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
   for (const [key, op] of specOps) {
     const { folder } = operationGroup(op);
     const page = pagesByOpId.get(key);
+    const tagDir = external_node_path_namespaceObject.join(apiDir, foldersBySlug.get(folder) || folder);
     if (
       !page ||
-      external_node_path_namespaceObject.dirname(page.filePath) === external_node_path_namespaceObject.join(apiDir, foldersBySlug.get(folder) || folder) ||
+      isWithin(tagDir, page.filePath) ||
       (applyTagChanges && isWithin(apiDir, page.filePath) && external_node_path_namespaceObject.basename(page.filePath) !== 'index.md')
     ) {
       populatedFolders.add(folder);

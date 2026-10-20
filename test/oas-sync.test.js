@@ -194,6 +194,36 @@ test('a tag whose pages live in a differently spelled folder of the same categor
   }
 });
 
+test('a tag whose only page is nested under its folder still gets its category page restored', () => {
+  // apply-tag-changes is off, so the page stays nested. The tag folder still
+  // holds it, so a missing index.md (and its order entries) must be restored.
+  const spec = JSON.stringify({
+    openapi: '3.0.0',
+    info: { title: 'API' },
+    tags: [{ name: 't', description: 'Tag t' }],
+    paths: { '/a': { get: { operationId: 'a', tags: ['t'] } } },
+  });
+  const root = makeRepo({
+    'reference/api.json': spec,
+    'reference/API/t/custom/a.md': '---\napi:\n  file: api.json\n  operationId: a\n---\n',
+  });
+  try {
+    const [result] = syncOas(root);
+    const indexPath = path.join(root, 'reference/API/t/index.md');
+    assert.ok(fs.existsSync(indexPath), 'expected the category index.md to be restored');
+    const { data } = parseFrontmatter(fs.readFileSync(indexPath, 'utf-8'));
+    assert.equal(data.title, 't');
+    assert.equal(data.excerpt, 'Tag t');
+    assert.ok(fs.existsSync(path.join(root, 'reference/API/t/custom/a.md')));
+    assert.equal(fs.existsSync(path.join(root, 'reference/API/t/a.md')), false);
+    assert.deepEqual(result.changes.added, ['API/t/index.md']);
+    assert.deepEqual(order(root, 'reference/API/_order.yaml'), ['t']);
+    assert.deepEqual(order(root, 'reference/_order.yaml'), ['API']);
+  } finally {
+    rmRepo(root);
+  }
+});
+
 test('a tag with pages elsewhere still gets its category page when a new operation is added to it', () => {
   const spec = JSON.stringify({
     openapi: '3.0.0',
