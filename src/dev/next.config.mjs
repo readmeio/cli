@@ -10,7 +10,7 @@ export default {
   // Next's SWC loader excludes `node_modules` from JSX transformation by
   // default. Marking our own package as a transpile target bypasses that.
   transpilePackages: ['@readme/cli'],
-  serverExternalPackages: ['js-yaml', '@readme/markdown'],
+  serverExternalPackages: ['gray-matter', 'js-yaml', '@readme/markdown'],
   webpack: (config) => {
     // Suppress noisy cache serialization warnings from large @readme/markdown bundle
     config.infrastructureLogging = {

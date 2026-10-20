@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import matter from "gray-matter";
 import markdown from "@readme/markdown";
-import { parseFrontmatter } from "../utils/markdown.js";
 
 const { mdxishTags } = markdown;
 
@@ -50,7 +50,7 @@ function extractComponentTags(content) {
   // like `foo: <NotAComponent />` would otherwise be picked up.
   let body;
   try {
-    ({ content: body } = parseFrontmatter(content));
+    ({ content: body } = matter(content));
   } catch {
     body = content.replace(/^---[\s\S]*?---/, "");
   }
@@ -96,7 +96,7 @@ function collectCustomBlockNames(gitRoot) {
 
       if (entry.endsWith(".mdx")) {
         // .mdx: component names come from exports.
-        const { content: body } = parseFrontmatter(content);
+        const { content: body } = matter(content);
         for (const n of extractExportedNames(body)) {
           names.add(n);
         }
@@ -161,7 +161,7 @@ export function validate({ content, relativePath }) {
   let body;
 
   try {
-    ({ data, content: body } = parseFrontmatter(content));
+    ({ data, content: body } = matter(content));
   } catch {
     return null; // frontmatter validator handles parse errors.
   }

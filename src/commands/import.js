@@ -5,8 +5,8 @@ import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { Option } from 'commander'
 import { query } from '@anthropic-ai/claude-agent-sdk'
+import matter from 'gray-matter'
 import * as styles from '../utils/styles.js'
-import { parseFrontmatter, toFrontmatter } from '../utils/markdown.js'
 import { syncOas } from './oas-sync.js'
 import OASNormalize from 'oas-normalize'
 import {
@@ -1156,7 +1156,7 @@ function countReferencePages(stagingDir, specFilename) {
       }
       if (!entry.name.endsWith('.md')) continue
 
-      const parsed = parseFrontmatter(fs.readFileSync(full, 'utf-8'))
+      const parsed = matter(fs.readFileSync(full, 'utf-8'))
       const fm = parsed.data || {}
       if (fm.api && fm.api.file === specFilename) count++
     }
@@ -1185,7 +1185,7 @@ function ensureDocsLandingPage(stagingDir, siteTitle, opCount = 0) {
     opCount > 0
       ? `This import brought in **${opCount} API operation${opCount === 1 ? '' : 's'}** from ${name}.\n\n👉 [Browse the API Reference →](/reference)\n\nThis page is a placeholder landing. Replace or expand it with onboarding content specific to your API.\n`
       : `This is a placeholder landing page. Replace it with your docs.\n`
-  fs.writeFileSync(path.join(categoryDir, 'getting-started.md'), toFrontmatter({ title, icon: formatIconClass('rocket') }, body))
+  fs.writeFileSync(path.join(categoryDir, 'getting-started.md'), matter.stringify(body, { title, icon: formatIconClass('rocket') }))
   fs.writeFileSync(path.join(categoryDir, '_order.yaml'), '- getting-started\n')
   fs.writeFileSync(path.join(docsDir, '_order.yaml'), '- Getting Started\n')
 }
@@ -4854,7 +4854,7 @@ function stageOrganized(organized, stagingDir, opts = {}) {
 
       const absPath = path.join(stagingDir, relFilePath)
       fs.mkdirSync(path.dirname(absPath), { recursive: true })
-      fs.writeFileSync(absPath, toFrontmatter(frontmatter))
+      fs.writeFileSync(absPath, matter.stringify('', frontmatter))
       counts.fileCount++
 
       // The sidebar entry is `slug` for both leaves (`<slug>.md`) and parents
@@ -4930,7 +4930,7 @@ function stageOrganized(organized, stagingDir, opts = {}) {
     if (fs.existsSync(idxPath)) continue
     fs.mkdirSync(path.dirname(idxPath), { recursive: true })
     const fm = { title, icon: formatIconClass(pickIcon(path.basename(relDir), title)) }
-    fs.writeFileSync(idxPath, toFrontmatter(fm))
+    fs.writeFileSync(idxPath, matter.stringify('', fm))
     counts.fileCount++
   }
 
@@ -5041,7 +5041,7 @@ function finalizeChangelogs(stagingDir) {
         continue
       }
       if (!entry.name.endsWith('.md')) continue
-      const parsed = parseFrontmatter(fs.readFileSync(full, 'utf-8'))
+      const parsed = matter(fs.readFileSync(full, 'utf-8'))
       if (!parsed.data?.['x-import']) continue
       if (entry.name === 'index.md' && ancestors.length > 0) {
         pages.push({ ancestors: ancestors.slice(0, -1), slug: ancestors.at(-1), content: parsed.content, data: parsed.data })
@@ -5059,7 +5059,7 @@ function finalizeChangelogs(stagingDir) {
     const page = pages[index]
     const frontmatter = { ...page.data }
     delete frontmatter.icon
-    fs.writeFileSync(path.join(dstDir, `${filename}.md`), toFrontmatter(frontmatter, page.content))
+    fs.writeFileSync(path.join(dstDir, `${filename}.md`), matter.stringify(page.content, frontmatter))
   }
 
   const docsOrderPath = path.join(stagingDir, 'docs', '_order.yaml')

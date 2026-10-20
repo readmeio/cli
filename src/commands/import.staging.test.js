@@ -3,9 +3,9 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import matter from 'gray-matter'
 import { Command } from 'commander'
 import { args, __test__ } from './import.js'
-import { parseFrontmatter, toFrontmatter } from '../utils/markdown.js'
 
 const { stageOrganized, finalizeChangelogs, allocateChangelogFilenames } = __test__
 
@@ -25,7 +25,7 @@ function withStaging(fn) {
 }
 
 function readFm(filePath) {
-  return parseFrontmatter(fs.readFileSync(filePath, 'utf8')).data
+  return matter(fs.readFileSync(filePath, 'utf8')).data
 }
 
 test('stageOrganized writes parent pages as index.md and leaves as slug.md', () => {
@@ -141,15 +141,15 @@ test('finalizeChangelogs emits flat canonical changelogs without an order file a
     fs.mkdirSync(path.join(changelogDir, 'foo'), { recursive: true })
     fs.writeFileSync(
       path.join(changelogDir, 'foo', 'Bar.md'),
-      toFrontmatter({ title: 'Nested', icon: 'fa-book', 'x-import': 'https://example.com/nested' }),
+      matter.stringify('', { title: 'Nested', icon: 'fa-book', 'x-import': 'https://example.com/nested' }),
     )
     fs.writeFileSync(
       path.join(changelogDir, 'foo-bar.md'),
-      toFrontmatter({ title: 'Root', icon: 'fa-book', 'x-import': 'https://example.com/root' }),
+      matter.stringify('', { title: 'Root', icon: 'fa-book', 'x-import': 'https://example.com/root' }),
     )
     fs.writeFileSync(
       path.join(changelogDir, 'unchanged.md'),
-      toFrontmatter({ title: 'Unchanged', icon: 'fa-book', 'x-import': 'https://example.com/unchanged' }),
+      matter.stringify('', { title: 'Unchanged', icon: 'fa-book', 'x-import': 'https://example.com/unchanged' }),
     )
     fs.writeFileSync(path.join(stagingDir, 'docs', '_order.yaml'), '- Changelog\n')
 

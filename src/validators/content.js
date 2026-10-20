@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { parseFrontmatter } from '../utils/markdown.js';
+import matter from 'gray-matter';
 
 export const name = 'content';
 
@@ -12,7 +12,7 @@ export function validate({ filePath, content, relativePath }) {
   let data;
   let body;
   try {
-    ({ data, content: body } = parseFrontmatter(content));
+    ({ data, content: body } = matter(content));
   } catch {
     return null;
   }

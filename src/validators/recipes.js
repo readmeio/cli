@@ -1,4 +1,4 @@
-import { parseFrontmatter } from '../utils/markdown.js';
+import matter from 'gray-matter';
 
 export const name = 'recipes';
 
@@ -80,7 +80,7 @@ export function validate({ content, relativePath }) {
   let body;
 
   try {
-    ({ data, content: body } = parseFrontmatter(content));
+    ({ data, content: body } = matter(content));
   } catch {
     return null;
   }
