@@ -3,8 +3,8 @@ import path from 'node:path'
 import { createRequire } from 'node:module'
 import { query } from '@anthropic-ai/claude-agent-sdk'
 import { InvalidArgumentError, Option } from 'commander'
-import matter from 'gray-matter'
 import { collectFiles } from '../utils/lint.js'
+import { parseFrontmatter, toFrontmatter } from '../utils/markdown.js'
 import { prettifyPagePrompt, prettifyPageOutputSchema } from '../prompts/index.js'
 import { printHeader, isAgenticCli } from '../utils/eyes.js'
 import { MultiSpinner } from '../utils/multi-spinner.js'
@@ -284,7 +284,7 @@ export async function run(file, options, _cmd, ctx) {
     try {
       const filePath = path.join(gitRoot, relativePath)
       const original = fs.readFileSync(filePath, 'utf-8')
-      const parsed = matter(original)
+      const parsed = parseFrontmatter(original)
 
       let source = parsed.content
       const importUrl = parsed.data?.['x-import']
@@ -331,7 +331,7 @@ export async function run(file, options, _cmd, ctx) {
       delete newFm.hidden
       delete newFm['x-import']
       if (result.excerpt && !newFm.excerpt) newFm.excerpt = result.excerpt
-      const next = matter.stringify(result.body, newFm)
+      const next = toFrontmatter(newFm, result.body)
 
       if (next === original) {
         unchanged++

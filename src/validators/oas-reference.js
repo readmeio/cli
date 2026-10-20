@@ -1,6 +1,5 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import matter from 'gray-matter';
 import {
   findOasFiles,
   extractOperations,
@@ -9,6 +8,7 @@ import {
   operationKey,
   findIgnoredInternalExtensions,
 } from '../commands/oas-sync.js';
+import { parseFrontmatter } from '../utils/markdown.js';
 
 export const name = 'oas-reference';
 
@@ -43,7 +43,7 @@ export function validateAll(files, gitRoot, { fix } = {}) {
     const filePath = path.join(gitRoot, relPath);
     let data;
     try {
-      ({ data } = matter(fs.readFileSync(filePath, 'utf-8')));
+      ({ data } = parseFrontmatter(fs.readFileSync(filePath, 'utf-8')));
     } catch {
       continue;
     }
