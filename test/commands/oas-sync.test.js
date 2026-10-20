@@ -2,9 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { parseFrontmatter, toFrontmatter } from '../src/utils/markdown.js';
-import { findOasFiles, syncOas } from '../src/commands/oas-sync.js';
-import { makeRepo, rmRepo } from './helpers.js';
+import { parseFrontmatter, toFrontmatter } from '../../src/utils/markdown.js';
+import { applyOASOrder, findOasFiles, syncOas } from '../../src/commands/oas-sync.js';
+import { makeRepo, rmRepo } from '../helpers.js';
 
 const SPEC = JSON.stringify({
   openapi: '3.0.0',
@@ -1395,18 +1395,17 @@ test('apply-endpoint-order collapses a duplicated slug in _order.yaml instead of
 });
 
 test('applyOASOrder refills only API slots and inserts new slugs after the last one', async () => {
-  const { applyOASOrder } = await import('../src/commands/oas-sync.js');
   assert.deepEqual(applyOASOrder([], ['b', 'a']), ['b', 'a']);
   assert.deepEqual(applyOASOrder(['x', 'y'], ['a']), ['x', 'y', 'a']);
   assert.deepEqual(applyOASOrder(['a', 'x', 'b', 'y'], ['b', 'c', 'a']), ['b', 'x', 'c', 'a', 'y']);
 });
 
 test('applyOASOrder never emits undefined when the current order repeats a slug', async () => {
-  const { applyOASOrder } = await import('../src/commands/oas-sync.js');
   // More slots than distinct slugs to fill them with.
   assert.deepEqual(applyOASOrder(['a', 'a', 'b'], ['b', 'a']), ['b', 'a']);
   assert.deepEqual(applyOASOrder(['a', 'x', 'a'], ['a']), ['a', 'x']);
   assert.deepEqual(applyOASOrder(['b', 'x', 'b', 'a'], ['a', 'b']), ['a', 'x', 'b']);
+
   // Duplicates in the requested order are collapsed too.
   assert.deepEqual(applyOASOrder(['a', 'b'], ['b', 'b', 'a']), ['b', 'a']);
   for (const result of [

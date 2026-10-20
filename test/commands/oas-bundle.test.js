@@ -2,8 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { bundleOas, writeBundle } from '../src/commands/oas-bundle.js';
-import { makeRepo, rmRepo } from './helpers.js';
+import { bundleOas, writeBundle } from '../../src/commands/oas-bundle.js';
+import { makeRepo, rmRepo } from '../helpers.js';
 
 const ROOT_SPEC = `openapi: 3.0.0
 info: { title: Pets, version: '1.0' }

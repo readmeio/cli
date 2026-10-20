@@ -2,9 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { collectFiles } from '../src/utils/lint.js';
-import { validateAll } from '../src/validators/ordering.js';
-import { makeRepo, rmRepo } from './helpers.js';
+import { collectFiles } from '../../src/utils/lint.js';
+import { validateAll } from '../../src/validators/ordering.js';
+import { makeRepo, rmRepo } from '../helpers.js';
 
 test('stale and index entries in _order.yaml are flagged', () => {
   const root = makeRepo({

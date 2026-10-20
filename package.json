@@ -25,7 +25,7 @@
   ],
   "scripts": {
     "start": "node bin/readme.js",
-    "test": "node --test src/**/*.test.js test/*.test.js",
+    "test": "node --test src/**/*.test.js test/**/*.test.js test/*.test.js",
     "build:gha": "ncc build src/gha.js -o dist-gha --external @readme/markdown"
   },
   "engines": {

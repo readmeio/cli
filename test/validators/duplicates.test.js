@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { validateAll } from '../src/validators/duplicates.js';
+import { validateAll } from '../../src/validators/duplicates.js';
 
 test('same slug across docs and reference is allowed', () => {
   const res = validateAll(['docs/intro.md', 'reference/intro.md']);

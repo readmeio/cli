@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { getClaudeReasoningOptions, getStructuredOutput } from '../src/commands/import.js'
+import { getClaudeReasoningOptions, getStructuredOutput } from '../../src/commands/import.js'
 
 test('getClaudeReasoningOptions uses adaptive thinking for Sonnet 5', () => {
   assert.deepEqual(getClaudeReasoningOptions('claude-sonnet-5'), {

@@ -2,9 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { collectFiles } from '../src/utils/lint.js';
-import { validateAll } from '../src/validators/oas-reference.js';
-import { makeRepo, rmRepo } from './helpers.js';
+import { collectFiles } from '../../src/utils/lint.js';
+import { validateAll } from '../../src/validators/oas-reference.js';
+import { makeRepo, rmRepo } from '../helpers.js';
 
 const SPEC = JSON.stringify({
   openapi: '3.0.0',

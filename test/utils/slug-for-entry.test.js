@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { slugForEntry } from '../src/utils/slug-for-entry.js';
+import { slugForEntry } from '../../src/utils/slug-for-entry.js';
 
 test('plain page slug is the filename minus extension', () => {
   assert.equal(slugForEntry('docs/a/intro.md'), 'intro');

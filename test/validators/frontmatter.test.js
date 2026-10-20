@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { validate } from '../src/validators/frontmatter.js';
+import { validate } from '../../src/validators/frontmatter.js';
 
 function messages(result) {
   if (!result) return [];
