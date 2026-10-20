@@ -170,23 +170,23 @@ description: POST : PATCH\u00a0#tag
     const fields = Array.from({ length: 10 }, (_, index) => `field${index}: value : ${index}`).join('\n');
     const content = `---\n${fields}\n---\n# Body`;
 
-    assert.deepEqual(parseFrontmatter(content), {
-      content: '# Body',
-      data: {},
-    });
+    const result = parseFrontmatter(content);
+    assert.equal(result.content, '# Body');
+    assert.deepEqual(result.data, {});
+    assert.ok(result.error, 'YAML failure is surfaced on `error`');
   });
 
- test('should leave frontmatter empty when a mapping is mis-indented', () => {
+  test('should leave frontmatter empty when a mapping is mis-indented', () => {
     const content = `---
 a: 1
   b: 2
 ---
 # Body`;
 
-    assert.deepEqual(parseFrontmatter(content), {
-      content: '# Body',
-      data: {},
-    });
+    const result = parseFrontmatter(content);
+    assert.equal(result.content, '# Body');
+    assert.deepEqual(result.data, {});
+    assert.ok(result.error, 'YAML failure is surfaced on `error`');
   });
 
    test('should parse and extract metadata from a piece sparsely-populated content', () => {

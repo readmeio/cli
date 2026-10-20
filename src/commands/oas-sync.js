@@ -228,19 +228,15 @@ export function collectExistingPages(refDir) {
       if (stat.isDirectory()) {
         walk(full);
       } else if (entry.endsWith('.md')) {
-        try {
-          const content = fs.readFileSync(full, 'utf-8');
-          const { data } = parseFrontmatter(content);
-          if (data.api && data.api.file && data.api.operationId) {
-            pages.push({
-              filePath: full,
-              relativePath: path.relative(refDir, full),
-              data,
-              content,
-            });
-          }
-        } catch {
-          // Skip unparseable files.
+        const content = fs.readFileSync(full, 'utf-8');
+        const { data } = parseFrontmatter(content);
+        if (data.api && data.api.file && data.api.operationId) {
+          pages.push({
+            filePath: full,
+            relativePath: path.relative(refDir, full),
+            data,
+            content,
+          });
         }
       }
     }
@@ -550,14 +546,8 @@ const INDEX_FILES = ['index.md', 'index.mdx', 'index.html'];
  * deleting it. A stale page can be removed by hand; a deleted edit is gone.
  */
 function isGeneratedTagIndex(indexPath, specDescriptions) {
-  let parsed;
-  try {
-    parsed = parseFrontmatter(fs.readFileSync(indexPath, 'utf-8'));
-  } catch {
-    return false;
-  }
-  const { data, content } = parsed;
-  if (content.trim()) return false;
+  const { data, content, error } = parseFrontmatter(fs.readFileSync(indexPath, 'utf-8'));
+  if (error || content.trim()) return false;
   if (typeof data.title !== 'string' || !('hidden' in data)) return false;
   if (Object.keys(data).some((k) => !['title', 'hidden', 'excerpt'].includes(k))) return false;
   if ('excerpt' in data && !specDescriptions.has(data.excerpt)) return false;

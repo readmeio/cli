@@ -124,63 +124,57 @@ function loadFrontmatterYAML(yamlContent) {
 /**
  * Parse frontmatter from markdown content. Extracts YAML frontmatter between --- delimiters.
  *
+ * On YAML failure returns `{ content, data: {}, error }` so callers can soft-fail or report.
+ * This function does not throw for invalid YAML.
+ *
  */
 export function parseFrontmatter(content) {
-  // Strip BOM (Byte Order Mark) if present
+  // Strip BOM (Byte Order Mark) if present. Non-frontmatter paths always return this string.
   const withoutBom = content.charCodeAt(0) === 0xfeff ? content.slice(1) : content;
 
   // Allow frontmatter to be preceded by blank lines (common in hand-edited docs)
   const stripped = withoutBom.replace(/^[\r\n]+/, '');
 
-  // Check if content starts with ---
-  if (!stripped.startsWith('---')) {
+  // Not frontmatter: keep the original (minus BOM), including leading blank lines
+  if (!stripped.startsWith('---') || (stripped.length > 3 && stripped[3] === '-')) {
     return { content: withoutBom, data: {} };
-  }
-
-  // If the character after --- is also -, then it's not a delimiter (e.g., -----)
-  if (stripped.length > 3 && stripped[3] === '-') {
-    return { content: stripped, data: {} };
   }
 
   // Normalize CRLF (and bare CR) so Windows-saved docs parse like LF files
   const normalized = stripped.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 
-  // Try to match frontmatter with closing delimiter first
-  // Matches: ---\n...content...\n---
-  // The newline after the closing --- is optional but only one newline is consumed
   let match = normalized.match(FRONTMATTER_RE);
   let yamlContent;
   let body;
 
   if (match) {
-    // Found frontmatter with closing delimiter
     yamlContent = match[1];
     body = match[2] || '';
   } else {
-    // Try to match frontmatter without closing delimiter
-    // Matches: ---\n...content... (until end of string)
     match = normalized.match(FRONTMATTER_NOEND_RE);
-    if (match) {
-      yamlContent = match[1];
-      body = '';
-    } else {
-      // No valid frontmatter found
-      return { content: normalized, data: {} };
+    if (!match) {
+      return { content: withoutBom, data: {} };
     }
+    yamlContent = match[1];
+    body = '';
+  }
+
+  // Empty / whitespace-only frontmatter is valid → empty data, no error
+  if (!yamlContent.trim()) {
+    return { content: body, data: {} };
   }
 
   try {
     const parsed = loadFrontmatterYAML(yamlContent);
 
-    // If the parsed YAML is not an object (e.g., a string, number, boolean),
-    // return an empty object for the data, matching gray-matter's behavior
+    // Non-object YAML (string, number, boolean, array) → empty data, matching gray-matter
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       return { content: body, data: {} };
     }
 
     return { content: body, data: parsed };
-  } catch {
-    return { content: body, data: {} };
+  } catch (err) {
+    return { content: body, data: {}, error: err };
   }
 }
 

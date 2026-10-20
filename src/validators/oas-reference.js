@@ -41,13 +41,7 @@ export function validateAll(files, gitRoot, { fix } = {}) {
 
   for (const relPath of refPages) {
     const filePath = path.join(gitRoot, relPath);
-    let data;
-    try {
-      ({ data } = parseFrontmatter(fs.readFileSync(filePath, 'utf-8')));
-    } catch {
-      continue;
-    }
-
+    const { data } = parseFrontmatter(fs.readFileSync(filePath, 'utf-8'));
     if (!data.api || !data.api.file) continue;
 
     const oasFilename = data.api.file;

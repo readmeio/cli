@@ -93,14 +93,12 @@ for (const [dir, index] of Object.entries(DIR_SCHEMA_INDEX)) {
 
 export function validate({ content, filePath, relativePath, fix }) {
   // Step 1: Parse the frontmatter YAML.
-  let data;
-  try {
-    ({ data } = parseFrontmatter(content));
-  } catch (e) {
+  const { data, error } = parseFrontmatter(content);
+  if (error) {
     return {
       file: relativePath,
       rule: name,
-      message: `Invalid frontmatter: ${e.reason || e.message || 'unknown error'}`,
+      message: `Invalid frontmatter: ${error.reason || error.message || 'unknown error'}`,
     };
   }
 

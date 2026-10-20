@@ -48,12 +48,7 @@ const CONTENT_DIRS = new Set(["docs", "reference", "custom_pages", "recipes"]);
 function extractComponentTags(content) {
   // Strip frontmatter — mdxishTags parses raw mdxish, so frontmatter values
   // like `foo: <NotAComponent />` would otherwise be picked up.
-  let body;
-  try {
-    ({ content: body } = parseFrontmatter(content));
-  } catch {
-    body = content.replace(/^---[\s\S]*?---/, "");
-  }
+  const { content: body } = parseFrontmatter(content);
 
   try {
     return new Set(mdxishTags(body));
@@ -157,14 +152,9 @@ export function validate({ content, relativePath }) {
   }
 
   // .mdx component files: validate export and usage example.
-  let data;
-  let body;
-
-  try {
-    ({ data, content: body } = parseFrontmatter(content));
-  } catch {
-    return null; // frontmatter validator handles parse errors.
-  }
+  // Invalid YAML is reported by the frontmatter validator via `error`.
+  const { data, content: body, error } = parseFrontmatter(content);
+  if (error) return null;
 
   const componentName = data.name;
   if (!componentName) return null; // frontmatter validator handles missing name.

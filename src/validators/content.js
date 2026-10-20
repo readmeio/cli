@@ -9,13 +9,7 @@ export function validate({ filePath, content, relativePath }) {
   if (!['docs', 'reference', 'custom_pages'].includes(dir)) return null;
   if (!relativePath.endsWith('.md')) return null;
 
-  let data;
-  let body;
-  try {
-    ({ data, content: body } = parseFrontmatter(content));
-  } catch {
-    return null;
-  }
+  const { data, content: body } = parseFrontmatter(content);
 
   if (data.hidden || data.deprecated) return null;
   if (data.api) return null;
