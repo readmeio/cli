@@ -1,9 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import matter from 'gray-matter';
 import * as styles from '../utils/styles.js';
 import { writeGithubActionsOutputs } from '../utils/gha-output.js';
+import { parseFrontmatter, toFrontmatter } from '../utils/markdown.js';
 
 const require = createRequire(import.meta.url);
 const yaml = require('js-yaml');
@@ -230,7 +230,7 @@ export function collectExistingPages(refDir) {
       } else if (entry.endsWith('.md')) {
         try {
           const content = fs.readFileSync(full, 'utf-8');
-          const { data } = matter(content);
+          const { data } = parseFrontmatter(content);
           if (data.api && data.api.file && data.api.operationId) {
             pages.push({
               filePath: full,
@@ -311,16 +311,6 @@ function isWithin(baseDir, target) {
   );
 }
 
-/**
- * Render a frontmatter-only page. `matter.stringify` always appends a blank
- * body after the closing fence (even for an empty body); the platform's own
- * generated pages end immediately after the fence with no trailing newline,
- * so trim it to match.
- */
-function stringifyFrontmatter(frontmatter) {
-  return matter.stringify('', frontmatter).replace(/\n+$/, '');
-}
-
 function buildPageContent({ oasFilename, operationId, isWebhook, hidden = false }) {
   const frontmatter = {
     api: {
@@ -339,7 +329,7 @@ function buildPageContent({ oasFilename, operationId, isWebhook, hidden = false 
     hidden,
   };
 
-  return stringifyFrontmatter(frontmatter);
+  return toFrontmatter(frontmatter);
 }
 
 /**
@@ -354,7 +344,7 @@ function buildTagIndexContent(title, description) {
   // As with operation pages, upload always stamps hidden: false on new pages.
   frontmatter.hidden = false;
 
-  return stringifyFrontmatter(frontmatter);
+  return toFrontmatter(frontmatter);
 }
 
 /**
@@ -493,17 +483,16 @@ function reserveSlug(takenSlugs, base) {
 /**
  * Rewrite a page's frontmatter in place, keeping its body. `mutate` receives
  * a copy of the parsed frontmatter and edits it. Returns true if the file
- * changed. A copy matters: gray-matter caches parse results by input string,
- * so mutating the returned `data` would poison later parses of that content.
+ * changed.
  */
 function updateFrontmatter(filePath, mutate) {
   const content = fs.readFileSync(filePath, 'utf-8');
-  const parsed = matter(content);
+  const parsed = parseFrontmatter(content);
   const data = structuredClone(parsed.data);
   mutate(data);
   const next = parsed.content.trim()
-    ? matter.stringify(parsed.content, data)
-    : stringifyFrontmatter(data);
+    ? toFrontmatter(data, parsed.content)
+    : toFrontmatter(data);
   if (next === content || JSON.stringify(data) === JSON.stringify(parsed.data)) return false;
   fs.writeFileSync(filePath, next);
   return true;
@@ -563,7 +552,7 @@ const INDEX_FILES = ['index.md', 'index.mdx', 'index.html'];
 function isGeneratedTagIndex(indexPath, specDescriptions) {
   let parsed;
   try {
-    parsed = matter(fs.readFileSync(indexPath, 'utf-8'));
+    parsed = parseFrontmatter(fs.readFileSync(indexPath, 'utf-8'));
   } catch {
     return false;
   }

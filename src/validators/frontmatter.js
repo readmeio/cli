@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import matter from 'gray-matter';
 import Ajv from 'ajv';
+import { parseFrontmatter } from '../utils/markdown.js';
 
 const require = createRequire(import.meta.url);
 
@@ -95,7 +95,7 @@ export function validate({ content, filePath, relativePath, fix }) {
   // Step 1: Parse the frontmatter YAML.
   let data;
   try {
-    ({ data } = matter(content));
+    ({ data } = parseFrontmatter(content));
   } catch (e) {
     return {
       file: relativePath,

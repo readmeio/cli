@@ -1,9 +1,9 @@
 import { createRequire } from 'node:module';
 import fs from 'fs';
 import path from 'path';
-import matter from 'gray-matter';
 import { compile, run } from '@readme/markdown';
 import yaml from 'js-yaml';
+import { parseFrontmatter } from '../../utils/markdown.js';
 
 // Use createRequire to load react-dom/server at runtime,
 // bypassing Next.js App Router's static import restriction.
@@ -99,7 +99,7 @@ function walkDir(dirPath, sectionDir, depth = 0) {
       let hidden = false;
       let icon = null;
       if (parentPagePath) {
-        const { data } = matter(fs.readFileSync(parentPagePath, 'utf-8'));
+        const { data } = parseFrontmatter(fs.readFileSync(parentPagePath, 'utf-8'));
         title = data.title || name;
         href = `/${sectionDir}/${encodeURIComponent(name)}`;
         hidden = !!data.hidden;
@@ -112,7 +112,7 @@ function walkDir(dirPath, sectionDir, depth = 0) {
       mdFiles.delete(name);
     } else if (isMd) {
       const filePath = path.join(dirPath, `${name}.md`);
-      const { data } = matter(fs.readFileSync(filePath, 'utf-8'));
+      const { data } = parseFrontmatter(fs.readFileSync(filePath, 'utf-8'));
       const linkUrl = data.link?.url;
       entries.push({
         title: data.title || name,
@@ -152,7 +152,7 @@ function loadCustomBlocks(docsRoot) {
 
   for (const file of files) {
     const raw = fs.readFileSync(path.join(blocksDir, file), 'utf-8');
-    const { data, content } = matter(raw);
+    const { data, content } = parseFrontmatter(raw);
     const name = data.name || path.basename(file, path.extname(file));
     sources[name] = content;
     modules[name] = run(compile(content));
@@ -202,7 +202,7 @@ export function getPage(slugArray) {
   if (!filePath) return null;
 
   const raw = fs.readFileSync(filePath, 'utf-8');
-  const { data, content } = matter(raw);
+  const { data, content } = parseFrontmatter(raw);
 
   let html;
 
