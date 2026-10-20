@@ -46884,69 +46884,63 @@ function loadFrontmatterYAML(yamlContent) {
 /**
  * Parse frontmatter from markdown content. Extracts YAML frontmatter between --- delimiters.
  *
+ * On YAML failure returns `{ content, data: {}, error }` so callers can soft-fail or report.
+ * This function does not throw for invalid YAML.
+ *
  */
 function parseFrontmatter(content) {
-  // Strip BOM (Byte Order Mark) if present
+  // Strip BOM (Byte Order Mark) if present. Non-frontmatter paths always return this string.
   const withoutBom = content.charCodeAt(0) === 0xfeff ? content.slice(1) : content;
 
   // Allow frontmatter to be preceded by blank lines (common in hand-edited docs)
   const stripped = withoutBom.replace(/^[\r\n]+/, '');
 
-  // Check if content starts with ---
-  if (!stripped.startsWith('---')) {
+  // Not frontmatter: keep the original (minus BOM), including leading blank lines
+  if (!stripped.startsWith('---') || (stripped.length > 3 && stripped[3] === '-')) {
     return { content: withoutBom, data: {} };
-  }
-
-  // If the character after --- is also -, then it's not a delimiter (e.g., -----)
-  if (stripped.length > 3 && stripped[3] === '-') {
-    return { content: stripped, data: {} };
   }
 
   // Normalize CRLF (and bare CR) so Windows-saved docs parse like LF files
   const normalized = stripped.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 
-  // Try to match frontmatter with closing delimiter first
-  // Matches: ---\n...content...\n---
-  // The newline after the closing --- is optional but only one newline is consumed
   let match = normalized.match(FRONTMATTER_RE);
   let yamlContent;
   let body;
 
   if (match) {
-    // Found frontmatter with closing delimiter
     yamlContent = match[1];
     body = match[2] || '';
   } else {
-    // Try to match frontmatter without closing delimiter
-    // Matches: ---\n...content... (until end of string)
     match = normalized.match(FRONTMATTER_NOEND_RE);
-    if (match) {
-      yamlContent = match[1];
-      body = '';
-    } else {
-      // No valid frontmatter found
-      return { content: normalized, data: {} };
+    if (!match) {
+      return { content: withoutBom, data: {} };
     }
+    yamlContent = match[1];
+    body = '';
+  }
+
+  // Empty / whitespace-only frontmatter is valid → empty data, no error
+  if (!yamlContent.trim()) {
+    return { content: body, data: {} };
   }
 
   try {
     const parsed = loadFrontmatterYAML(yamlContent);
 
-    // If the parsed YAML is not an object (e.g., a string, number, boolean),
-    // return an empty object for the data, matching gray-matter's behavior
+    // Non-object YAML (string, number, boolean, array) → empty data
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       return { content: body, data: {} };
     }
 
     return { content: body, data: parsed };
-  } catch {
-    return { content: body, data: {} };
+  } catch (err) {
+    return { content: body, data: {}, error: err };
   }
 }
 
 /**
  * Convert a given object into a frontmatter string. When `body` is provided, append it after the
- * closing fence (same shape as gray-matter's `stringify`).
+ * closing fence.
  *
  * @see {@link https://jekyllrb.com/docs/front-matter/}
  */
@@ -47033,12 +47027,7 @@ const CONTENT_DIRS = new Set(["docs", "reference", "custom_pages", "recipes"]);
 function extractComponentTags(content) {
   // Strip frontmatter — mdxishTags parses raw mdxish, so frontmatter values
   // like `foo: <NotAComponent />` would otherwise be picked up.
-  let body;
-  try {
-    ({ content: body } = parseFrontmatter(content));
-  } catch {
-    body = content.replace(/^---[\s\S]*?---/, "");
-  }
+  const { content: body } = parseFrontmatter(content);
 
   try {
     return new Set(mdxishTags(body));
@@ -47142,14 +47131,9 @@ function validate({ content, relativePath }) {
   }
 
   // .mdx component files: validate export and usage example.
-  let data;
-  let body;
-
-  try {
-    ({ data, content: body } = parseFrontmatter(content));
-  } catch {
-    return null; // frontmatter validator handles parse errors.
-  }
+  // Invalid YAML is reported by the frontmatter validator via `error`.
+  const { data, content: body, error } = parseFrontmatter(content);
+  if (error) return null;
 
   const componentName = data.name;
   if (!componentName) return null; // frontmatter validator handles missing name.
@@ -47230,13 +47214,7 @@ function content_validate({ filePath, content, relativePath }) {
   if (!['docs', 'reference', 'custom_pages'].includes(dir)) return null;
   if (!relativePath.endsWith('.md')) return null;
 
-  let data;
-  let body;
-  try {
-    ({ data, content: body } = parseFrontmatter(content));
-  } catch {
-    return null;
-  }
+  const { data, content: body } = parseFrontmatter(content);
 
   if (data.hidden || data.deprecated) return null;
   if (data.api) return null;
@@ -47438,14 +47416,12 @@ for (const [dir, index] of Object.entries(DIR_SCHEMA_INDEX)) {
 
 function frontmatter_validate({ content, filePath, relativePath, fix }) {
   // Step 1: Parse the frontmatter YAML.
-  let data;
-  try {
-    ({ data } = parseFrontmatter(content));
-  } catch (e) {
+  const { data, error } = parseFrontmatter(content);
+  if (error) {
     return {
       file: relativePath,
       rule: frontmatter_name,
-      message: `Invalid frontmatter: ${e.reason || e.message || 'unknown error'}`,
+      message: `Invalid frontmatter: ${error.reason || error.message || 'unknown error'}`,
     };
   }
 
@@ -47641,13 +47617,8 @@ function links_validateAll(files, gitRoot) {
     if (!links_CHECKED_DIRS.includes(topDir)) continue;
     if (!/\.(md|mdx)$/.test(relPath)) continue;
 
-    let body;
-    try {
-      const raw = external_node_fs_namespaceObject.readFileSync(external_node_path_namespaceObject.join(gitRoot, relPath), 'utf-8');
-      ({ content: body } = parseFrontmatter(raw));
-    } catch {
-      continue;
-    }
+    const raw = external_node_fs_namespaceObject.readFileSync(external_node_path_namespaceObject.join(gitRoot, relPath), 'utf-8');
+    const { content: body } = parseFrontmatter(raw);
 
     for (const match of body.matchAll(DOC_LINK_RE)) {
       const prefix = match[0].slice(1, match[0].indexOf(':'));
@@ -48039,19 +48010,15 @@ function collectExistingPages(refDir) {
       if (stat.isDirectory()) {
         walk(full);
       } else if (entry.endsWith('.md')) {
-        try {
-          const content = external_node_fs_namespaceObject.readFileSync(full, 'utf-8');
-          const { data } = parseFrontmatter(content);
-          if (data.api && data.api.file && data.api.operationId) {
-            pages.push({
-              filePath: full,
-              relativePath: external_node_path_namespaceObject.relative(refDir, full),
-              data,
-              content,
-            });
-          }
-        } catch {
-          // Skip unparseable files.
+        const content = external_node_fs_namespaceObject.readFileSync(full, 'utf-8');
+        const { data } = parseFrontmatter(content);
+        if (data.api && data.api.file && data.api.operationId) {
+          pages.push({
+            filePath: full,
+            relativePath: external_node_path_namespaceObject.relative(refDir, full),
+            data,
+            content,
+          });
         }
       }
     }
@@ -48122,14 +48089,6 @@ function isWithin(baseDir, target) {
   );
 }
 
-/**
- * Render a frontmatter-only page. Ends immediately after the closing fence
- * with no trailing newline, matching the platform's own generated pages.
- */
-function stringifyFrontmatter(frontmatter) {
-  return toFrontmatter(frontmatter);
-}
-
 function buildPageContent({ oasFilename, operationId, isWebhook, hidden = false }) {
   const frontmatter = {
     api: {
@@ -48148,7 +48107,7 @@ function buildPageContent({ oasFilename, operationId, isWebhook, hidden = false 
     hidden,
   };
 
-  return stringifyFrontmatter(frontmatter);
+  return toFrontmatter(frontmatter);
 }
 
 /**
@@ -48163,7 +48122,7 @@ function buildTagIndexContent(title, description) {
   // As with operation pages, upload always stamps hidden: false on new pages.
   frontmatter.hidden = false;
 
-  return stringifyFrontmatter(frontmatter);
+  return toFrontmatter(frontmatter);
 }
 
 /**
@@ -48311,7 +48270,7 @@ function updateFrontmatter(filePath, mutate) {
   mutate(data);
   const next = parsed.content.trim()
     ? toFrontmatter(data, parsed.content)
-    : stringifyFrontmatter(data);
+    : toFrontmatter(data);
   if (next === content || JSON.stringify(data) === JSON.stringify(parsed.data)) return false;
   external_node_fs_namespaceObject.writeFileSync(filePath, next);
   return true;
@@ -48369,14 +48328,8 @@ const INDEX_FILES = ['index.md', 'index.mdx', 'index.html'];
  * deleting it. A stale page can be removed by hand; a deleted edit is gone.
  */
 function isGeneratedTagIndex(indexPath, specDescriptions) {
-  let parsed;
-  try {
-    parsed = parseFrontmatter(external_node_fs_namespaceObject.readFileSync(indexPath, 'utf-8'));
-  } catch {
-    return false;
-  }
-  const { data, content } = parsed;
-  if (content.trim()) return false;
+  const { data, content, error } = parseFrontmatter(external_node_fs_namespaceObject.readFileSync(indexPath, 'utf-8'));
+  if (error || content.trim()) return false;
   if (typeof data.title !== 'string' || !('hidden' in data)) return false;
   if (Object.keys(data).some((k) => !['title', 'hidden', 'excerpt'].includes(k))) return false;
   if ('excerpt' in data && !specDescriptions.has(data.excerpt)) return false;
@@ -48931,13 +48884,7 @@ function oas_reference_validateAll(files, gitRoot, { fix } = {}) {
 
   for (const relPath of refPages) {
     const filePath = external_node_path_namespaceObject.join(gitRoot, relPath);
-    let data;
-    try {
-      ({ data } = parseFrontmatter(external_node_fs_namespaceObject.readFileSync(filePath, 'utf-8')));
-    } catch {
-      continue;
-    }
-
+    const { data } = parseFrontmatter(external_node_fs_namespaceObject.readFileSync(filePath, 'utf-8'));
     if (!data.api || !data.api.file) continue;
 
     const oasFilename = data.api.file;
@@ -60693,16 +60640,8 @@ function recipes_validate({ content, relativePath }) {
   if (!relativePath.endsWith('.md')) return null;
 
   const results = [];
-  let data;
-  let body;
-
-  try {
-    ({ data, content: body } = parseFrontmatter(content));
-  } catch {
-    return null;
-  }
-
-  if (!data.recipe) return null;
+  const { data, content: body, error } = parseFrontmatter(content);
+  if (error || !data.recipe) return null;
 
   const codeBlocks = parseCodeBlocks(body);
   const snippetRefs = parseSnippetRefs(body);

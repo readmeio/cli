@@ -1102,8 +1102,7 @@ async function runOasImport(sourcePath, options, startedAt, phases, timePhase) {
   return result
 }
 
-// js-yaml is installed transitively (via oas-sync.js) but not in our direct
-// deps. Load it lazily on first use so the JSON-only path doesn't pay for it.
+// Load js-yaml lazily so the JSON-only import path doesn't pay for it.
 let _yaml = null
 function yamlRequire() {
   if (!_yaml) {

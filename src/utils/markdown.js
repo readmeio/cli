@@ -167,7 +167,7 @@ export function parseFrontmatter(content) {
   try {
     const parsed = loadFrontmatterYAML(yamlContent);
 
-    // Non-object YAML (string, number, boolean, array) → empty data, matching gray-matter
+    // Non-object YAML (string, number, boolean, array) → empty data
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       return { content: body, data: {} };
     }
@@ -180,7 +180,7 @@ export function parseFrontmatter(content) {
 
 /**
  * Convert a given object into a frontmatter string. When `body` is provided, append it after the
- * closing fence (same shape as gray-matter's `stringify`).
+ * closing fence.
  *
  * @see {@link https://jekyllrb.com/docs/front-matter/}
  */

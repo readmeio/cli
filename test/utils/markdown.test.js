@@ -229,8 +229,7 @@ link:
     });
 
     test('should preserve leading newline in body when present after closing ---', () => {
-      // This matches gray-matter behavior: when there's a blank line after ---,
-      // preserve it in the body
+      // When there's a blank line after ---, preserve it in the body
       const content = '---\nname: test\n---\n\n# Content';
 
       assert.deepEqual(parseFrontmatter(content), {
@@ -242,8 +241,7 @@ link:
     });
 
     test('should not add leading newline in body when not present after closing ---', () => {
-      // This matches gray-matter behavior: when there's no blank line after ---,
-      // body starts immediately without leading newline
+      // When there's no blank line after ---, body starts immediately
       const content = '---\nname: test\n---\n# Content';
 
       assert.deepEqual(parseFrontmatter(content), {
