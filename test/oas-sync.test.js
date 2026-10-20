@@ -2,8 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import matter from 'gray-matter';
-import { syncOas } from '../src/commands/oas-sync.js';
+import { parseFrontmatter, toFrontmatter } from '../src/utils/markdown.js';
+import { findOasFiles, syncOas } from '../src/commands/oas-sync.js';
 import { makeRepo, rmRepo } from './helpers.js';
 
 const SPEC = JSON.stringify({
@@ -16,6 +16,36 @@ const SPEC = JSON.stringify({
   },
 });
 
+test('findOasFiles expands YAML merge keys in OpenAPI path items', () => {
+  // js-yaml 5's default CORE_SCHEMA leaves `<<: *anchor` unexpanded; without merge
+  // support this path item would have no HTTP methods and sync would drop its pages.
+  const yaml = `openapi: 3.0.0
+info:
+  title: Pets
+x-methods: &petMethods
+  get:
+    operationId: listPets
+    summary: List pets
+paths:
+  /pets:
+    <<: *petMethods
+`;
+  const root = makeRepo({ 'reference/pets.yaml': yaml });
+  try {
+    const files = findOasFiles(path.join(root, 'reference'));
+    assert.equal(files.length, 1);
+    assert.equal(files[0].filename, 'pets.yaml');
+    assert.equal(files[0].spec.paths['/pets'].get?.operationId, 'listPets');
+    assert.equal('<<' in files[0].spec.paths['/pets'], false);
+
+    syncOas(root);
+    const page = path.join(root, 'reference/Pets/pets/listpets.md');
+    assert.ok(fs.existsSync(page), 'expected page for merge-expanded operation');
+  } finally {
+    rmRepo(root);
+  }
+});
+
 test('generated reference page has only api frontmatter (no title/excerpt)', () => {
   const root = makeRepo({ 'reference/pets.json': SPEC });
   try {
@@ -24,7 +54,7 @@ test('generated reference page has only api frontmatter (no title/excerpt)', () 
     // "Other" folder. Slugs are lowercased to match the platform's OAS-upload output.
     const page = path.join(root, 'reference/Pets/pets/listpets.md');
     assert.ok(fs.existsSync(page), 'expected generated page');
-    const { data } = matter(fs.readFileSync(page, 'utf-8'));
+    const { data } = parseFrontmatter(fs.readFileSync(page, 'utf-8'));
     assert.equal(data.api.file, 'pets.json');
     assert.equal(data.api.operationId, 'listPets');
     // Mirrors upload: new pages are always stamped hidden: false.
@@ -50,7 +80,7 @@ test('sync generates a tag index.md with the tag description from the spec', () 
     syncOas(root);
     const indexPath = path.join(root, 'reference/Sample API/users/index.md');
     assert.ok(fs.existsSync(indexPath), 'expected tag index.md');
-    const { data } = matter(fs.readFileSync(indexPath, 'utf-8'));
+    const { data } = parseFrontmatter(fs.readFileSync(indexPath, 'utf-8'));
     assert.equal(data.title, 'users');
     assert.equal(data.excerpt, 'User management operations');
     assert.equal(data.hidden, false);
@@ -101,7 +131,7 @@ test('sync backfills a missing tag index.md even when all op pages already exist
     syncOas(root);
 
     assert.ok(fs.existsSync(indexPath), 'expected the category index.md to be backfilled');
-    const { data } = matter(fs.readFileSync(indexPath, 'utf-8'));
+    const { data } = parseFrontmatter(fs.readFileSync(indexPath, 'utf-8'));
     assert.equal(data.title, 'widgets');
     assert.equal(data.excerpt, 'Widget operations');
 
@@ -250,7 +280,7 @@ test('an operation named "index" does not clobber the tag index.md', () => {
     const dir = path.join(root, 'reference/Pets/pets');
 
     // index.md is the category page, never an operation.
-    const indexData = matter(fs.readFileSync(path.join(dir, 'index.md'), 'utf-8')).data;
+    const indexData = parseFrontmatter(fs.readFileSync(path.join(dir, 'index.md'), 'utf-8')).data;
     assert.equal(indexData.title, 'pets');
     assert.equal('api' in indexData, false);
 
@@ -258,7 +288,7 @@ test('an operation named "index" does not clobber the tag index.md', () => {
     assert.ok(fs.existsSync(path.join(dir, 'index-1.md')), 'expected index-1.md');
     assert.ok(fs.existsSync(path.join(dir, 'index-2.md')), 'expected index-2.md');
     const opIds = ['index-1', 'index-2'].map(
-      (s) => matter(fs.readFileSync(path.join(dir, `${s}.md`), 'utf-8')).data.api.operationId,
+      (s) => parseFrontmatter(fs.readFileSync(path.join(dir, `${s}.md`), 'utf-8')).data.api.operationId,
     );
     assert.deepEqual([...opIds].sort(), ['INDEX', 'index']);
 
@@ -296,7 +326,7 @@ test('spec-derived names cannot escape the reference directory', () => {
     // swapped for hyphens.
     const page = path.join(refDir, '..-..-escaped-title', 'escaped-tag', '..-escaped-op.md');
     assert.ok(fs.existsSync(page), 'expected sanitized page inside reference/');
-    const { data } = matter(fs.readFileSync(page, 'utf-8'));
+    const { data } = parseFrontmatter(fs.readFileSync(page, 'utf-8'));
     assert.equal(data.api.operationId, '../escaped-op', 'frontmatter keeps the raw operationId');
   } finally {
     rmRepo(root);
@@ -324,7 +354,7 @@ test('operations whose sanitized names collide get distinct suffixed slugs', () 
     const base = path.join(root, 'reference/Pets/other/foo-bar.md');
     const suffixed = path.join(root, 'reference/Pets/other/foo-bar-1.md');
     assert.ok(fs.existsSync(base) && fs.existsSync(suffixed), 'expected foo-bar.md and foo-bar-1.md');
-    const ops = [base, suffixed].map((p) => matter(fs.readFileSync(p, 'utf-8')).data.api.operationId);
+    const ops = [base, suffixed].map((p) => parseFrontmatter(fs.readFileSync(p, 'utf-8')).data.api.operationId);
     assert.deepEqual([...ops].sort(), ['foo/bar', 'foo\\bar']);
 
     // Re-running is stable: both pages already exist (matched by operationId).
@@ -353,7 +383,7 @@ test('sync gives an operation a unique slug rather than overwriting a hand-writt
     // group folder ("/pets" -> "pets"), since "listpets" is already taken.
     const opPage = path.join(root, 'reference/Pets/pets/listpets-1.md');
     assert.ok(fs.existsSync(opPage), 'expected listpets-1.md for the operation');
-    assert.equal(matter(fs.readFileSync(opPage, 'utf-8')).data.api.operationId, 'listPets');
+    assert.equal(parseFrontmatter(fs.readFileSync(opPage, 'utf-8')).data.api.operationId, 'listPets');
   } finally {
     rmRepo(root);
   }
@@ -420,7 +450,7 @@ test('existing reference page title is not overwritten by sync', () => {
   });
   try {
     syncOas(root);
-    const { data } = matter(
+    const { data } = parseFrontmatter(
       fs.readFileSync(path.join(root, 'reference/Pets/Other/listPets.md'), 'utf-8'),
     );
     assert.equal(data.title, 'My custom title');
@@ -467,11 +497,11 @@ test('untagged operations group by path, one folder per unique path, not a share
     assert.equal(fs.existsSync(path.join(refDir, 'search/search.md')), false);
 
     // The category page's title is the raw path, not the sanitized folder name.
-    const petsIndex = matter(fs.readFileSync(path.join(refDir, 'pets/index.md'), 'utf-8')).data;
+    const petsIndex = parseFrontmatter(fs.readFileSync(path.join(refDir, 'pets/index.md'), 'utf-8')).data;
     assert.equal(petsIndex.title, '/pets');
     assert.equal('excerpt' in petsIndex, false);
 
-    const petIdIndex = matter(fs.readFileSync(path.join(refDir, 'petspetid/index.md'), 'utf-8')).data;
+    const petIdIndex = parseFrontmatter(fs.readFileSync(path.join(refDir, 'petspetid/index.md'), 'utf-8')).data;
     assert.equal(petIdIndex.title, '/pets/{petId}');
   } finally {
     rmRepo(root);
@@ -492,7 +522,7 @@ test('an operation with a real tag still groups under that tag, not its path', (
     syncOas(root);
     const refDir = path.join(root, 'reference/Pets');
     assert.ok(fs.existsSync(path.join(refDir, 'pets/listpets.md')));
-    const index = matter(fs.readFileSync(path.join(refDir, 'pets/index.md'), 'utf-8')).data;
+    const index = parseFrontmatter(fs.readFileSync(path.join(refDir, 'pets/index.md'), 'utf-8')).data;
     assert.equal(index.title, 'pets');
     assert.equal(index.excerpt, 'Pet operations');
   } finally {
@@ -588,7 +618,7 @@ test('deleting one of two existing owners of a shared slug does not free it for 
     // ...but the still-existing category folder still owns "shared", so the
     // new operation is suffixed rather than colliding with it.
     assert.ok(fs.existsSync(path.join(root, 'reference/Pets/a/shared-1.md')));
-    const opId = matter(
+    const opId = parseFrontmatter(
       fs.readFileSync(path.join(root, 'reference/Pets/a/shared-1.md'), 'utf-8'),
     ).data.api.operationId;
     assert.equal(opId, 'shared');
@@ -624,7 +654,7 @@ test('a mixed-case tag gets a lowercased folder, but keeps its original case as 
     // some filesystems like macOS's default APFS resolve case-insensitively).
     assert.ok(fs.readdirSync(refDir).includes('mixedcasetag'));
 
-    const index = matter(fs.readFileSync(path.join(refDir, 'mixedcasetag/index.md'), 'utf-8')).data;
+    const index = parseFrontmatter(fs.readFileSync(path.join(refDir, 'mixedcasetag/index.md'), 'utf-8')).data;
     assert.equal(index.title, 'MixedCaseTag');
 
     const order = fs.readFileSync(path.join(refDir, '_order.yaml'), 'utf-8');
@@ -715,7 +745,7 @@ test('a tag folder missing its category index.md is backfilled in place, regardl
     'reference/pets.json': spec,
     // Pre-existing operation page (still current in the spec) under the
     // space-separated folder, with no index.md yet.
-    'reference/Pets/shipping labels/geta.md': matter.stringify('', {
+    'reference/Pets/shipping labels/geta.md': toFrontmatter({
       api: { file: 'pets.json', operationId: 'getA' },
     }),
   });
@@ -786,13 +816,13 @@ test('sync generates a page for a webhook, marked with api.webhook: true', () =>
     syncOas(root);
     const page = path.join(root, 'reference/Payments/paymentcompleted/post_paymentcompleted.md');
     assert.ok(fs.existsSync(page), 'expected a generated webhook page');
-    const { data } = matter(fs.readFileSync(page, 'utf-8'));
+    const { data } = parseFrontmatter(fs.readFileSync(page, 'utf-8'));
     assert.equal(data.api.file, 'payments.json');
     assert.equal(data.api.operationId, 'post_paymentcompleted');
     assert.equal(data.api.webhook, true);
 
     // The category page's title is the webhook's own name, not the folder.
-    const index = matter(
+    const index = parseFrontmatter(
       fs.readFileSync(path.join(root, 'reference/Payments/paymentcompleted/index.md'), 'utf-8'),
     ).data;
     assert.equal(index.title, 'paymentCompleted');
@@ -805,7 +835,7 @@ test('a path operation is not stamped api.webhook', () => {
   const root = makeRepo({ 'reference/pets.json': SPEC });
   try {
     syncOas(root);
-    const { data } = matter(
+    const { data } = parseFrontmatter(
       fs.readFileSync(path.join(root, 'reference/Pets/pets/listpets.md'), 'utf-8'),
     );
     assert.equal('webhook' in data.api, false);
@@ -889,8 +919,8 @@ test('a path and a webhook whose synthesized operationIds collide both still get
     assert.equal(added.length, 2, `expected 2 pages, got: ${JSON.stringify(added)}`);
 
     const refDir = path.join(root, 'reference/Payments/orders');
-    const pathPage = matter(fs.readFileSync(path.join(refDir, 'post_orders.md'), 'utf-8')).data;
-    const webhookPage = matter(
+    const pathPage = parseFrontmatter(fs.readFileSync(path.join(refDir, 'post_orders.md'), 'utf-8')).data;
+    const webhookPage = parseFrontmatter(
       fs.readFileSync(path.join(refDir, 'post_orders-1.md'), 'utf-8'),
     ).data;
     assert.equal('webhook' in pathPage.api, false);
@@ -920,7 +950,7 @@ test('a webhook that is a $ref to components.pathItems is resolved', () => {
     syncOas(root);
     const page = path.join(root, 'reference/Payments/paymentcompleted/onpaymentcompleted.md');
     assert.ok(fs.existsSync(page), 'expected the $ref-resolved webhook to generate a page');
-    const { data } = matter(fs.readFileSync(page, 'utf-8'));
+    const { data } = parseFrontmatter(fs.readFileSync(page, 'utf-8'));
     assert.equal(data.api.operationId, 'onPaymentCompleted');
     assert.equal(data.api.webhook, true);
   } finally {
@@ -950,7 +980,7 @@ test('a $ref to a pathItem that is itself a $ref is followed to the literal Path
     syncOas(root);
     const page = path.join(root, 'reference/Payments/paymentcompleted/onpaymentcompleted.md');
     assert.ok(fs.existsSync(page), 'expected the chained $ref to be followed to the literal Path Item');
-    assert.equal(matter(fs.readFileSync(page, 'utf-8')).data.api.operationId, 'onPaymentCompleted');
+    assert.equal(parseFrontmatter(fs.readFileSync(page, 'utf-8')).data.api.operationId, 'onPaymentCompleted');
   } finally {
     rmRepo(root);
   }
@@ -1034,7 +1064,7 @@ test('an inline operation alongside a $ref sibling is not discarded', () => {
 // --- x-internal ---------------------------------------------------------
 
 function fm(root, rel) {
-  return matter(fs.readFileSync(path.join(root, rel), 'utf-8')).data;
+  return parseFrontmatter(fs.readFileSync(path.join(root, rel), 'utf-8')).data;
 }
 
 function order(root, rel) {
@@ -1342,7 +1372,7 @@ test('apply-tag-changes syncs an existing tag page\'s title and excerpt, keeping
   });
   try {
     syncOas(root);
-    const pets = matter(fs.readFileSync(path.join(root, 'reference/Api/pets/index.md'), 'utf-8'));
+    const pets = parseFrontmatter(fs.readFileSync(path.join(root, 'reference/Api/pets/index.md'), 'utf-8'));
     assert.equal(pets.data.title, 'Pets');
     assert.equal(pets.data.excerpt, 'All about pets');
     assert.match(pets.content, /Body/);

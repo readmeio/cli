@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import matter from 'gray-matter';
 import Ajv from 'ajv';
+import { parseFrontmatter } from '../utils/markdown.js';
 
 const require = createRequire(import.meta.url);
 
@@ -93,14 +93,12 @@ for (const [dir, index] of Object.entries(DIR_SCHEMA_INDEX)) {
 
 export function validate({ content, filePath, relativePath, fix }) {
   // Step 1: Parse the frontmatter YAML.
-  let data;
-  try {
-    ({ data } = matter(content));
-  } catch (e) {
+  const { data, error } = parseFrontmatter(content);
+  if (error) {
     return {
       file: relativePath,
       rule: name,
-      message: `Invalid frontmatter: ${e.reason || e.message || 'unknown error'}`,
+      message: `Invalid frontmatter: ${error.reason || error.message || 'unknown error'}`,
     };
   }
 
@@ -229,11 +227,11 @@ export function validate({ content, filePath, relativePath, fix }) {
     if (keysToFix.length > 0) {
       let fileContent = fs.readFileSync(filePath, 'utf-8');
 
-      // Only replace within the frontmatter block (between the --- delimiters).
-      const fmMatch = fileContent.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-      if (fmMatch) {
+      // Same header boundaries as parseFrontmatter: leading blanks OK; empty
+      // headers (`---\n---`) leave group 1 unset so we skip the rewrite.
+      const fmMatch = fileContent.match(/^[\r\n]*---[ \t]*\r?\n(?:([\s\S]*?)\r?\n)?---[ \t]*/);
+      if (fmMatch && fmMatch[1] != null) {
         let frontmatter = fmMatch[1];
-        const keysToFixSet = new Set(keysToFix);
         for (const key of keysToFix) {
           const regex = new RegExp(`^(${key}:)`, 'gm');
           frontmatter = frontmatter.replace(regex, `x-${key}:`);

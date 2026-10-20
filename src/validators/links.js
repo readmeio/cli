@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import matter from 'gray-matter';
 import { slugForEntry } from '../utils/slug-for-entry.js';
+import { parseFrontmatter } from '../utils/markdown.js';
 
 export const name = 'links';
 
@@ -36,13 +36,8 @@ export function validateAll(files, gitRoot) {
     if (!CHECKED_DIRS.includes(topDir)) continue;
     if (!/\.(md|mdx)$/.test(relPath)) continue;
 
-    let body;
-    try {
-      const raw = fs.readFileSync(path.join(gitRoot, relPath), 'utf-8');
-      ({ content: body } = matter(raw));
-    } catch {
-      continue;
-    }
+    const raw = fs.readFileSync(path.join(gitRoot, relPath), 'utf-8');
+    const { content: body } = parseFrontmatter(raw);
 
     for (const match of body.matchAll(DOC_LINK_RE)) {
       const prefix = match[0].slice(1, match[0].indexOf(':'));
