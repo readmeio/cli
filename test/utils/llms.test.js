@@ -1,6 +1,5 @@
-import { test } from 'node:test'
-import assert from 'node:assert/strict'
-import { parseLlmsTxt, analyzeLlmsTxt } from './llms.js'
+import { describe, test, it, expect } from 'vitest';
+import { parseLlmsTxt, analyzeLlmsTxt } from '../../src/utils/llms.js'
 
 const BASE = 'https://docs.example.com/llms.txt'
 
@@ -15,7 +14,7 @@ test('parseLlmsTxt: root-relative links resolve from the origin by default', () 
   )
 
   const urls = parsed.sections[0].items.map((item) => item.url)
-  assert.deepEqual(urls, [
+  expect(urls).toStrictEqual([
     'https://example.com/overview.md',
     'https://example.com/docs/install.md',
   ])
@@ -29,7 +28,7 @@ test('parseLlmsTxt: explicit llms-dir policy resolves nested root-relative page 
   )
 
   const urls = parsed.sections[0].items.map((item) => item.url)
-  assert.deepEqual(urls, [
+  expect(urls).toStrictEqual([
     'https://example.com/docs/overview.md',
     'https://example.com/docs/api/reference.md',
     'https://example.com/reference/openapi.md',
@@ -44,7 +43,7 @@ test('parseLlmsTxt: llms-dir policy preserves links already scoped to the llms.t
   )
 
   const urls = parsed.sections[0].items.map((item) => item.url)
-  assert.deepEqual(urls, [
+  expect(urls).toStrictEqual([
     'https://example.com/docs/reference.md',
     'https://example.com/docs/api/reference.md?version=1#auth',
   ])
@@ -58,7 +57,7 @@ test('parseLlmsTxt: llms-dir policy does not rewrite explicit nested llms.txt li
   )
 
   const urls = parsed.sections[0].items.map((item) => item.url)
-  assert.deepEqual(urls, [
+  expect(urls).toStrictEqual([
     'https://example.com/api/llms.txt',
     'https://example.com/docs/api/llms.txt',
   ])
@@ -72,7 +71,7 @@ test('parseLlmsTxt: llms-dir policy preserves root-scoped non-page files', () =>
   )
 
   const urls = parsed.sections[0].items.map((item) => item.url)
-  assert.deepEqual(urls, [
+  expect(urls).toStrictEqual([
     'https://example.com/docs/overview.md',
     'https://example.com/reference/openapi.yaml',
     'https://example.com/assets/logo.png',
@@ -87,7 +86,7 @@ test('parseLlmsTxt: llms-dir policy handles query and hash page links', () => {
   )
 
   const urls = parsed.sections[0].items.map((item) => item.url)
-  assert.deepEqual(urls, [
+  expect(urls).toStrictEqual([
     'https://example.com/docs/overview.md?tab=js#install',
     'https://example.com/docs/get-started?tab=js#install',
   ])
@@ -101,7 +100,7 @@ test('parseLlmsTxt: malformed and unsupported links are ignored', () => {
   )
 
   const urls = parsed.sections[0].items.map((item) => item.url)
-  assert.deepEqual(urls, ['https://example.com/docs/ok.md'])
+  expect(urls).toStrictEqual(['https://example.com/docs/ok.md'])
 })
 
 // ---------------------------------------------------------------------------
@@ -121,12 +120,12 @@ test('parseLlmsTxt: parses H1 title and H2 sections', () => {
   ].join('\n')
 
   const result = parseLlmsTxt(body, BASE)
-  assert.equal(result.title, 'My Docs')
-  assert.equal(result.sections.length, 2)
-  assert.equal(result.sections[0].title, 'Getting Started')
-  assert.equal(result.sections[0].items.length, 2)
-  assert.equal(result.sections[1].title, 'Reference')
-  assert.equal(result.h3Fallback, undefined)
+  expect(result.title).toBe('My Docs')
+  expect(result.sections).toHaveLength(2)
+  expect(result.sections[0].title).toBe('Getting Started')
+  expect(result.sections[0].items).toHaveLength(2)
+  expect(result.sections[1].title).toBe('Reference')
+  expect(result.h3Fallback).toBeUndefined()
 })
 
 test('parseLlmsTxt: items with no H2 fall into implicit Resources section', () => {
@@ -136,8 +135,8 @@ test('parseLlmsTxt: items with no H2 fall into implicit Resources section', () =
   ].join('\n')
 
   const result = parseLlmsTxt(body, BASE)
-  assert.equal(result.sections.length, 1)
-  assert.equal(result.sections[0].title, 'Resources')
+  expect(result.sections).toHaveLength(1)
+  expect(result.sections[0].title).toBe('Resources')
 })
 
 test('parseLlmsTxt: strips trailing (section) markers from H2 titles', () => {
@@ -155,8 +154,8 @@ test('parseLlmsTxt: strips trailing (section) markers from H2 titles', () => {
   ].join('\n')
 
   const result = parseLlmsTxt(body, BASE)
-  assert.deepEqual(
-    result.sections.map((s) => s.title),
+  expect(
+    result.sections.map((s) => s.title)).toStrictEqual(
     ['getting-started', 'API Reference', 'Guides (section) extra'],
   )
 })
@@ -177,12 +176,13 @@ test('parseLlmsTxt: strips (section) markers when falling back to H3 headings', 
   ].join('\n')
 
   const result = parseLlmsTxt(body, BASE)
-  assert.equal(result.h3Fallback, true)
+  expect(result.h3Fallback).toBe(true)
+
   const titles = result.sections.map((s) => s.title)
-  assert.ok(titles.includes('getting-started'))
-  assert.ok(titles.includes('Reference'))
-  assert.ok(!titles.includes('getting-started (section)'))
-  assert.ok(!titles.includes('Reference (section)'))
+  expect(titles).toContain('getting-started')
+  expect(titles).toContain('Reference')
+  expect(titles).not.toContain('getting-started (section)')
+  expect(titles).not.toContain('Reference (section)')
 })
 
 // ---------------------------------------------------------------------------
@@ -227,25 +227,25 @@ test('parseLlmsTxt: falls back to H3 when single H2 section is oversized', () =>
   ].join('\n')
 
   const result = parseLlmsTxt(body, BASE)
-  assert.equal(result.h3Fallback, true)
-  assert.ok(result.sections.length > 1, `expected >1 section, got ${result.sections.length}`)
+  expect(result.h3Fallback).toBe(true)
+  expect(result.sections.length).toBeGreaterThan(1, `expected >1 section, got ${result.sections.length}`)
 
   const titles = result.sections.map((s) => s.title)
-  assert.ok(titles.includes('Section A'))
-  assert.ok(titles.includes('Section B'))
+  expect(titles).toContain('Section A')
+  expect(titles).toContain('Section B')
 })
 
 test('parseLlmsTxt: Couchbase-style H3 structure produces one section per SDK', () => {
   const body = makeCouchbaseBody(CB_SECTIONS, 70)
   const result = parseLlmsTxt(body, 'https://docs.couchbase.com/llms.txt')
 
-  assert.equal(result.h3Fallback, true)
-  assert.equal(result.title, 'Couchbase')
-  assert.equal(result.sections.length, 3)
-  assert.equal(result.sections[0].title, '.NET Analytics SDK (1.0)')
-  assert.equal(result.sections[1].title, '.NET Entity Framework (1.0)')
-  assert.equal(result.sections[2].title, '.NET SDK (3.9)')
-  assert.equal(result.sections[0].items.length, 70)
+  expect(result.h3Fallback).toBe(true)
+  expect(result.title).toBe('Couchbase')
+  expect(result.sections).toHaveLength(3)
+  expect(result.sections[0].title).toBe('.NET Analytics SDK (1.0)')
+  expect(result.sections[1].title).toBe('.NET Entity Framework (1.0)')
+  expect(result.sections[2].title).toBe('.NET SDK (3.9)')
+  expect(result.sections[0].items).toHaveLength(70)
 })
 
 test('parseLlmsTxt: does NOT use H3 fallback when H2 sections are usable', () => {
@@ -264,10 +264,10 @@ test('parseLlmsTxt: does NOT use H3 fallback when H2 sections are usable', () =>
   ].join('\n')
 
   const result = parseLlmsTxt(body, BASE)
-  assert.equal(result.h3Fallback, undefined)
-  assert.equal(result.sections.length, 2)
-  assert.equal(result.sections[0].title, 'Section A')
-  assert.equal(result.sections[1].title, 'Section B')
+  expect(result.h3Fallback).toBeUndefined()
+  expect(result.sections).toHaveLength(2)
+  expect(result.sections[0].title).toBe('Section A')
+  expect(result.sections[1].title).toBe('Section B')
 })
 
 test('parseLlmsTxt: does NOT use H3 fallback when no H3 headings exist', () => {
@@ -278,9 +278,9 @@ test('parseLlmsTxt: does NOT use H3 fallback when no H3 headings exist', () => {
   const body = ['# Big Site', '', '## Docs', manyItems].join('\n')
 
   const result = parseLlmsTxt(body, BASE)
-  assert.equal(result.h3Fallback, undefined)
-  assert.equal(result.sections.length, 1)
-  assert.equal(result.sections[0].title, 'Docs')
+  expect(result.h3Fallback).toBeUndefined()
+  expect(result.sections).toHaveLength(1)
+  expect(result.sections[0].title).toBe('Docs')
 })
 
 // ---------------------------------------------------------------------------
@@ -290,13 +290,13 @@ test('parseLlmsTxt: does NOT use H3 fallback when no H3 headings exist', () => {
 test('analyzeLlmsTxt: marks usable when it has link items', () => {
   const body = '## Section\n- [Page](https://docs.example.com/page)'
   const result = analyzeLlmsTxt(body, BASE)
-  assert.equal(result.usable, true)
-  assert.equal(result.reason, null)
+  expect(result.usable).toBe(true)
+  expect(result.reason).toBeNull()
 })
 
 test('analyzeLlmsTxt: marks not usable when no link items', () => {
   const body = '# Just a title\n\nSome prose with no links.'
   const result = analyzeLlmsTxt(body, BASE)
-  assert.equal(result.usable, false)
-  assert.ok(result.reason)
+  expect(result.usable).toBe(false)
+  expect(result.reason).toBeDefined()
 })

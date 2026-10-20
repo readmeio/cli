@@ -1,37 +1,37 @@
-import assert from 'node:assert/strict'
-import { test } from 'node:test'
+import { expect, test } from 'vitest'
 
-import { getClaudeReasoningOptions, getStructuredOutput } from '../src/commands/import.js'
+import { getClaudeReasoningOptions, getStructuredOutput } from '../../../src/commands/import.js'
 
 test('getClaudeReasoningOptions uses adaptive thinking for Sonnet 5', () => {
-  assert.deepEqual(getClaudeReasoningOptions('claude-sonnet-5'), {
+  expect(getClaudeReasoningOptions('claude-sonnet-5')).toStrictEqual({
     thinking: { type: 'adaptive' },
     effort: 'medium',
   })
-  assert.deepEqual(getClaudeReasoningOptions('sonnet'), {
+  expect(getClaudeReasoningOptions('sonnet')).toStrictEqual({
     thinking: { type: 'adaptive' },
     effort: 'medium',
   })
 })
 
 test('getClaudeReasoningOptions leaves older model reasoning unchanged', () => {
-  assert.deepEqual(getClaudeReasoningOptions('haiku'), {})
+  expect(getClaudeReasoningOptions('haiku')).toStrictEqual({})
 })
 
 test('getStructuredOutput includes Claude SDK execution errors', () => {
-  assert.throws(
+  expect(
     () =>
       getStructuredOutput({
         type: 'result',
         subtype: 'error_during_execution',
         errors: ['API Error: 401 invalid x-api-key'],
       }),
+  ).toThrow(
     /Claude failed: error_during_execution — API Error: 401 invalid x-api-key/,
-  )
+  );
 })
 
 test('getStructuredOutput includes response diagnostics when structured output is absent', () => {
-  assert.throws(
+  expect(
     () =>
       getStructuredOutput({
         type: 'result',
@@ -39,14 +39,16 @@ test('getStructuredOutput includes response diagnostics when structured output i
         api_error_status: 401,
         result: 'Authentication failed',
       }),
+  ).toThrow(
     /Claude returned no structured output — API status 401; Authentication failed/,
   )
 })
 
 test('getStructuredOutput returns valid structured output', () => {
   const output = { categories: [] }
-  assert.equal(
+  expect(
     getStructuredOutput({ type: 'result', subtype: 'success', structured_output: output }),
+  ).toStrictEqual(
     output,
-  )
+  );
 })

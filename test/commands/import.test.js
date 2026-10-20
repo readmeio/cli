@@ -1,6 +1,5 @@
-import { afterEach, test } from 'node:test'
-import assert from 'node:assert/strict'
-import { __test__ } from './import.js'
+import { afterEach, test, expect } from 'vitest'
+import { __test__ } from '../../src/commands/import.js'
 
 const originalFetch = globalThis.fetch
 
@@ -46,21 +45,21 @@ test('llms discovery and merge resolve nested files, dedupe canonical pages, and
   const items = mergedItems(merged)
   const urls = items.map((item) => item.url)
 
-  assert(seen.includes('https://example.com/docs/guide/llms.txt'))
-  assert(seen.includes('https://example.com/docs/api/llms.txt'))
+  expect(seen.includes('https://example.com/docs/guide/llms.txt')).toBe(true)
+  expect(seen.includes('https://example.com/docs/api/llms.txt')).toBe(true)
 
-  assert.equal(urls.filter((url) => url.includes('/docs/guide/getting-started')).length, 1)
-  assert(urls.includes('https://example.com/docs/guide/getting-started.md'))
+  expect(urls.filter((url) => url.includes('/docs/guide/getting-started'))).toHaveLength(1)
+  expect(urls.includes('https://example.com/docs/guide/getting-started.md')).toBe(true)
 
-  assert(urls.includes('https://example.com/docs/guide/search?product=api'))
-  assert(urls.includes('https://example.com/docs/guide/search?product=sdk'))
-  assert.equal(urls.filter((url) => url.includes('/docs/guide/search?product=api')).length, 1)
+  expect(urls.includes('https://example.com/docs/guide/search?product=api')).toBe(true)
+  expect(urls.includes('https://example.com/docs/guide/search?product=sdk')).toBe(true)
+  expect(urls.filter((url) => url.includes('/docs/guide/search?product=api'))).toHaveLength(1)
 
-  assert(urls.includes('https://example.com/docs/api/reference.md'))
-  assert(urls.includes('https://example.com/openapi.yaml'))
+  expect(urls.includes('https://example.com/docs/api/reference.md')).toBe(true)
+  expect(urls.includes('https://example.com/openapi.yaml')).toBe(true)
 
-  assert(!urls.some((url) => url.includes('%zz')))
-  assert(!urls.some((url) => url.startsWith('mailto:') || url.startsWith('javascript:')))
+  expect(!urls.some((url) => url.includes('%zz'))).toBe(true)
+  expect(!urls.some((url) => url.startsWith('mailto:') || url.startsWith('javascript:'))).toBe(true)
 })
 
 test('llms.txt fetched through a cross-origin redirect resolves links against the final URL', async () => {
@@ -75,9 +74,9 @@ test('llms.txt fetched through a cross-origin redirect resolves links against th
   const merged = __test__.mergeValidHits(discovery.hits)
   const urls = mergedItems(merged).map((item) => item.url)
 
-  assert(urls.includes('https://example.com/docs/sample-apis.md'))
-  assert(urls.includes('https://example.com/docs/policies.md'))
-  assert(!urls.some((url) => url.startsWith('https://docs.example.com/')))
+  expect(urls.includes('https://example.com/docs/sample-apis.md')).toBe(true)
+  expect(urls.includes('https://example.com/docs/policies.md')).toBe(true)
+  expect(urls.some((url) => url.startsWith('https://docs.example.com/'))).toBe(false)
 })
 
 test('nested llms.txt with its own redirect resolves links on its final path', async () => {
@@ -95,10 +94,10 @@ test('nested llms.txt with its own redirect resolves links on its final path', a
   const merged = __test__.mergeValidHits(discovery.hits)
   const urls = mergedItems(merged).map((item) => item.url)
 
-  assert(urls.includes('https://example.com/docs/guide/intro.md'))
-  assert(urls.includes('https://example.com/docs/guide/setup.md'))
-  assert(!urls.includes('https://example.com/guide/intro.md'))
-  assert(!urls.includes('https://example.com/guide/setup.md'))
+  expect(urls.includes('https://example.com/docs/guide/intro.md')).toBe(true)
+  expect(urls.includes('https://example.com/docs/guide/setup.md')).toBe(true)
+  expect(urls.includes('https://example.com/guide/intro.md')).toBe(false)
+  expect(urls.includes('https://example.com/guide/setup.md')).toBe(false)
 })
 
 test('resolveRedirectedSourceUrl adopts cross-origin path redirects', async () => {
@@ -106,33 +105,33 @@ test('resolveRedirectedSourceUrl adopts cross-origin path redirects', async () =
     'https://docs.example.com/': { finalUrl: 'https://example.com/docs' },
   })
   const final = await __test__.resolveRedirectedSourceUrl(new URL('https://docs.example.com/'))
-  assert.equal(final?.href, 'https://example.com/docs')
+  expect(final?.href).toBe('https://example.com/docs')
 })
 
 test('resolveRedirectedSourceUrl ignores trailing-slash redirects', async () => {
   mockRedirectFetch({
     'https://example.com/docs': { finalUrl: 'https://example.com/docs/' },
   })
-  assert.equal(await __test__.resolveRedirectedSourceUrl(new URL('https://example.com/docs')), null)
+  await expect(__test__.resolveRedirectedSourceUrl(new URL('https://example.com/docs'))).resolves.toBeNull()
 })
 
 test('resolveRedirectedSourceUrl ignores query and hash-only redirects', async () => {
   mockRedirectFetch({
     'https://example.com/docs': { finalUrl: 'https://example.com/docs?lang=en#top' },
   })
-  assert.equal(await __test__.resolveRedirectedSourceUrl(new URL('https://example.com/docs')), null)
+  await expect(__test__.resolveRedirectedSourceUrl(new URL('https://example.com/docs'))).resolves.toBeNull()
 })
 
 test('resolveRedirectedSourceUrl returns null on non-ok responses', async () => {
   globalThis.fetch = async (url) => ({ ok: false, status: 500, url: String(url), text: async () => '' })
-  assert.equal(await __test__.resolveRedirectedSourceUrl(new URL('https://example.com/')), null)
+  await expect(__test__.resolveRedirectedSourceUrl(new URL('https://example.com/'))).resolves.toBeNull()
 })
 
 test('resolveRedirectedSourceUrl returns null when fetch throws', async () => {
   globalThis.fetch = async () => {
     throw new Error('network down')
   }
-  assert.equal(await __test__.resolveRedirectedSourceUrl(new URL('https://example.com/')), null)
+  await expect(__test__.resolveRedirectedSourceUrl(new URL('https://example.com/'))).resolves.toBeNull()
 })
 
 function mockDocsProbeFetch(files, { catchAllBody } = {}) {
@@ -151,16 +150,16 @@ test('resolveDocsBaseUrl adopts a path route whose trailing slash gets stripped 
     'https://example.com/docs/': { finalUrl: 'https://example.com/docs', body: '<title>API Docs</title>' },
   })
   const result = await __test__.resolveDocsBaseUrl(new URL('https://example.com'))
-  assert.equal(result?.url.href, 'https://example.com/docs/')
-  assert.equal(result?.kind, 'path')
-  assert.equal(result?.hasLlms, false)
+  expect(result?.url.href).toBe('https://example.com/docs/')
+  expect(result?.kind).toBe('path')
+  expect(result?.hasLlms).toBe(false)
 })
 
 test('resolveDocsBaseUrl rejects a path route that redirects to the homepage', async () => {
   mockDocsProbeFetch({
     'https://example.com/docs/': { finalUrl: 'https://example.com/' },
   })
-  assert.equal(await __test__.resolveDocsBaseUrl(new URL('https://example.com')), null)
+  await expect(__test__.resolveDocsBaseUrl(new URL('https://example.com'))).resolves.toBeNull()
 })
 
 test('resolveDocsBaseUrl skips SPA catch-all routes and adopts the route with distinct content', async () => {
@@ -171,24 +170,24 @@ test('resolveDocsBaseUrl skips SPA catch-all routes and adopts the route with di
     { catchAllBody: '<title>Example - Empowering</title>' },
   )
   const result = await __test__.resolveDocsBaseUrl(new URL('https://example.com'))
-  assert.equal(result?.url.href, 'https://example.com/developers/')
-  assert.equal(result?.kind, 'path')
-  assert.equal(result?.hasLlms, false)
+  expect(result?.url.href).toBe('https://example.com/developers/')
+  expect(result?.kind).toBe('path')
+  expect(result?.hasLlms).toBe(false)
 })
 
 test('resolveDocsBaseUrl returns null when every candidate fails', async () => {
   mockDocsProbeFetch({})
-  assert.equal(await __test__.resolveDocsBaseUrl(new URL('https://example.com')), null)
+  await expect(__test__.resolveDocsBaseUrl(new URL('https://example.com'))).resolves.toBeNull()
 })
 
 test('inCandidateScope normalizes trailing slashes and enforces segment boundaries', () => {
   const candidate = { kind: 'path', url: new URL('https://example.com/docs/') }
-  assert.equal(__test__.inCandidateScope(candidate, 'https://example.com/docs'), true)
-  assert.equal(__test__.inCandidateScope(candidate, 'https://www.example.com/docs'), true)
-  assert.equal(__test__.inCandidateScope(candidate, 'https://example.com/docs/llms.txt'), true)
-  assert.equal(__test__.inCandidateScope(candidate, 'https://example.com/DOCS//'), true)
-  assert.equal(__test__.inCandidateScope(candidate, 'https://example.com/docsomething'), false)
-  assert.equal(__test__.inCandidateScope(candidate, 'https://example.com/'), false)
+  expect(__test__.inCandidateScope(candidate, 'https://example.com/docs')).toBe(true)
+  expect(__test__.inCandidateScope(candidate, 'https://www.example.com/docs')).toBe(true)
+  expect(__test__.inCandidateScope(candidate, 'https://example.com/docs/llms.txt')).toBe(true)
+  expect(__test__.inCandidateScope(candidate, 'https://example.com/DOCS//')).toBe(true)
+  expect(__test__.inCandidateScope(candidate, 'https://example.com/docsomething')).toBe(false)
+  expect(__test__.inCandidateScope(candidate, 'https://example.com/')).toBe(false)
 })
 
 function fernHtml(fragments, { aside = true, generator = false, extraBody = '' } = {}) {
@@ -226,18 +225,20 @@ const GEN2_TREE =
   '{"type":"page","id":"03b7470af4ce00f9a9dc979ba32fec3fd1c4a7bd","title":"Deep page","slug":"nested/deep","hidden":false}]}]}]}]}]'
 
 function assertGetStartedTree(nav) {
-  assert.equal(nav.categories.length, 1)
+  expect(nav.categories).toHaveLength(1)
+
   const [category] = nav.categories
-  assert.equal(category.title, 'Get started')
-  assert.deepEqual(
-    category.pages.map((p) => p.url),
+  expect(category.title).toBe('Get started')
+  expect(
+    category.pages.map((p) => p.url)).toStrictEqual(
     ['https://fern.example/intro', 'https://fern.example/nested/overview'],
   )
-  assert.equal(category.pages[0].title, 'Introduction')
-  assert(!category.pages.some((p) => p.title === 'Secret'))
+  expect(category.pages[0].title).toBe('Introduction')
+  expect(!category.pages.some((p) => p.title === 'Secret')).toBe(true)
+
   const nested = category.pages[1]
-  assert.equal(nested.title, 'Nested')
-  assert.deepEqual(nested.pages, [{ title: 'Deep page', url: 'https://fern.example/nested/deep' }])
+  expect(nested.title).toBe('Nested')
+  expect(nested.pages).toStrictEqual([{ title: 'Deep page', url: 'https://fern.example/nested/deep' }])
 }
 
 test('tryFernNav parses the page:<slug> id generation into nested categories, skipping hidden pages', async () => {
@@ -260,7 +261,7 @@ test('tryFernNav detects via generator meta when the sidebar aside is absent', a
 
 test('tryFernNav returns null when neither detection signal is present', async () => {
   mockHtmlFetch({ 'https://fern.example/intro': fernHtml([GEN1_TREE], { aside: false }) })
-  assert.equal(await __test__.tryFernNav('https://fern.example/intro', []), null)
+  await expect(__test__.tryFernNav('https://fern.example/intro', [])).resolves.toBeNull()
 })
 
 test('tryFernNav ignores prose mentions of the detection signals', async () => {
@@ -270,12 +271,12 @@ test('tryFernNav ignores prose mentions of the detection signals', async () => {
       extraBody: '<p>Docs generated with buildwithfern.com use an aside with id="fern-sidebar".</p>',
     }),
   })
-  assert.equal(await __test__.tryFernNav('https://fern.example/intro', []), null)
+  await expect(__test__.tryFernNav('https://fern.example/intro', [])).resolves.toBeNull()
 })
 
 test('tryFernNav returns null when the page has no flight chunks', async () => {
   mockHtmlFetch({ 'https://fern.example/intro': fernHtml([]) })
-  assert.equal(await __test__.tryFernNav('https://fern.example/intro', []), null)
+  await expect(__test__.tryFernNav('https://fern.example/intro', [])).resolves.toBeNull()
 })
 
 test('tryFernNav retries from a known page when the entry URL is dead', async () => {
@@ -283,17 +284,15 @@ test('tryFernNav retries from a known page when the entry URL is dead', async ()
   const nav = await __test__.tryFernNav('https://fern.example/dead-slug', [
     { title: 'Deep page', url: 'https://fern.example/nested/deep.md', description: undefined },
   ])
-  assert.equal(nav.categories.length, 1)
-  assert.equal(nav.categories[0].title, 'Get started')
-  assert.deepEqual(nav.categories[0].pages[1].pages, [{ title: 'Deep page', url: 'https://fern.example/nested/deep.md' }])
+  expect(nav.categories).toHaveLength(1)
+  expect(nav.categories[0].title).toBe('Get started')
+  expect(nav.categories[0].pages[1].pages).toStrictEqual([{ title: 'Deep page', url: 'https://fern.example/nested/deep.md' }])
 })
 
 test('tryFernNav returns null when the entry URL is dead and the known page is not Fern', async () => {
   mockHtmlFetch({ 'https://fern.example/nested/deep': fernHtml([GEN1_TREE], { aside: false }) })
-  assert.equal(
-    await __test__.tryFernNav('https://fern.example/dead-slug', [{ title: 'Deep page', url: 'https://fern.example/nested/deep.md', description: undefined }]),
-    null,
-  )
+  await expect(
+    __test__.tryFernNav('https://fern.example/dead-slug', [{ title: 'Deep page', url: 'https://fern.example/nested/deep.md', description: undefined }])).resolves.toBeNull();
 })
 
 test('tryFernNav keeps the sidebar title but takes urls and descriptions from llms.txt', async () => {
@@ -301,7 +300,7 @@ test('tryFernNav keeps the sidebar title but takes urls and descriptions from ll
   const nav = await __test__.tryFernNav('https://fern.example/intro', [
     { title: 'Welcome', url: 'https://fern.example/intro.md', description: 'Start here' },
   ])
-  assert.deepEqual(nav.categories[0].pages[0], { title: 'Introduction', url: 'https://fern.example/intro.md', description: 'Start here' })
+  expect(nav.categories[0].pages[0]).toStrictEqual({ title: 'Introduction', url: 'https://fern.example/intro.md', description: 'Start here' })
 })
 
 test('tryFernNav treats section pointsTo as an alias: the first child keeps its page and the section becomes a titled group', async () => {
@@ -313,14 +312,16 @@ test('tryFernNav treats section pointsTo as an alias: the first child keeps its 
     '{"type":"page","id":"page:billing/manage","title":"Manage billing","slug":"billing/manage","hidden":false},' +
     '{"type":"page","id":"page:billing/limits","title":"Billing limits","slug":"billing/limits","hidden":false}]}]}]}]}]'
   mockHtmlFetch({ 'https://fern.example/intro': fernHtml([tree]) })
+
   const nav = await __test__.tryFernNav('https://fern.example/intro', [])
   const [category] = nav.categories
-  assert.equal(category.title, 'Guides')
+  expect(category.title).toBe('Guides')
+
   const billing = category.pages[0]
-  assert.equal(billing.title, 'Billing')
-  assert.equal(billing.url, null)
-  assert.deepEqual(
-    billing.pages.map((p) => [p.title, p.url]),
+  expect(billing.title).toBe('Billing')
+  expect(billing.url).toBeNull()
+  expect(
+    billing.pages.map((p) => [p.title, p.url])).toStrictEqual(
     [
       ['Manage billing', 'https://fern.example/billing/manage'],
       ['Billing limits', 'https://fern.example/billing/limits'],
@@ -345,12 +346,12 @@ test('tryFernNav fetches non-active tabs once and merges their trees', async () 
     'https://fern.example/api/start': fernHtml([API_TAB_TREE]),
   })
   const nav = await __test__.tryFernNav('https://fern.example/intro', [])
-  assert.deepEqual(
-    nav.categories.map((c) => c.title),
+  expect(
+    nav.categories.map((c) => c.title)).toStrictEqual(
     ['Get started', 'Pets'],
   )
-  assert.deepEqual(
-    nav.categories[1].pages.map((p) => p.url),
+  expect(
+    nav.categories[1].pages.map((p) => p.url)).toStrictEqual(
     ['https://fern.example/api/start', 'https://fern.example/api/pets/create'],
   )
 })
@@ -366,8 +367,8 @@ test('tryFernNav names an untitled tab-tree root after its tab', async () => {
     'https://fern.example/api/start': fernHtml([untitledTabTree]),
   })
   const nav = await __test__.tryFernNav('https://fern.example/intro', [])
-  assert.deepEqual(
-    nav.categories.map((c) => c.title),
+  expect(
+    nav.categories.map((c) => c.title)).toStrictEqual(
     ['Get started', 'API Reference'],
   )
 })

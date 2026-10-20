@@ -1,6 +1,5 @@
-import { afterEach, test } from 'node:test'
-import assert from 'node:assert/strict'
-import { __test__ } from './import.js'
+import { afterEach, test, expect } from 'vitest'
+import { __test__ } from '../../../src/commands/import.js'
 
 const {
   injectSectionLandingPages,
@@ -31,39 +30,39 @@ function mockLandingFetch(routes) {
 
 test('parseMetaRefreshTarget resolves relative, quoted, and entity-encoded targets', () => {
   const base = 'https://example.com/docs/guides/'
-  assert.equal(
-    parseMetaRefreshTarget('<meta http-equiv="refresh" content="0;url=/docs/guides/intro">', base),
+  expect(
+    parseMetaRefreshTarget('<meta http-equiv="refresh" content="0;url=/docs/guides/intro">', base)).toBe(
     'https://example.com/docs/guides/intro',
   )
-  assert.equal(
-    parseMetaRefreshTarget("<meta http-equiv='refresh' content='0; url=intro'>", base),
+  expect(
+    parseMetaRefreshTarget("<meta http-equiv='refresh' content='0; url=intro'>", base)).toBe(
     'https://example.com/docs/guides/intro',
   )
-  assert.equal(
-    parseMetaRefreshTarget('<meta http-equiv="refresh" content="0;url=/docs/guides?tab=js&amp;x=1">', base),
+  expect(
+    parseMetaRefreshTarget('<meta http-equiv="refresh" content="0;url=/docs/guides?tab=js&amp;x=1">', base)).toBe(
     'https://example.com/docs/guides?tab=js&x=1',
   )
-  assert.equal(parseMetaRefreshTarget('<html><title>Guides</title></html>', base), null)
-  assert.equal(parseMetaRefreshTarget('', base), null)
-  assert.equal(parseMetaRefreshTarget('<meta http-equiv="refresh" content="5">', base), null)
+  expect(parseMetaRefreshTarget('<html><title>Guides</title></html>', base)).toBeNull()
+  expect(parseMetaRefreshTarget('', base)).toBeNull()
+  expect(parseMetaRefreshTarget('<meta http-equiv="refresh" content="5">', base)).toBeNull()
 })
 
 test('parseHtmlCanonical resolves relative and entity-encoded hrefs', () => {
   const base = 'https://example.com/docs/guides/'
-  assert.equal(
-    parseHtmlCanonical('<link rel="canonical" href="/docs/guides/intro">', base),
+  expect(
+    parseHtmlCanonical('<link rel="canonical" href="/docs/guides/intro">', base)).toBe(
     'https://example.com/docs/guides/intro',
   )
-  assert.equal(
-    parseHtmlCanonical("<link rel='canonical' href='intro'>", base),
+  expect(
+    parseHtmlCanonical("<link rel='canonical' href='intro'>", base)).toBe(
     'https://example.com/docs/guides/intro',
   )
-  assert.equal(
-    parseHtmlCanonical('<link rel="canonical" href="/docs/guides?tab=js&amp;x=1">', base),
+  expect(
+    parseHtmlCanonical('<link rel="canonical" href="/docs/guides?tab=js&amp;x=1">', base)).toBe(
     'https://example.com/docs/guides?tab=js&x=1',
   )
-  assert.equal(parseHtmlCanonical('<html></html>', base), null)
-  assert.equal(parseHtmlCanonical('', base), null)
+  expect(parseHtmlCanonical('<html></html>', base)).toBeNull()
+  expect(parseHtmlCanonical('', base)).toBeNull()
 })
 
 test('injectSectionLandingPages prepends a real common-prefix landing page', async () => {
@@ -84,9 +83,9 @@ test('injectSectionLandingPages prepends a real common-prefix landing page', asy
 
   await injectSectionLandingPages(organized, 'https://example.com/docs')
 
-  assert.equal(organized.categories[0].pages[0].url, 'https://example.com/docs/guides')
-  assert.equal(organized.categories[0].pages[0].title, 'Guides')
-  assert.equal(organized.categories[0].pages.length, 3)
+  expect(organized.categories[0].pages[0].url).toBe('https://example.com/docs/guides')
+  expect(organized.categories[0].pages[0].title).toBe('Guides')
+  expect(organized.categories[0].pages).toHaveLength(3)
 })
 
 test('injectSectionLandingPages skips client-redirect stub landings via meta refresh', async () => {
@@ -108,8 +107,8 @@ test('injectSectionLandingPages skips client-redirect stub landings via meta ref
   }
 
   await injectSectionLandingPages(organized, 'https://example.com/docs')
-  assert.deepEqual(
-    organized.categories[0].pages.map((p) => p.url),
+  expect(
+    organized.categories[0].pages.map((p) => p.url)).toStrictEqual(
     ['https://example.com/docs/guides/intro', 'https://example.com/docs/guides/install'],
   )
 })
@@ -133,7 +132,7 @@ test('injectSectionLandingPages skips landings whose canonical points at a known
   }
 
   await injectSectionLandingPages(organized, 'https://example.com/docs')
-  assert.equal(organized.categories[0].pages.length, 2)
+  expect(organized.categories[0].pages).toHaveLength(2)
 })
 
 test('injectSectionLandingPages skips landings that HTTP-redirect onto a known child', async () => {
@@ -156,7 +155,7 @@ test('injectSectionLandingPages skips landings that HTTP-redirect onto a known c
   }
 
   await injectSectionLandingPages(organized, 'https://example.com/docs')
-  assert.equal(organized.categories[0].pages.length, 2)
+  expect(organized.categories[0].pages).toHaveLength(2)
 })
 
 test('injectSectionLandingPages does not probe the import base or categories with a single child', async () => {
@@ -182,9 +181,9 @@ test('injectSectionLandingPages does not probe the import base or categories wit
   }
 
   await injectSectionLandingPages(organized, 'https://example.com/docs')
-  assert.deepEqual(seen, [])
-  assert.equal(organized.categories[0].pages.length, 2)
-  assert.equal(organized.categories[1].pages.length, 1)
+  expect(seen).toStrictEqual([])
+  expect(organized.categories[0].pages).toHaveLength(2)
+  expect(organized.categories[1].pages).toHaveLength(1)
 })
 
 test('injectSectionLandingPages ignores 404s and fetch failures', async () => {
@@ -212,6 +211,6 @@ test('injectSectionLandingPages ignores 404s and fetch failures', async () => {
   }
 
   await injectSectionLandingPages(organized, 'https://example.com/docs')
-  assert.equal(organized.categories[0].pages.length, 2)
-  assert.equal(organized.categories[1].pages.length, 2)
+  expect(organized.categories[0].pages).toHaveLength(2)
+  expect(organized.categories[1].pages).toHaveLength(2)
 })

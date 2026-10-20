@@ -1,6 +1,5 @@
-import { test } from 'node:test';
-import assert from 'node:assert/strict';
-import { validate } from '../src/validators/frontmatter.js';
+import { expect, test } from 'vitest';
+import { validate } from '../../src/validators/frontmatter.js';
 
 function messages(result) {
   if (!result) return [];
@@ -14,10 +13,10 @@ test('reference page with api but no title is not flagged for missing title', ()
     relativePath: 'reference/Pets/Other/listPets.md',
     filePath: '/tmp/listPets.md',
   });
-  assert.ok(
+  expect(
     !messages(result).some((m) => m.includes("must have required property 'title'")),
     'missing-title error should be suppressed for api-backed reference pages',
-  );
+  ).toBe(true);
 });
 
 test('reference page WITHOUT api still requires title', () => {
@@ -27,10 +26,10 @@ test('reference page WITHOUT api still requires title', () => {
     relativePath: 'reference/loose.md',
     filePath: '/tmp/loose.md',
   });
-  assert.ok(
+  expect(
     messages(result).some((m) => m.includes("must have required property 'title'")),
     'non-api reference pages should still require a title',
-  );
+  ).toBe(true);
 });
 
 test('docs page without title is still flagged', () => {
@@ -40,8 +39,8 @@ test('docs page without title is still flagged', () => {
     relativePath: 'docs/some-page.md',
     filePath: '/tmp/some-page.md',
   });
-  assert.ok(
+  expect(
     messages(result).some((m) => m.includes("must have required property 'title'")),
     'docs pages should still require a title',
-  );
+  ).toBe(true);
 });
