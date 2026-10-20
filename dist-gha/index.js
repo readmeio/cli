@@ -46765,10 +46765,46 @@ function removeUndefinedObjects(obj, options) {
 // Ten parses bounds a frontmatter block full of broken lines.
 const MAX_FRONTMATTER_YAML_ATTEMPTS = 10;
 
-// Opening fence, optional YAML (must end with a newline when present), closing fence, body.
-// The YAML group is optional so empty headers (`---\n---\n# Body`) still yield the body.
-const FRONTMATTER_RE = /^---\s*\r?\n(?:([\s\S]*?)\r?\n)?---\r?\n?([\s\S]*)$/;
-const FRONTMATTER_NOEND_RE = /^---\s*\r?\n([\s\S]*)$/;
+/** A frontmatter fence line: `---` with optional trailing spaces/tabs. */
+const FENCE_LINE = /^---[ \t]*$/;
+
+/**
+ * Split a normalized (LF) document that starts with a `---` fence into YAML + body.
+ * The closing fence is a line that is exactly `---` (optional trailing spaces) —
+ * including adjacent empty headers (`---\n---\n# Body`).
+ */
+function splitFrontmatter(normalized) {
+  const firstNl = normalized.indexOf('\n');
+  if (firstNl === -1) {
+    return FENCE_LINE.test(normalized) ? { yamlContent: '', body: '' } : null;
+  }
+
+  const firstLine = normalized.slice(0, firstNl);
+  if (!FENCE_LINE.test(firstLine)) {
+    return null;
+  }
+
+  const rest = normalized.slice(firstNl + 1);
+  const lines = rest.split('\n');
+
+  // Find the closing fence line (may be the first line for empty headers).
+  let closeIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (FENCE_LINE.test(lines[i])) {
+      closeIdx = i;
+      break;
+    }
+  }
+
+  if (closeIdx === -1) {
+    // Opening fence only — treat the remainder as YAML, empty body
+    return { yamlContent: rest, body: '' };
+  }
+
+  const yamlContent = lines.slice(0, closeIdx).join('\n');
+  const body = lines.slice(closeIdx + 1).join('\n');
+  return { yamlContent, body };
+}
 
 // A mapping entry whose value is still a plain scalar: `description: POST : PATCH`.
 // `:[ \t]` matches PLAIN_SCALAR_COLON: space or tab ends a plain scalar.
@@ -46905,22 +46941,11 @@ function parseFrontmatter(content) {
   // Normalize CRLF (and bare CR) so Windows-saved docs parse like LF files
   const normalized = stripped.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 
-  let match = normalized.match(FRONTMATTER_RE);
-  let yamlContent;
-  let body;
-
-  if (match) {
-    // Group 1 is absent for empty headers (`---\n---`).
-    yamlContent = match[1] ?? '';
-    body = match[2] || '';
-  } else {
-    match = normalized.match(FRONTMATTER_NOEND_RE);
-    if (!match) {
-      return { content: withoutBom, data: {} };
-    }
-    yamlContent = match[1];
-    body = '';
+  const split = splitFrontmatter(normalized);
+  if (!split) {
+    return { content: withoutBom, data: {} };
   }
+  const { yamlContent, body } = split;
 
   // Empty / whitespace-only frontmatter is valid → empty data, no error
   if (!yamlContent.trim()) {
@@ -47564,9 +47589,9 @@ function frontmatter_validate({ content, filePath, relativePath, fix }) {
     if (keysToFix.length > 0) {
       let fileContent = external_node_fs_namespaceObject.readFileSync(filePath, 'utf-8');
 
-      // Same header boundaries as parseFrontmatter: allow leading blank lines,
-      // and empty headers (`---\n---`) where the YAML group is absent.
-      const fmMatch = fileContent.match(/^[\r\n]*---\r?\n(?:([\s\S]*?)\r?\n)?---/);
+      // Same header boundaries as parseFrontmatter: leading blanks OK; empty
+      // headers (`---\n---`) leave group 1 unset so we skip the rewrite.
+      const fmMatch = fileContent.match(/^[\r\n]*---[ \t]*\r?\n(?:([\s\S]*?)\r?\n)?---[ \t]*/);
       if (fmMatch && fmMatch[1] != null) {
         let frontmatter = fmMatch[1];
         for (const key of keysToFix) {
@@ -47808,6 +47833,9 @@ const description = 'Sync reference pages with OpenAPI specs';
 
 const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'options', 'head', 'trace']);
 
+// js-yaml 5's CORE_SCHEMA omits YAML merge keys (`<<: *anchor`). OpenAPI specs commonly
+// reuse path items via merges — keep that working when reading YAML specs.
+const OAS_YAML_SCHEMA = CORE_SCHEMA.withTags(mergeTag);
 
 /**
  * Find OAS files at the root of reference/ (JSON or YAML).
@@ -47816,10 +47844,6 @@ function findOasFiles(refDir) {
   const entries = external_node_fs_namespaceObject.readdirSync(refDir);
   const oasFiles = [];
 
-  // `js-yaml` 5 defaults to `CORE_SCHEMA` without YAML merge keys (`<<: *anchor`). OpenAPI specs
-  // commonly reuse path items via merges; keep that working.
-  const LOAD_SCHEMA = CORE_SCHEMA.withTags(mergeTag);
-
   for (const entry of entries) {
     if (!/\.(json|yaml|yml)$/i.test(entry)) continue;
     const filePath = external_node_path_namespaceObject.join(refDir, entry);
@@ -47827,11 +47851,9 @@ function findOasFiles(refDir) {
 
     try {
       const raw = external_node_fs_namespaceObject.readFileSync(filePath, 'utf-8');
-      const parsed = entry.endsWith('.json') ? JSON.parse(raw) : load(raw, {
-        // Load YAML with merge-key support (same defaults as `js-yaml` 4's `DEFAULT_SCHEMA`
-        // for `<<` anchors).
-        schema: LOAD_SCHEMA
-      });
+      const parsed = entry.endsWith('.json')
+        ? JSON.parse(raw)
+        : load(raw, { schema: OAS_YAML_SCHEMA });
 
       if (parsed && (parsed.openapi || parsed.swagger)) {
         oasFiles.push({ filename: entry, spec: parsed });

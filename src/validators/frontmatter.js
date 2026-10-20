@@ -227,9 +227,9 @@ export function validate({ content, filePath, relativePath, fix }) {
     if (keysToFix.length > 0) {
       let fileContent = fs.readFileSync(filePath, 'utf-8');
 
-      // Same header boundaries as parseFrontmatter: allow leading blank lines,
-      // and empty headers (`---\n---`) where the YAML group is absent.
-      const fmMatch = fileContent.match(/^[\r\n]*---\r?\n(?:([\s\S]*?)\r?\n)?---/);
+      // Same header boundaries as parseFrontmatter: leading blanks OK; empty
+      // headers (`---\n---`) leave group 1 unset so we skip the rewrite.
+      const fmMatch = fileContent.match(/^[\r\n]*---[ \t]*\r?\n(?:([\s\S]*?)\r?\n)?---[ \t]*/);
       if (fmMatch && fmMatch[1] != null) {
         let frontmatter = fmMatch[1];
         for (const key of keysToFix) {

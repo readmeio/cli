@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseFrontmatter, toFrontmatter } from '../src/utils/markdown.js';
-import { syncOas } from '../src/commands/oas-sync.js';
+import { findOasFiles, syncOas } from '../src/commands/oas-sync.js';
 import { makeRepo, rmRepo } from './helpers.js';
 
 const SPEC = JSON.stringify({
@@ -14,6 +14,36 @@ const SPEC = JSON.stringify({
       get: { operationId: 'listPets', summary: 'List pets', description: 'Returns pets' },
     },
   },
+});
+
+test('findOasFiles expands YAML merge keys in OpenAPI path items', () => {
+  // js-yaml 5's default CORE_SCHEMA leaves `<<: *anchor` unexpanded; without merge
+  // support this path item would have no HTTP methods and sync would drop its pages.
+  const yaml = `openapi: 3.0.0
+info:
+  title: Pets
+x-methods: &petMethods
+  get:
+    operationId: listPets
+    summary: List pets
+paths:
+  /pets:
+    <<: *petMethods
+`;
+  const root = makeRepo({ 'reference/pets.yaml': yaml });
+  try {
+    const files = findOasFiles(path.join(root, 'reference'));
+    assert.equal(files.length, 1);
+    assert.equal(files[0].filename, 'pets.yaml');
+    assert.equal(files[0].spec.paths['/pets'].get?.operationId, 'listPets');
+    assert.equal('<<' in files[0].spec.paths['/pets'], false);
+
+    syncOas(root);
+    const page = path.join(root, 'reference/Pets/pets/listpets.md');
+    assert.ok(fs.existsSync(page), 'expected page for merge-expanded operation');
+  } finally {
+    rmRepo(root);
+  }
 });
 
 test('generated reference page has only api frontmatter (no title/excerpt)', () => {

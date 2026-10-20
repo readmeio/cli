@@ -325,6 +325,35 @@ link:
       });
     });
 
+    test('should keep body content that appears before a later --- after empty adjacent fences', () => {
+      // Regression: the old regex missed `---\n---`, treated the body as YAML, then
+      // used a later `---` as the closing fence and dropped everything before it.
+      const content = '---\n---\n# Intro\n\n---\n\nMore content';
+
+      assert.deepEqual(parseFrontmatter(content), {
+        content: '# Intro\n\n---\n\nMore content',
+        data: {},
+      });
+    });
+
+    test('should allow trailing spaces and tabs on fence lines', () => {
+      const content = '--- \ntitle: spaced\n---\t\n# Content';
+
+      assert.deepEqual(parseFrontmatter(content), {
+        content: '# Content',
+        data: { title: 'spaced' },
+      });
+    });
+
+    test('should allow trailing whitespace on adjacent empty fences', () => {
+      const content = '--- \n---\t\n# Content';
+
+      assert.deepEqual(parseFrontmatter(content), {
+        content: '# Content',
+        data: {},
+      });
+    });
+
     test('should keep quoted --- inside YAML values when fences are adjacent-safe', () => {
       const content = '---\ntitle: "---"\n---\n# Content';
 

@@ -12,6 +12,9 @@ export const description = 'Sync reference pages with OpenAPI specs';
 
 const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'options', 'head', 'trace']);
 
+// js-yaml 5's CORE_SCHEMA omits YAML merge keys (`<<: *anchor`). OpenAPI specs commonly
+// reuse path items via merges — keep that working when reading YAML specs.
+const OAS_YAML_SCHEMA = CORE_SCHEMA.withTags(mergeTag);
 
 /**
  * Find OAS files at the root of reference/ (JSON or YAML).
@@ -20,10 +23,6 @@ export function findOasFiles(refDir) {
   const entries = fs.readdirSync(refDir);
   const oasFiles = [];
 
-  // `js-yaml` 5 defaults to `CORE_SCHEMA` without YAML merge keys (`<<: *anchor`). OpenAPI specs
-  // commonly reuse path items via merges; keep that working.
-  const LOAD_SCHEMA = CORE_SCHEMA.withTags(mergeTag);
-
   for (const entry of entries) {
     if (!/\.(json|yaml|yml)$/i.test(entry)) continue;
     const filePath = path.join(refDir, entry);
@@ -31,11 +30,9 @@ export function findOasFiles(refDir) {
 
     try {
       const raw = fs.readFileSync(filePath, 'utf-8');
-      const parsed = entry.endsWith('.json') ? JSON.parse(raw) : loadYAML(raw, {
-        // Load YAML with merge-key support (same defaults as `js-yaml` 4's `DEFAULT_SCHEMA`
-        // for `<<` anchors).
-        schema: LOAD_SCHEMA
-      });
+      const parsed = entry.endsWith('.json')
+        ? JSON.parse(raw)
+        : loadYAML(raw, { schema: OAS_YAML_SCHEMA });
 
       if (parsed && (parsed.openapi || parsed.swagger)) {
         oasFiles.push({ filename: entry, spec: parsed });

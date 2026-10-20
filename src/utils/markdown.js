@@ -5,10 +5,46 @@ import removeUndefinedObjects from 'remove-undefined-objects';
 // Ten parses bounds a frontmatter block full of broken lines.
 const MAX_FRONTMATTER_YAML_ATTEMPTS = 10;
 
-// Opening fence, optional YAML (must end with a newline when present), closing fence, body.
-// The YAML group is optional so empty headers (`---\n---\n# Body`) still yield the body.
-const FRONTMATTER_RE = /^---\s*\r?\n(?:([\s\S]*?)\r?\n)?---\r?\n?([\s\S]*)$/;
-const FRONTMATTER_NOEND_RE = /^---\s*\r?\n([\s\S]*)$/;
+/** A frontmatter fence line: `---` with optional trailing spaces/tabs. */
+const FENCE_LINE = /^---[ \t]*$/;
+
+/**
+ * Split a normalized (LF) document that starts with a `---` fence into YAML + body.
+ * The closing fence is a line that is exactly `---` (optional trailing spaces) —
+ * including adjacent empty headers (`---\n---\n# Body`).
+ */
+function splitFrontmatter(normalized) {
+  const firstNl = normalized.indexOf('\n');
+  if (firstNl === -1) {
+    return FENCE_LINE.test(normalized) ? { yamlContent: '', body: '' } : null;
+  }
+
+  const firstLine = normalized.slice(0, firstNl);
+  if (!FENCE_LINE.test(firstLine)) {
+    return null;
+  }
+
+  const rest = normalized.slice(firstNl + 1);
+  const lines = rest.split('\n');
+
+  // Find the closing fence line (may be the first line for empty headers).
+  let closeIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (FENCE_LINE.test(lines[i])) {
+      closeIdx = i;
+      break;
+    }
+  }
+
+  if (closeIdx === -1) {
+    // Opening fence only — treat the remainder as YAML, empty body
+    return { yamlContent: rest, body: '' };
+  }
+
+  const yamlContent = lines.slice(0, closeIdx).join('\n');
+  const body = lines.slice(closeIdx + 1).join('\n');
+  return { yamlContent, body };
+}
 
 // A mapping entry whose value is still a plain scalar: `description: POST : PATCH`.
 // `:[ \t]` matches PLAIN_SCALAR_COLON: space or tab ends a plain scalar.
@@ -145,22 +181,11 @@ export function parseFrontmatter(content) {
   // Normalize CRLF (and bare CR) so Windows-saved docs parse like LF files
   const normalized = stripped.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 
-  let match = normalized.match(FRONTMATTER_RE);
-  let yamlContent;
-  let body;
-
-  if (match) {
-    // Group 1 is absent for empty headers (`---\n---`).
-    yamlContent = match[1] ?? '';
-    body = match[2] || '';
-  } else {
-    match = normalized.match(FRONTMATTER_NOEND_RE);
-    if (!match) {
-      return { content: withoutBom, data: {} };
-    }
-    yamlContent = match[1];
-    body = '';
+  const split = splitFrontmatter(normalized);
+  if (!split) {
+    return { content: withoutBom, data: {} };
   }
+  const { yamlContent, body } = split;
 
   // Empty / whitespace-only frontmatter is valid → empty data, no error
   if (!yamlContent.trim()) {
