@@ -1,6 +1,21 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseFrontmatter, toFrontmatter } from '../../src/utils/markdown.js';
+import { parseFrontmatter, toFrontmatter, frontmatterWriteError } from '../../src/utils/markdown.js';
+
+describe('#frontmatterWriteError()', () => {
+  test('frontmatterWriteError guards write paths against failed parses', () => {
+    const ok = parseFrontmatter('---\ntitle: ok\n---\n# Body');
+    assert.equal(frontmatterWriteError(ok), null);
+
+    const bad = parseFrontmatter('---\na: 1\n  b: 2\n---\n# Body');
+    const writeError = frontmatterWriteError(bad);
+    assert.ok(writeError instanceof Error);
+    assert.match(writeError.message, /^Invalid frontmatter:/);
+
+    // Empty data + body must not be treated as a safe rewrite target
+    assert.deepEqual(bad.data, {});
+  });
+});
 
 describe('#parseFrontmatter()', () => {
   test('should parse and extract metadata from a piece fully populated content', () => {

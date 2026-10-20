@@ -4,7 +4,7 @@ import { createRequire } from 'node:module'
 import { query } from '@anthropic-ai/claude-agent-sdk'
 import { InvalidArgumentError, Option } from 'commander'
 import { collectFiles } from '../utils/lint.js'
-import { parseFrontmatter, toFrontmatter } from '../utils/markdown.js'
+import { parseFrontmatter, toFrontmatter, frontmatterWriteError } from '../utils/markdown.js'
 import { prettifyPagePrompt, prettifyPageOutputSchema } from '../prompts/index.js'
 import { printHeader, isAgenticCli } from '../utils/eyes.js'
 import { MultiSpinner } from '../utils/multi-spinner.js'
@@ -285,6 +285,8 @@ export async function run(file, options, _cmd, ctx) {
       const filePath = path.join(gitRoot, relativePath)
       const original = fs.readFileSync(filePath, 'utf-8')
       const parsed = parseFrontmatter(original)
+      const parseError = frontmatterWriteError(parsed)
+      if (parseError) throw parseError
 
       let source = parsed.content
       const importUrl = parsed.data?.['x-import']

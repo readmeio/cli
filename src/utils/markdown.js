@@ -179,6 +179,17 @@ export function parseFrontmatter(content) {
 }
 
 /**
+ * Guard for write paths. Returns an Error when {@link parseFrontmatter} could not load YAML so
+ * callers never rewrite a page from empty `data`. Returns `null` when the parse is safe to write.
+ *
+ */
+export function frontmatterWriteError(parsed) {
+  if (!parsed?.error) return null;
+  const detail = parsed.error.reason || parsed.error.message || 'unknown error';
+  return new Error(`Invalid frontmatter: ${detail}`, { cause: parsed.error });
+}
+
+/**
  * Convert a given object into a frontmatter string. When `body` is provided, append it after the
  * closing fence.
  *

@@ -3,7 +3,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import * as styles from '../utils/styles.js';
 import { writeGithubActionsOutputs } from '../utils/gha-output.js';
-import { parseFrontmatter, toFrontmatter } from '../utils/markdown.js';
+import { parseFrontmatter, toFrontmatter, frontmatterWriteError } from '../utils/markdown.js';
 
 const require = createRequire(import.meta.url);
 const yaml = require('js-yaml');
@@ -484,6 +484,8 @@ function reserveSlug(takenSlugs, base) {
 function updateFrontmatter(filePath, mutate) {
   const content = fs.readFileSync(filePath, 'utf-8');
   const parsed = parseFrontmatter(content);
+  // Refuse to rewrite from empty `data` when YAML failed to parse.
+  if (frontmatterWriteError(parsed)) return false;
   const data = structuredClone(parsed.data);
   mutate(data);
   const next = parsed.content.trim()
