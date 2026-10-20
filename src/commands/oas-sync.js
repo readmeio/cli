@@ -1,12 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { createRequire } from 'node:module';
-import matter from 'gray-matter';
 import * as styles from '../utils/styles.js';
 import { writeGithubActionsOutputs } from '../utils/gha-output.js';
-
-const require = createRequire(import.meta.url);
-const yaml = require('js-yaml');
+import { parseFrontmatter, toFrontmatter, frontmatterWriteError } from '../utils/markdown.js';
+import { CORE_SCHEMA, load as loadYAML, mergeTag } from 'js-yaml';
 
 export const command = 'oas:sync';
 export const order = 2;
@@ -15,6 +12,9 @@ export const description = 'Sync reference pages with OpenAPI specs';
 
 const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'options', 'head', 'trace']);
 
+// js-yaml 5's CORE_SCHEMA omits YAML merge keys (`<<: *anchor`). OpenAPI specs commonly
+// reuse path items via merges — keep that working when reading YAML specs.
+const OAS_YAML_SCHEMA = CORE_SCHEMA.withTags(mergeTag);
 
 /**
  * Find OAS files at the root of reference/ (JSON or YAML).
@@ -30,7 +30,9 @@ export function findOasFiles(refDir) {
 
     try {
       const raw = fs.readFileSync(filePath, 'utf-8');
-      const parsed = entry.endsWith('.json') ? JSON.parse(raw) : yaml.load(raw);
+      const parsed = entry.endsWith('.json')
+        ? JSON.parse(raw)
+        : loadYAML(raw, { schema: OAS_YAML_SCHEMA });
 
       if (parsed && (parsed.openapi || parsed.swagger)) {
         oasFiles.push({ filename: entry, spec: parsed });
@@ -228,19 +230,15 @@ export function collectExistingPages(refDir) {
       if (stat.isDirectory()) {
         walk(full);
       } else if (entry.endsWith('.md')) {
-        try {
-          const content = fs.readFileSync(full, 'utf-8');
-          const { data } = matter(content);
-          if (data.api && data.api.file && data.api.operationId) {
-            pages.push({
-              filePath: full,
-              relativePath: path.relative(refDir, full),
-              data,
-              content,
-            });
-          }
-        } catch {
-          // Skip unparseable files.
+        const content = fs.readFileSync(full, 'utf-8');
+        const { data } = parseFrontmatter(content);
+        if (data.api && data.api.file && data.api.operationId) {
+          pages.push({
+            filePath: full,
+            relativePath: path.relative(refDir, full),
+            data,
+            content,
+          });
         }
       }
     }
@@ -311,16 +309,6 @@ function isWithin(baseDir, target) {
   );
 }
 
-/**
- * Render a frontmatter-only page. `matter.stringify` always appends a blank
- * body after the closing fence (even for an empty body); the platform's own
- * generated pages end immediately after the fence with no trailing newline,
- * so trim it to match.
- */
-function stringifyFrontmatter(frontmatter) {
-  return matter.stringify('', frontmatter).replace(/\n+$/, '');
-}
-
 function buildPageContent({ oasFilename, operationId, isWebhook, hidden = false }) {
   const frontmatter = {
     api: {
@@ -339,7 +327,7 @@ function buildPageContent({ oasFilename, operationId, isWebhook, hidden = false 
     hidden,
   };
 
-  return stringifyFrontmatter(frontmatter);
+  return toFrontmatter(frontmatter);
 }
 
 /**
@@ -354,7 +342,7 @@ function buildTagIndexContent(title, description) {
   // As with operation pages, upload always stamps hidden: false on new pages.
   frontmatter.hidden = false;
 
-  return stringifyFrontmatter(frontmatter);
+  return toFrontmatter(frontmatter);
 }
 
 /**
@@ -493,17 +481,18 @@ function reserveSlug(takenSlugs, base) {
 /**
  * Rewrite a page's frontmatter in place, keeping its body. `mutate` receives
  * a copy of the parsed frontmatter and edits it. Returns true if the file
- * changed. A copy matters: gray-matter caches parse results by input string,
- * so mutating the returned `data` would poison later parses of that content.
+ * changed.
  */
 function updateFrontmatter(filePath, mutate) {
   const content = fs.readFileSync(filePath, 'utf-8');
-  const parsed = matter(content);
+  const parsed = parseFrontmatter(content);
+  // Refuse to rewrite from empty `data` when YAML failed to parse.
+  if (frontmatterWriteError(parsed)) return false;
   const data = structuredClone(parsed.data);
   mutate(data);
   const next = parsed.content.trim()
-    ? matter.stringify(parsed.content, data)
-    : stringifyFrontmatter(data);
+    ? toFrontmatter(data, parsed.content)
+    : toFrontmatter(data);
   if (next === content || JSON.stringify(data) === JSON.stringify(parsed.data)) return false;
   fs.writeFileSync(filePath, next);
   return true;
@@ -561,14 +550,8 @@ const INDEX_FILES = ['index.md', 'index.mdx', 'index.html'];
  * deleting it. A stale page can be removed by hand; a deleted edit is gone.
  */
 function isGeneratedTagIndex(indexPath, specDescriptions) {
-  let parsed;
-  try {
-    parsed = matter(fs.readFileSync(indexPath, 'utf-8'));
-  } catch {
-    return false;
-  }
-  const { data, content } = parsed;
-  if (content.trim()) return false;
+  const { data, content, error } = parseFrontmatter(fs.readFileSync(indexPath, 'utf-8'));
+  if (error || content.trim()) return false;
   if (typeof data.title !== 'string' || !('hidden' in data)) return false;
   if (Object.keys(data).some((k) => !['title', 'hidden', 'excerpt'].includes(k))) return false;
   if ('excerpt' in data && !specDescriptions.has(data.excerpt)) return false;

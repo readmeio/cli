@@ -1,4 +1,4 @@
-import matter from 'gray-matter';
+import { parseFrontmatter } from '../utils/markdown.js';
 
 export const name = 'recipes';
 
@@ -76,16 +76,8 @@ export function validate({ content, relativePath }) {
   if (!relativePath.endsWith('.md')) return null;
 
   const results = [];
-  let data;
-  let body;
-
-  try {
-    ({ data, content: body } = matter(content));
-  } catch {
-    return null;
-  }
-
-  if (!data.recipe) return null;
+  const { data, content: body, error } = parseFrontmatter(content);
+  if (error || !data.recipe) return null;
 
   const codeBlocks = parseCodeBlocks(body);
   const snippetRefs = parseSnippetRefs(body);
