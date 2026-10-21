@@ -1,4 +1,5 @@
 import { execSync } from 'node:child_process';
+
 import * as styles from '../utils/styles.js';
 
 export const command = 'versions';
@@ -18,7 +19,10 @@ export function run(_options, _cmd, ctx) {
     stdio: ['pipe', 'pipe', 'pipe'],
   }).trim();
 
-  const branches = raw.split('\n').map((b) => b.trim()).filter(Boolean);
+  const branches = raw
+    .split('\n')
+    .map(b => b.trim())
+    .filter(Boolean);
 
   // Strip "origin/" prefix and deduplicate.
   const seen = new Set();
@@ -73,7 +77,7 @@ export function run(_options, _cmd, ctx) {
     for (let i = 0; i < subs.length; i++) {
       const isLast = i === subs.length - 1;
       const connector = isLast ? '└─' : '├─';
-      console.log(`  ${styles.dim(connector)} ${styles.dim(`${version  }_`)}${subs[i].name} ${styles.dim('(branch)')}`);
+      console.log(`  ${styles.dim(connector)} ${styles.dim(`${version}_`)}${subs[i].name} ${styles.dim('(branch)')}`);
     }
   }
 

@@ -1,8 +1,10 @@
-import { createRequire } from 'node:module';
 import fs from 'fs';
+import { createRequire } from 'node:module';
 import path from 'path';
+
 import { compile, run } from '@readme/markdown';
 import { load as loadYAML } from 'js-yaml';
+
 import { parseFrontmatter } from '../../utils/markdown.js';
 
 // Use createRequire to load react-dom/server at runtime,
@@ -90,9 +92,7 @@ function walkDir(dirPath, sectionDir, depth = 0) {
       // If either exists, treat this as a clickable parent page.
       const indexPath = path.join(dirPath, name, 'index.md');
       const siblingMdPath = path.join(dirPath, `${name}.md`);
-      const parentPagePath = fs.existsSync(indexPath)
-        ? indexPath
-        : fs.existsSync(siblingMdPath) ? siblingMdPath : null;
+      const parentPagePath = fs.existsSync(indexPath) ? indexPath : fs.existsSync(siblingMdPath) ? siblingMdPath : null;
 
       let title = name;
       let href = null;
@@ -272,16 +272,21 @@ function renderOasOperationPreview(specFile, operationId) {
   }
 
   const { method, path: opPath, op } = found;
-  const methodColor = {
-    GET: '#22c55e', POST: '#3b82f6', PUT: '#f59e0b', PATCH: '#a855f7', DELETE: '#ef4444',
-  }[method] || '#6b7280';
+  const methodColor =
+    {
+      GET: '#22c55e',
+      POST: '#3b82f6',
+      PUT: '#f59e0b',
+      PATCH: '#a855f7',
+      DELETE: '#ef4444',
+    }[method] || '#6b7280';
 
   const parts = [];
   parts.push(
     `<div style="display: flex; gap: 0.5rem; align-items: center; margin-bottom: 1rem;">` +
-    `<span style="background: ${methodColor}; color: white; padding: 0.15rem 0.5rem; border-radius: 0.25rem; font-family: monospace; font-weight: 600; font-size: 0.85rem;">${method}</span>` +
-    `<code style="font-size: 1rem;">${escapeHtml(opPath)}</code>` +
-    `</div>`,
+      `<span style="background: ${methodColor}; color: white; padding: 0.15rem 0.5rem; border-radius: 0.25rem; font-family: monospace; font-weight: 600; font-size: 0.85rem;">${method}</span>` +
+      `<code style="font-size: 1rem;">${escapeHtml(opPath)}</code>` +
+      `</div>`,
   );
   if (op.description) parts.push(`<p>${escapeHtml(op.description)}</p>`);
 
@@ -317,7 +322,10 @@ function renderOasOperationPreview(specFile, operationId) {
 }
 
 function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  return String(s).replace(
+    /[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c],
+  );
 }
 
 function findFirstHref(items) {

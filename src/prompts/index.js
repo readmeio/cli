@@ -25,7 +25,7 @@ export const slotOrphansSystemPrompt = [
   'Example output: {"assignments": [0, 2, 0, 1, -1, 3]}',
   '',
   'Guidance:',
-  '- Choose the best semantic fit based on the orphan\'s title and URL path.',
+  "- Choose the best semantic fit based on the orphan's title and URL path.",
   '- Only use -1 when no existing category is plausible.',
 ].join('\n');
 
@@ -54,13 +54,18 @@ export const slotOrphansOutputSchema = {
  */
 export function buildSlotOrphansUserPrompt({ categories, orphans }) {
   const catList = categories.map((c, i) => {
-    const sample = (c.pages || []).slice(0, 3).map((p) => p.title).join(', ');
+    const sample = (c.pages || [])
+      .slice(0, 3)
+      .map(p => p.title)
+      .join(', ');
     return `${i}. ${c.title}${sample ? ` (e.g. ${sample})` : ''}`;
   });
 
   const orphanList = orphans.map((p, i) => {
     let relPath = p.url;
-    try { relPath = new URL(p.url).pathname; } catch {}
+    try {
+      relPath = new URL(p.url).pathname;
+    } catch {}
     return `${i}. ${p.title} — ${relPath}`;
   });
 
@@ -264,13 +269,17 @@ export const organizeFromScratchOutputSchema = {
 export function buildOrganizeFromScratchUserPrompt({ siteTitle, items }) {
   const compactLines = items.map((it, idx) => {
     let relPath = it.url;
-    try { relPath = new URL(it.url).pathname + new URL(it.url).search; } catch {}
+    try {
+      relPath = new URL(it.url).pathname + new URL(it.url).search;
+    } catch {}
     return `${idx}\t${it.title}\t${relPath}`;
   });
 
   let origin = '(unknown)';
   if (items.length > 0) {
-    try { origin = new URL(items[0].url).origin; } catch {}
+    try {
+      origin = new URL(items[0].url).origin;
+    } catch {}
   }
 
   return [
@@ -507,7 +516,8 @@ export function prettifyPagePrompt(input) {
  * @returns {string}
  */
 export function stripCodeFences(text) {
-  return String(text).trim()
+  return String(text)
+    .trim()
     .replace(/^```json\s*/i, '')
     .replace(/^```\s*/i, '')
     .replace(/\s*```$/, '')

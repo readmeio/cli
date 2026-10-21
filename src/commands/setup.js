@@ -2,14 +2,10 @@ import { execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
-import * as styles from '../utils/styles.js';
-import {
-  PLATFORMS,
-  detectExistingCi,
-  detectPlatform,
-  usesBlacksmith,
-} from '../utils/git.js';
+
+import { PLATFORMS, detectExistingCi, detectPlatform, usesBlacksmith } from '../utils/git.js';
 import { templateFor } from '../utils/setup-templates.js';
+import * as styles from '../utils/styles.js';
 
 // Detect the user's CI platform at module load so the top-level `--help`
 // can advertise the right `setup:<platform>` form (e.g. `setup:github` for
@@ -43,12 +39,8 @@ export const helpHint = _hasExistingCi
 // Hidden aliases cover every other form: bare `setup` (with optional positional),
 // the generic `setup:ci`, and one entry per platform. Whichever form is the
 // primary above is filtered out so it isn't double-registered.
-const ALL_FORMS = [
-  'setup [platform]',
-  'setup:ci',
-  ...Object.keys(PLATFORMS).map((k) => `setup:${k}`),
-];
-export const aliases = ALL_FORMS.filter((a) => a.split(' ')[0] !== _primaryName);
+const ALL_FORMS = ['setup [platform]', 'setup:ci', ...Object.keys(PLATFORMS).map(k => `setup:${k}`)];
+export const aliases = ALL_FORMS.filter(a => a.split(' ')[0] !== _primaryName);
 
 export function args(cmd) {
   cmd.option('--blacksmith', 'Use Blacksmith runners (GitHub Actions only)');
@@ -56,9 +48,9 @@ export function args(cmd) {
 
   cmd.addHelpText('after', () => {
     const bin = styles.binName();
-    const cmdStrs = Object.keys(PLATFORMS).map((k) => `${bin} setup:${k}`);
-    const cmdWidth = Math.max(...cmdStrs.map((s) => s.length));
-    const labelWidth = Math.max(...Object.values(PLATFORMS).map((d) => d.label.length));
+    const cmdStrs = Object.keys(PLATFORMS).map(k => `${bin} setup:${k}`);
+    const cmdWidth = Math.max(...cmdStrs.map(s => s.length));
+    const labelWidth = Math.max(...Object.values(PLATFORMS).map(d => d.label.length));
     const rows = Object.entries(PLATFORMS).map(([key, def], i) => {
       const cmdStr = cmdStrs[i].padEnd(cmdWidth);
       const label = def.label.padEnd(labelWidth);
@@ -153,12 +145,20 @@ export async function run(...callArgs) {
 
   console.log(`  This will create a workflow that runs on every pull request:`);
   console.log();
-  console.log(`    ${styles.success('✔')} ${styles.bold('Lint docs')} — runs ${styles.orange(`${styles.binName()} lint`)} and posts results as a PR comment`);
+  console.log(
+    `    ${styles.success('✔')} ${styles.bold('Lint docs')} — runs ${styles.orange(`${styles.binName()} lint`)} and posts results as a PR comment`,
+  );
   if (platform === 'github') {
-    console.log(`    ${styles.success('✔')} ${styles.bold('OAS change detection')} — flags modified OpenAPI spec files and suggests syncing`);
-    console.log(`    ${styles.success('✔')} ${styles.bold('Auto-fix base branch')} — redirects PRs from ${styles.orange('main')} to the correct version branch`);
+    console.log(
+      `    ${styles.success('✔')} ${styles.bold('OAS change detection')} — flags modified OpenAPI spec files and suggests syncing`,
+    );
+    console.log(
+      `    ${styles.success('✔')} ${styles.bold('Auto-fix base branch')} — redirects PRs from ${styles.orange('main')} to the correct version branch`,
+    );
     if (useBlacksmith) {
-      console.log(`    ${styles.success('✔')} ${styles.bold('Blacksmith runner')} — uses ${styles.orange('blacksmith-2vcpu-ubuntu-2404')} instead of ${styles.orange('ubuntu-latest')}`);
+      console.log(
+        `    ${styles.success('✔')} ${styles.bold('Blacksmith runner')} — uses ${styles.orange('blacksmith-2vcpu-ubuntu-2404')} instead of ${styles.orange('ubuntu-latest')}`,
+      );
     }
   }
   console.log();
@@ -169,9 +169,7 @@ export async function run(...callArgs) {
 
   // 4. Confirm.
   if (!opts.yes) {
-    const prompt = isOverwrite
-      ? 'This will overwrite the existing workflow. Continue?'
-      : 'Set up this workflow?';
+    const prompt = isOverwrite ? 'This will overwrite the existing workflow. Continue?' : 'Set up this workflow?';
     const confirmed = await confirm(prompt);
     if (!confirmed) {
       styles.info('Setup cancelled.');
@@ -203,7 +201,7 @@ function normalizePlatform(input) {
 function printDetectionSummary(detection, chosen) {
   const lines = [];
   if (detection.existing.length > 0) {
-    const labels = detection.existing.map((k) => PLATFORMS[k].label).join(', ');
+    const labels = detection.existing.map(k => PLATFORMS[k].label).join(', ');
     lines.push(`${styles.dim('Detected existing CI:')} ${labels}`);
   }
   if (detection.remote) {
@@ -246,8 +244,8 @@ function confirm(message) {
     output: process.stdout,
   });
 
-  return new Promise((resolve) => {
-    rl.question(`${styles.brand('?')} ${message} ${styles.dim('(Y/n)')} `, (answer) => {
+  return new Promise(resolve => {
+    rl.question(`${styles.brand('?')} ${message} ${styles.dim('(Y/n)')} `, answer => {
       rl.close();
       const val = answer.trim().toLowerCase();
       resolve(val === '' || val === 'y' || val === 'yes');

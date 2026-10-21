@@ -1,11 +1,13 @@
 import fs from 'fs';
-import path from 'path';
 import { createServer } from 'http';
-import { fileURLToPath } from 'url';
 import { createRequire } from 'node:module';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
 import chalk from 'chalk';
-import { binName } from '../utils/styles.js';
+
 import { header, setPalette, isAgenticCli } from '../utils/eyes.js';
+import { binName } from '../utils/styles.js';
 import { loadPet } from '../utils/tamagotchi.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -86,7 +88,7 @@ export async function run(options, _cmd, ctx) {
 
   function listen(port) {
     return new Promise((resolve, reject) => {
-      const onError = (err) => {
+      const onError = err => {
         if (err.code === 'EADDRINUSE') {
           resolve(listen(port + 1));
         } else {

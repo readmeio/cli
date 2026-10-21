@@ -1,7 +1,9 @@
-import { collectSidebar } from '../lib/docs';
-import { SidebarNav, SidebarPanel } from './Sidebar';
 import '@readme/markdown/dist/main.css';
+
+import { collectSidebar } from '../lib/docs';
+
 import './globals.css';
+import { SidebarNav, SidebarPanel } from './Sidebar';
 
 export const metadata = {
   title: {
@@ -21,10 +23,13 @@ export default async function RootLayout({ children }) {
       </head>
       <body className="bg-[#000343] text-gray-900 antialiased">
         {/* Top Navigation */}
-        <header className="fixed top-0 inset-x-0 h-[48px] bg-[#000343] flex items-center px-5 z-50" style={{
-          backgroundImage: `linear-gradient(rgba(255,255,255,0.08) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.08) 1px, transparent 1px)`,
-          backgroundSize: '20px 20px',
-        }}>
+        <header
+          className="fixed top-0 inset-x-0 h-[48px] bg-[#000343] flex items-center px-5 z-50"
+          style={{
+            backgroundImage: `linear-gradient(rgba(255,255,255,0.08) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.08) 1px, transparent 1px)`,
+            backgroundSize: '20px 20px',
+          }}
+        >
           <div className="flex items-center gap-3 mr-8 shrink-0">
             <div className="flex items-center gap-2">
               <i className="fa-brands fa-readme text-[#018ef5] text-[18px] relative top-[1px]" />
@@ -50,17 +55,19 @@ export default async function RootLayout({ children }) {
 
           {/* Content */}
           <main className="ml-[300px] flex-1 min-w-0 bg-white rounded-tr-xl">
-            <div className="max-w-[820px] py-10 px-16">
-              {children}
-            </div>
+            <div className="max-w-[820px] py-10 px-16">{children}</div>
           </main>
         </div>
 
-        <style dangerouslySetInnerHTML={{ __html: `
+        <style
+          dangerouslySetInnerHTML={{
+            __html: `
           [data-sidebar-group][data-expanded="false"] .sidebar-children { display: none; }
           [data-sidebar-group][data-expanded="true"] .sidebar-children { display: block; }
           [data-sidebar-group][data-expanded="true"] .sidebar-chevron { transform: rotate(90deg); }
-        `}} />
+        `,
+          }}
+        />
         <script
           dangerouslySetInnerHTML={{
             __html: `(function(){var es=new EventSource('/__reload');es.onmessage=function(e){if(e.data==='reload')location.reload()};})();

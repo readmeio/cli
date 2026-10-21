@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
+
 import OASNormalize from 'oas-normalize';
+
 import { findOasFiles } from '../commands/oas-sync.js';
 
 export const name = 'oas-schema';

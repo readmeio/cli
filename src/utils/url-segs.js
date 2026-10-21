@@ -4,8 +4,8 @@
  */
 
 // Extensions that are implementation artifacts, not meaningful path segments.
-const DOC_FILE_EXTENSIONS = ['md', 'mdx', 'html', 'htm', 'txt']
-const DOC_EXT_RE = new RegExp(`(\\.(${DOC_FILE_EXTENSIONS.join('|')}))+$`, 'i')
+const DOC_FILE_EXTENSIONS = ['md', 'mdx', 'html', 'htm', 'txt'];
+const DOC_EXT_RE = new RegExp(`(\\.(${DOC_FILE_EXTENSIONS.join('|')}))+$`, 'i');
 
 /**
  * Strip all chained doc-file extensions (.html.md, .html, .md, .mdx, .htm, .txt)
@@ -13,7 +13,7 @@ const DOC_EXT_RE = new RegExp(`(\\.(${DOC_FILE_EXTENSIONS.join('|')}))+$`, 'i')
  * by some SSGs (e.g. `.html.md`).
  */
 export function stripSegmentExtensions(s) {
-  return s.replace(DOC_EXT_RE, '')
+  return s.replace(DOC_EXT_RE, '');
 }
 
 /**
@@ -28,12 +28,12 @@ export function urlTrieSegs(url) {
     const segs = new URL(url).pathname
       .split('/')
       .filter(Boolean)
-      .map((s) => stripSegmentExtensions(s))
-      .filter(Boolean)
-    if (segs.length > 0 && segs[segs.length - 1].toLowerCase() === 'index') segs.pop()
-    return segs
+      .map(s => stripSegmentExtensions(s))
+      .filter(Boolean);
+    if (segs.length > 0 && segs[segs.length - 1].toLowerCase() === 'index') segs.pop();
+    return segs;
   } catch {
-    return null
+    return null;
   }
 }
 
@@ -44,17 +44,17 @@ export function urlTrieSegs(url) {
  * `/foo/index.html.md` and `/foo/` both collapse to the same slug base.
  */
 export function extractUrlPathSegments(url) {
-  if (!url) return []
+  if (!url) return [];
   try {
     const segs = new URL(url).pathname
       .split('/')
       .filter(Boolean)
-      .map((s) => stripSegmentExtensions(s).replace(/^\d+[-_.]/, ''))
-      .filter(Boolean)
-    if (segs.length > 0 && segs[segs.length - 1].toLowerCase() === 'index') segs.pop()
-    return segs
+      .map(s => stripSegmentExtensions(s).replace(/^\d+[-_.]/, ''))
+      .filter(Boolean);
+    if (segs.length > 0 && segs[segs.length - 1].toLowerCase() === 'index') segs.pop();
+    return segs;
   } catch {
-    return []
+    return [];
   }
 }
 
@@ -66,13 +66,13 @@ export function extractUrlPathSegments(url) {
  */
 export function normalizePath(url) {
   try {
-    const u = new URL(url)
-    let p = u.pathname.replace(/\/$/, '').toLowerCase()
-    p = p.replace(DOC_EXT_RE, '')
-    p = p.replace(/\/index$/i, '')
-    return p || '/'
+    const u = new URL(url);
+    let p = u.pathname.replace(/\/$/, '').toLowerCase();
+    p = p.replace(DOC_EXT_RE, '');
+    p = p.replace(/\/index$/i, '');
+    return p || '/';
   } catch {
-    return String(url).toLowerCase()
+    return String(url).toLowerCase();
   }
 }
 
@@ -87,38 +87,43 @@ export function normalizePath(url) {
  */
 export function llmsPageDedupeKey(url) {
   try {
-    const u = new URL(url)
-    let p = u.pathname.replace(/\/$/, '').toLowerCase()
-    p = p.replace(DOC_EXT_RE, '')
-    p = p.replace(/\/index$/i, '')
+    const u = new URL(url);
+    let p = u.pathname.replace(/\/$/, '').toLowerCase();
+    p = p.replace(DOC_EXT_RE, '');
+    p = p.replace(/\/index$/i, '');
 
-    const params = [...u.searchParams.entries()].sort(([ak, av], [bk, bv]) => (ak === bk ? av.localeCompare(bv) : ak.localeCompare(bk)))
-    const query = params.length > 0 ? `?${params.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&')}` : ''
+    const params = [...u.searchParams.entries()].sort(([ak, av], [bk, bv]) =>
+      ak === bk ? av.localeCompare(bv) : ak.localeCompare(bk),
+    );
+    const query =
+      params.length > 0
+        ? `?${params.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&')}`
+        : '';
 
-    return `${u.origin.toLowerCase()}${p || '/'}${query}`
+    return `${u.origin.toLowerCase()}${p || '/'}${query}`;
   } catch {
-    return String(url).toLowerCase()
+    return String(url).toLowerCase();
   }
 }
 
 export function compareCanonicalUrlPreference(a, b) {
-  const aRank = canonicalUrlPreferenceRank(a)
-  const bRank = canonicalUrlPreferenceRank(b)
-  if (aRank !== bRank) return aRank - bRank
-  return String(a || '').length - String(b || '').length
+  const aRank = canonicalUrlPreferenceRank(a);
+  const bRank = canonicalUrlPreferenceRank(b);
+  if (aRank !== bRank) return aRank - bRank;
+  return String(a || '').length - String(b || '').length;
 }
 
 function canonicalUrlPreferenceRank(url) {
   try {
-    const pathname = new URL(url).pathname
-    const lower = pathname.toLowerCase()
-    if (lower.endsWith('.md')) return 0
-    if (lower.endsWith('.txt')) return 1
-    if (!pathname.endsWith('/') && !/\/index\.html?$/.test(lower) && !/\.[^/]+$/.test(lower)) return 2
-    if (pathname.endsWith('/')) return 3
-    if (/\/index\.html?$/.test(lower)) return 4
-    return 5
+    const pathname = new URL(url).pathname;
+    const lower = pathname.toLowerCase();
+    if (lower.endsWith('.md')) return 0;
+    if (lower.endsWith('.txt')) return 1;
+    if (!pathname.endsWith('/') && !/\/index\.html?$/.test(lower) && !/\.[^/]+$/.test(lower)) return 2;
+    if (pathname.endsWith('/')) return 3;
+    if (/\/index\.html?$/.test(lower)) return 4;
+    return 5;
   } catch {
-    return 5
+    return 5;
   }
 }

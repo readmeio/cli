@@ -8,10 +8,12 @@ export async function runPool(items, concurrency, worker) {
   let cursor = 0;
   const next = () => (cursor < items.length ? cursor++ : -1);
   const lanes = Math.max(1, Math.min(concurrency, items.length));
-  const workers = Array.from({ length: lanes }, (_, workerIdx) => (async () => {
-    for (let i = next(); i !== -1; i = next()) {
-      await worker(items[i], i, workerIdx);
-    }
-  })());
+  const workers = Array.from({ length: lanes }, (_, workerIdx) =>
+    (async () => {
+      for (let i = next(); i !== -1; i = next()) {
+        await worker(items[i], i, workerIdx);
+      }
+    })(),
+  );
   await Promise.all(workers);
 }

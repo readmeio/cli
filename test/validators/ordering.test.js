@@ -1,6 +1,8 @@
-import { expect, test } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+
+import { expect, test } from 'vitest';
+
 import { collectFiles } from '../../src/utils/lint.js';
 import { validateAll } from '../../src/validators/ordering.js';
 import { makeRepo, rmRepo } from '../helpers.js';
@@ -12,9 +14,15 @@ test('stale and index entries in _order.yaml are flagged', () => {
   });
   try {
     const res = validateAll(collectFiles(root), root, {});
-    expect(res.some((r) => r.message.includes('Stale entry: "ghost"')), 'flags ghost').toBe(true);
-    expect(res.some((r) => r.message.includes('Invalid entry: "index"')), 'flags index').toBe(true);
-    expect(!res.some((r) => r.message.includes('foo')), 'does not flag valid foo').toBe(true);
+    expect(
+      res.some(r => r.message.includes('Stale entry: "ghost"')),
+      'flags ghost',
+    ).toBe(true);
+    expect(
+      res.some(r => r.message.includes('Invalid entry: "index"')),
+      'flags index',
+    ).toBe(true);
+    expect(!res.some(r => r.message.includes('foo')), 'does not flag valid foo').toBe(true);
   } finally {
     rmRepo(root);
   }
@@ -55,11 +63,11 @@ test('entries with inline comments are matched and preserved', () => {
   });
   try {
     const res = validateAll(collectFiles(root), root, {});
+    expect(!res.some(r => r.message.includes('Stale entry: "overview"')), 'commented entry is not stale').toBe(true);
     expect(
-      !res.some((r) => r.message.includes('Stale entry: "overview"')),
-      'commented entry is not stale',
+      res.some(r => r.message.includes('Stale entry: "ghost"')),
+      'ghost still flagged',
     ).toBe(true);
-    expect(res.some((r) => r.message.includes('Stale entry: "ghost"')), 'ghost still flagged').toBe(true);
 
     validateAll(collectFiles(root), root, { fix: true });
     const after = fs.readFileSync(path.join(root, 'docs/_order.yaml'), 'utf-8');
@@ -87,13 +95,12 @@ test('--fix adds missing entries in sorted order', () => {
 
 test('stale entries are caught in reference too', () => {
   const root = makeRepo({
-    'reference/Pets/Other/listPets.md':
-      '---\napi:\n  file: pets.json\n  operationId: listPets\n---\n',
+    'reference/Pets/Other/listPets.md': '---\napi:\n  file: pets.json\n  operationId: listPets\n---\n',
     'reference/Pets/Other/_order.yaml': '- listPets\n- deleted-op\n',
   });
   try {
     const res = validateAll(collectFiles(root), root, {});
-    expect(res.some((r) => r.message.includes('Stale entry: "deleted-op"'))).toBe(true);
+    expect(res.some(r => r.message.includes('Stale entry: "deleted-op"'))).toBe(true);
   } finally {
     rmRepo(root);
   }
@@ -123,7 +130,7 @@ test('a folder entry with no markdown children is not flagged stale', () => {
   try {
     const res = validateAll(collectFiles(root), root, {});
     expect(
-      !res.some((r) => /Stale entry: "sub"/.test(r.message)),
+      !res.some(r => /Stale entry: "sub"/.test(r.message)),
       'a subfolder with no .md children still counts as on-disk',
     ).toBe(true);
   } finally {

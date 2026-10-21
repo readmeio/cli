@@ -1,8 +1,10 @@
 import { execSync } from 'node:child_process';
 import fs from 'node:fs';
-import path from 'node:path';
 import { createRequire } from 'node:module';
+import path from 'node:path';
+
 import updateNotifier from 'update-notifier';
+
 import * as styles from './utils/styles.js';
 
 const require = createRequire(import.meta.url);
@@ -22,7 +24,7 @@ export default async function bootstrap({ skipValidation = false } = {}) {
   // 3. Make sure this is a ReadMe project repo
   if (!skipValidation) {
     if (!findGitRoot()) {
-      styles.error('This doesn\'t appear to be a git repository.');
+      styles.error("This doesn't appear to be a git repository.");
       styles.info('Run this command from inside a git repo to get started.');
       styles.info(`You can skip this check with ${styles.bold(`${styles.binName()} --no-check`)}.`);
       process.exit(1);
@@ -67,30 +69,24 @@ function validateReadMeRepo(gitRoot) {
     branches = '';
   }
 
-  const hasVersionBranch = branches
-    .split('\n')
-    .some((b) => /^(origin\/)?v[0-9]/.test(b.trim()));
+  const hasVersionBranch = branches.split('\n').some(b => /^(origin\/)?v[0-9]/.test(b.trim()));
 
   // Check for /docs or /reference at the repo root
   const hasDocs = fs.existsSync(path.join(gitRoot, 'docs'));
   const hasReference = fs.existsSync(path.join(gitRoot, 'reference'));
 
   if (!hasVersionBranch || (!hasDocs && !hasReference)) {
-    styles.error('This doesn\'t look like a ReadMe docs repo.');
+    styles.error("This doesn't look like a ReadMe docs repo.");
 
     if (!hasVersionBranch) {
-      styles.info(
-        `We couldn't find a version branch (e.g. ${styles.bold('v1')}, ${styles.bold('v2')}).`
-      );
+      styles.info(`We couldn't find a version branch (e.g. ${styles.bold('v1')}, ${styles.bold('v2')}).`);
     }
     if (!hasDocs && !hasReference) {
-      styles.info(
-        `We couldn't find a ${styles.bold('/docs')} or ${styles.bold('/reference')} folder.`
-      );
+      styles.info(`We couldn't find a ${styles.bold('/docs')} or ${styles.bold('/reference')} folder.`);
     }
 
     console.log();
-    styles.info('Make sure you\'re running this inside a ReadMe docs project.');
+    styles.info("Make sure you're running this inside a ReadMe docs project.");
     styles.info(`You can skip this check with ${styles.bold(`${styles.binName()} --no-check`)}.`);
     process.exit(1);
   }

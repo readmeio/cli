@@ -1,4 +1,5 @@
 import { expect, test } from 'vitest';
+
 import { validateAll } from '../../src/validators/duplicates.js';
 
 test('same slug across docs and reference is allowed', () => {

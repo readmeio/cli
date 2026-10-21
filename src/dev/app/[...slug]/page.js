@@ -1,4 +1,5 @@
 import { redirect } from 'next/navigation';
+
 import { getPage, collectSidebar } from '../../lib/docs';
 
 export const dynamic = 'force-dynamic';

@@ -1,6 +1,8 @@
-import { expect, it, test } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+
+import { expect, it, test } from 'vitest';
+
 import { makeRepo, rmRepo } from './helpers.js';
 
 test('makeRepo writes files and rmRepo cleans up', () => {

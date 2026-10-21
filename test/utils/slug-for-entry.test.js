@@ -1,4 +1,5 @@
 import { expect, test } from 'vitest';
+
 import { slugForEntry } from '../../src/utils/slug-for-entry.js';
 
 test('plain page slug is the filename minus extension', () => {

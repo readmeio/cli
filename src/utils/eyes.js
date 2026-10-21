@@ -19,7 +19,15 @@ export const palettes = {
   red: { name: 'Red', body: '#EF4444', page: '#FFF5F5', pupil: '#7F1D1D', lid: '#FCA5A5' },
   teal: { name: 'Teal', body: '#14B8A6', page: '#F0FFFE', pupil: '#134E4A', lid: '#5EEAD4' },
   yellow: { name: 'Yellow', body: '#EAB308', page: '#FEFCE8', pupil: '#713F12', lid: '#FDE047' },
-  owl: { name: 'Owl', body: '#8B5A2B', page: '#FFF8EE', pupil: '#2A1000', lid: '#C4923A', nose: '#FFD700', hidden: true },
+  owl: {
+    name: 'Owl',
+    body: '#8B5A2B',
+    page: '#FFF8EE',
+    pupil: '#2A1000',
+    lid: '#C4923A',
+    nose: '#FFD700',
+    hidden: true,
+  },
 };
 
 let currentPalette = palettes.blue;
@@ -124,7 +132,21 @@ function rebuildExpressions() {
 
 export const animations = {
   blink: {
-    frames: ['right', 'right', 'right', 'right', 'right', 'right', 'half-blink', 'squint', 'closed', 'closed', 'squint', 'half-blink', 'right'],
+    frames: [
+      'right',
+      'right',
+      'right',
+      'right',
+      'right',
+      'right',
+      'half-blink',
+      'squint',
+      'closed',
+      'closed',
+      'squint',
+      'half-blink',
+      'right',
+    ],
     durations: [1500, 100, 100, 100, 100, 100, 50, 50, 50, 80, 50, 50, 100],
   },
 
@@ -134,85 +156,154 @@ export const animations = {
   },
 
   lookaround: {
-    frames: ['right', 'right', 'left', 'left', 'left', 'right', 'right', 'up-right', 'up-right', 'right', 'right', 'up-left', 'up-left', 'left', 'left', 'right'],
+    frames: [
+      'right',
+      'right',
+      'left',
+      'left',
+      'left',
+      'right',
+      'right',
+      'up-right',
+      'up-right',
+      'right',
+      'right',
+      'up-left',
+      'up-left',
+      'left',
+      'left',
+      'right',
+    ],
     durations: [600, 200, 120, 400, 200, 120, 400, 120, 400, 120, 200, 120, 400, 120, 200, 400],
   },
 
   'lookaround-blink': {
     frames: [
-      'right', 'right', 'right',
-      'left', 'left', 'left',
-      'half-blink', 'squint', 'closed', 'closed', 'squint', 'half-blink',
-      'left', 'right', 'right',
-      'up-right', 'up-right', 'right',
-      'right', 'right',
-      'up-left', 'up-left', 'left', 'left',
-      'half-blink', 'squint', 'closed', 'closed', 'squint', 'half-blink',
-      'right', 'right',
+      'right',
+      'right',
+      'right',
+      'left',
+      'left',
+      'left',
+      'half-blink',
+      'squint',
+      'closed',
+      'closed',
+      'squint',
+      'half-blink',
+      'left',
+      'right',
+      'right',
+      'up-right',
+      'up-right',
+      'right',
+      'right',
+      'right',
+      'up-left',
+      'up-left',
+      'left',
+      'left',
+      'half-blink',
+      'squint',
+      'closed',
+      'closed',
+      'squint',
+      'half-blink',
+      'right',
+      'right',
     ],
     durations: [
-      800, 200, 200,
-      120, 400, 200,
-      50, 50, 50, 80, 50, 50,
-      200, 120, 400,
-      120, 500, 120,
-      200, 200,
-      120, 500, 120, 200,
-      50, 50, 50, 80, 50, 50,
-      120, 600,
+      800, 200, 200, 120, 400, 200, 50, 50, 50, 80, 50, 50, 200, 120, 400, 120, 500, 120, 200, 200, 120, 500, 120, 200,
+      50, 50, 50, 80, 50, 50, 120, 600,
     ],
   },
 
   all: {
     frames: [
       // idle, look around
-      'right', 'right', 'right',
-      'left', 'left', 'left',
-      'right', 'right',
+      'right',
+      'right',
+      'right',
+      'left',
+      'left',
+      'left',
+      'right',
+      'right',
       // blink
-      'half-blink', 'squint', 'closed', 'closed', 'squint', 'half-blink',
+      'half-blink',
+      'squint',
+      'closed',
+      'closed',
+      'squint',
+      'half-blink',
       // look up + bounce
-      'right', 'right',
-      'up-right', 'up-right', 'right',
-      'right:up', 'right:up', 'right', 'right:up', 'right:up', 'right',
+      'right',
+      'right',
+      'up-right',
+      'up-right',
+      'right',
+      'right:up',
+      'right:up',
+      'right',
+      'right:up',
+      'right:up',
+      'right',
       // look the other way
-      'right', 'left', 'left',
-      'up-left', 'up-left', 'left',
+      'right',
+      'left',
+      'left',
+      'up-left',
+      'up-left',
+      'left',
       // blink
-      'half-blink', 'squint', 'closed', 'closed', 'squint', 'half-blink',
+      'half-blink',
+      'squint',
+      'closed',
+      'closed',
+      'squint',
+      'half-blink',
       // bounce
-      'left', 'left:up', 'left:up', 'left', 'left:up', 'left:up', 'left',
+      'left',
+      'left:up',
+      'left:up',
+      'left',
+      'left:up',
+      'left:up',
+      'left',
       // settle back + bounce
-      'right', 'right', 'right',
-      'right:up', 'right:up', 'right',
+      'right',
+      'right',
+      'right',
+      'right:up',
+      'right:up',
+      'right',
       // blink
-      'half-blink', 'squint', 'closed', 'closed', 'squint', 'half-blink',
-      'right', 'right',
+      'half-blink',
+      'squint',
+      'closed',
+      'closed',
+      'squint',
+      'half-blink',
+      'right',
+      'right',
     ],
     durations: [
       // idle, look around
-      800, 200, 200,
-      120, 400, 200,
-      120, 400,
+      800, 200, 200, 120, 400, 200, 120, 400,
       // blink
       50, 50, 50, 80, 50, 50,
       // look up + bounce
-      200, 200,
-      120, 500, 120,
-      150, 150, 150, 150, 150, 200,
+      200, 200, 120, 500, 120, 150, 150, 150, 150, 150, 200,
       // look the other way
-      300, 120, 400,
-      120, 500, 120,
+      300, 120, 400, 120, 500, 120,
       // blink
       50, 50, 50, 80, 50, 50,
       // bounce
       200, 150, 150, 150, 150, 150, 200,
       // settle back + bounce
-      120, 200, 300,
-      150, 150, 200,
+      120, 200, 300, 150, 150, 200,
       // blink
-      50, 50, 50, 80, 50, 50,
-      200, 800,
+      50, 50, 50, 80, 50, 50, 200, 800,
     ],
   },
 };
@@ -253,7 +344,7 @@ export function header(opts = {}) {
   const icon = eyes(expression);
   const gap = '  ';
 
-  const title = chalk.bold.hex(currentPalette.body)('The ReadMe CLI') + (version ? ` ${  chalk.dim(`v${version}`)}` : '');
+  const title = chalk.bold.hex(currentPalette.body)('The ReadMe CLI') + (version ? ` ${chalk.dim(`v${version}`)}` : '');
   const bin = binName ? chalk.white(binName) : '';
   const greetLine = greeting ? chalk.dim(greeting) : '';
 
@@ -296,7 +387,8 @@ export function animate(name, opts = {}) {
   const headerLines = [];
   if (version || bin) {
     const gap = '  ';
-    headerLines[0] = gap + chalk.bold.hex(currentPalette.body)('The ReadMe CLI') + (version ? ` ${  chalk.dim(`v${version}`)}` : '');
+    headerLines[0] =
+      gap + chalk.bold.hex(currentPalette.body)('The ReadMe CLI') + (version ? ` ${chalk.dim(`v${version}`)}` : '');
     headerLines[1] = gap + (bin ? chalk.white(bin) : '');
     if (subtitle) headerLines[2] = gap + subtitle;
   }
@@ -340,7 +432,7 @@ export function animate(name, opts = {}) {
       firstDraw = false;
 
       for (const line of lines) {
-        process.stdout.write(`${indent + line  }\n`);
+        process.stdout.write(`${indent + line}\n`);
       }
 
       const duration = anim.durations[i % anim.durations.length];

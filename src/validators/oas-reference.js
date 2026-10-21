@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+
 import {
   findOasFiles,
   extractOperations,
@@ -37,7 +38,7 @@ export function validateAll(files, gitRoot, { fix } = {}) {
   }
 
   // Collect all reference pages with api frontmatter.
-  const refPages = files.filter((f) => f.startsWith('reference/') && f.endsWith('.md'));
+  const refPages = files.filter(f => f.startsWith('reference/') && f.endsWith('.md'));
 
   for (const relPath of refPages) {
     const filePath = path.join(gitRoot, relPath);
@@ -79,11 +80,9 @@ export function validateAll(files, gitRoot, { fix } = {}) {
   // Check for missing pages: operations in the spec with no corresponding page.
   const existingPages = collectExistingPages(refDir);
   for (const [oasFilename, { ops }] of oasMap) {
-    const pagesForOas = existingPages.filter((p) => p.data.api.file === oasFilename);
+    const pagesForOas = existingPages.filter(p => p.data.api.file === oasFilename);
     const coveredOps = new Set(
-      pagesForOas.map((p) =>
-        operationKey({ operationId: p.data.api.operationId, isWebhook: !!p.data.api.webhook }),
-      ),
+      pagesForOas.map(p => operationKey({ operationId: p.data.api.operationId, isWebhook: !!p.data.api.webhook })),
     );
 
     for (const op of ops.values()) {
@@ -103,7 +102,7 @@ export function validateAll(files, gitRoot, { fix } = {}) {
   // is actually fixable. The sync adds, deletes, moves, hides and reorders
   // reference files, which is far too much to do on the strength of an
   // unfixable warning (`x-readme.internal`, a page pointing at a missing spec).
-  if (fix && results.some((r) => r.fixable)) {
+  if (fix && results.some(r => r.fixable)) {
     const syncResults = syncOas(gitRoot);
     if (syncResults) {
       for (const r of results) {

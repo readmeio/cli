@@ -1,4 +1,5 @@
 import path from 'node:path';
+
 import { slugForEntry } from '../utils/slug-for-entry.js';
 
 export const name = 'duplicates';
@@ -26,12 +27,15 @@ export function validateAll(files) {
 
     // TODO: figure out why ReadMeConfig causes duplicate slugs and handle properly.
     // For now, skip any duplicate set that involves a ReadMeConfig path.
-    if (paths.some((p) => p.includes('ReadMeConfig/'))) continue;
+    if (paths.some(p => p.includes('ReadMeConfig/'))) continue;
 
     const slug = key.slice(key.indexOf(':') + 1);
     const others = paths.slice(1);
     for (const relPath of others) {
-      const otherLocations = paths.filter((p) => p !== relPath).map((p) => path.dirname(p)).join(', ');
+      const otherLocations = paths
+        .filter(p => p !== relPath)
+        .map(p => path.dirname(p))
+        .join(', ');
       results.push({
         file: relPath,
         rule: name,

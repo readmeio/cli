@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+
 import { parseFrontmatter } from '../utils/markdown.js';
 
 export const name = 'content';
@@ -21,7 +22,7 @@ export function validate({ filePath, content, relativePath }) {
         file: relativePath,
         rule: name,
         severity: 'warning',
-        message: 'Redirect page has body content: pages with a link URL won\'t display their content',
+        message: "Redirect page has body content: pages with a link URL won't display their content",
       };
     }
     return null;
@@ -30,7 +31,7 @@ export function validate({ filePath, content, relativePath }) {
     // index.md files that act as parent pages (have child .md siblings) can be empty.
     if (path.basename(filePath) === 'index.md') {
       const siblings = fs.readdirSync(path.dirname(filePath));
-      if (siblings.some((f) => f.endsWith('.md') && f !== 'index.md')) {
+      if (siblings.some(f => f.endsWith('.md') && f !== 'index.md')) {
         return null;
       }
     }

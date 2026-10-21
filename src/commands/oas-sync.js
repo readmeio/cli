@@ -1,9 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import * as styles from '../utils/styles.js';
+
+import { CORE_SCHEMA, load as loadYAML, mergeTag } from 'js-yaml';
+
 import { writeGithubActionsOutputs } from '../utils/gha-output.js';
 import { parseFrontmatter, toFrontmatter, frontmatterWriteError } from '../utils/markdown.js';
-import { CORE_SCHEMA, load as loadYAML, mergeTag } from 'js-yaml';
+import * as styles from '../utils/styles.js';
 
 export const command = 'oas:sync';
 export const order = 2;
@@ -30,9 +32,7 @@ export function findOasFiles(refDir) {
 
     try {
       const raw = fs.readFileSync(filePath, 'utf-8');
-      const parsed = entry.endsWith('.json')
-        ? JSON.parse(raw)
-        : loadYAML(raw, { schema: OAS_YAML_SCHEMA });
+      const parsed = entry.endsWith('.json') ? JSON.parse(raw) : loadYAML(raw, { schema: OAS_YAML_SCHEMA });
 
       if (parsed && (parsed.openapi || parsed.swagger)) {
         oasFiles.push({ filename: entry, spec: parsed });
@@ -141,7 +141,7 @@ function resolveXInternal(operation, spec) {
  * `webhook POST newPet`) for lint to warn about.
  */
 export function findIgnoredInternalExtensions(spec) {
-  const hasInternal = (obj) => {
+  const hasInternal = obj => {
     const xReadme = obj?.['x-readme'];
     return !!xReadme && typeof xReadme === 'object' && 'internal' in xReadme;
   };
@@ -149,7 +149,10 @@ export function findIgnoredInternalExtensions(spec) {
   const locations = [];
   if (hasInternal(spec)) locations.push('root');
 
-  for (const [entries, isWebhook] of [[spec?.paths, false], [spec?.webhooks, true]]) {
+  for (const [entries, isWebhook] of [
+    [spec?.paths, false],
+    [spec?.webhooks, true],
+  ]) {
     for (const [name, rawItem] of Object.entries(entries || {})) {
       for (const [method, operation] of Object.entries(resolveLocalPathItemRef(rawItem, spec) || {})) {
         if (!HTTP_METHODS.has(method) || !hasInternal(operation)) continue;
@@ -201,7 +204,7 @@ export function extractOperations(spec) {
           summary: operation.summary || null,
           description: operation.description || null,
           // The platform groups by the first *non-empty* tag.
-          tag: (Array.isArray(operation.tags) && operation.tags.find((t) => t)) || null,
+          tag: (Array.isArray(operation.tags) && operation.tags.find(t => t)) || null,
           path: pathStr,
           isWebhook,
           xInternal: resolveXInternal(operation, spec),
@@ -257,13 +260,18 @@ function yamlSafeSlug(slug) {
 function parseOrderYaml(content) {
   return content
     .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith('- '))
-    .map((line) => line.slice(2).trim().replace(/^["'](.+)["']$/, '$1'));
+    .map(line => line.trim())
+    .filter(line => line.startsWith('- '))
+    .map(line =>
+      line
+        .slice(2)
+        .trim()
+        .replace(/^["'](.+)["']$/, '$1'),
+    );
 }
 
 function writeOrderYaml(filePath, slugs) {
-  const content = `${slugs.map((s) => `- ${yamlSafeSlug(s)}`).join('\n')  }\n`;
+  const content = `${slugs.map(s => `- ${yamlSafeSlug(s)}`).join('\n')}\n`;
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, content);
 }
@@ -284,7 +292,7 @@ function addToOrder(orderPath, slug) {
 function removeFromOrder(orderPath, slug) {
   if (!fs.existsSync(orderPath)) return;
   const content = fs.readFileSync(orderPath, 'utf-8');
-  const slugs = parseOrderYaml(content).filter((s) => s !== slug);
+  const slugs = parseOrderYaml(content).filter(s => s !== slug);
   if (slugs.length > 0) {
     writeOrderYaml(orderPath, slugs);
   } else {
@@ -304,9 +312,7 @@ function safeSegment(value, fallback) {
 
 function isWithin(baseDir, target) {
   const rel = path.relative(baseDir, target);
-  return (
-    rel !== '' && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel)
-  );
+  return rel !== '' && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
 }
 
 function buildPageContent({ oasFilename, operationId, isWebhook, hidden = false }) {
@@ -490,9 +496,7 @@ function updateFrontmatter(filePath, mutate) {
   if (frontmatterWriteError(parsed)) return false;
   const data = structuredClone(parsed.data);
   mutate(data);
-  const next = parsed.content.trim()
-    ? toFrontmatter(data, parsed.content)
-    : toFrontmatter(data);
+  const next = parsed.content.trim() ? toFrontmatter(data, parsed.content) : toFrontmatter(data);
   if (next === content || JSON.stringify(data) === JSON.stringify(parsed.data)) return false;
   fs.writeFileSync(filePath, next);
   return true;
@@ -516,7 +520,7 @@ export function applyOASOrder(currentOrder, orderedSlugs) {
   const order = [...new Set(currentOrder)];
   if (!order.length) return desired;
 
-  const slots = order.map((s, i) => (desiredSet.has(s) ? i : -1)).filter((i) => i > -1);
+  const slots = order.map((s, i) => (desiredSet.has(s) ? i : -1)).filter(i => i > -1);
   if (!slots.length) return [...order, ...desired];
 
   const remaining = [...desired];
@@ -553,12 +557,14 @@ function isGeneratedTagIndex(indexPath, specDescriptions) {
   const { data, content, error } = parseFrontmatter(fs.readFileSync(indexPath, 'utf-8'));
   if (error || content.trim()) return false;
   if (typeof data.title !== 'string' || !('hidden' in data)) return false;
-  if (Object.keys(data).some((k) => !['title', 'hidden', 'excerpt'].includes(k))) return false;
+  if (Object.keys(data).some(k => !['title', 'hidden', 'excerpt'].includes(k))) return false;
   if ('excerpt' in data && !specDescriptions.has(data.excerpt)) return false;
 
   const dirSlug = slugifyFolder(path.basename(path.dirname(indexPath)));
   const titleSlug = slugifyFolder(data.title);
-  return dirSlug === titleSlug || new RegExp(`^${titleSlug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-\\d+$`).test(dirSlug);
+  return (
+    dirSlug === titleSlug || new RegExp(`^${titleSlug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-\\d+$`).test(dirSlug)
+  );
 }
 
 /**
@@ -575,12 +581,12 @@ function cleanupTagFolder(dir, { refDir, specDescriptions, takenSlugs, changes }
   } catch {
     return;
   }
-  const others = entries.filter((e) => !INDEX_FILES.includes(e) && e !== '_order.yaml');
+  const others = entries.filter(e => !INDEX_FILES.includes(e) && e !== '_order.yaml');
   if (others.length) return;
 
   const parentDir = path.dirname(dir);
   const slug = path.basename(dir);
-  const indexFile = entries.find((e) => INDEX_FILES.includes(e));
+  const indexFile = entries.find(e => INDEX_FILES.includes(e));
 
   if (!indexFile || isGeneratedTagIndex(path.join(dir, indexFile), specDescriptions)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -608,10 +614,7 @@ function cleanupTagFolder(dir, { refDir, specDescriptions, takenSlugs, changes }
  */
 function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
   const specOps = extractOperations(spec);
-  const infoTitle = safeSegment(
-    spec.info?.title || path.basename(oasFilename, path.extname(oasFilename)),
-    'api',
-  );
+  const infoTitle = safeSegment(spec.info?.title || path.basename(oasFilename, path.extname(oasFilename)), 'api');
 
   // Hyphen vs. space in a group's folder name is not a meaningful difference
   // — "shipping-labels" and "shipping labels" are the same folder to a
@@ -622,16 +625,11 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
   const apiDir = path.join(refDir, infoTitle);
   const foldersBySlug = existingFoldersBySlug(apiDir);
 
-  const existingPages = collectExistingPages(refDir).filter(
-    (p) => p.data.api.file === oasFilename,
-  );
+  const existingPages = collectExistingPages(refDir).filter(p => p.data.api.file === oasFilename);
 
   const pagesByOpId = new Map();
   for (const page of existingPages) {
-    pagesByOpId.set(
-      operationKey({ operationId: page.data.api.operationId, isWebhook: !!page.data.api.webhook }),
-      page,
-    );
+    pagesByOpId.set(operationKey({ operationId: page.data.api.operationId, isWebhook: !!page.data.api.webhook }), page);
   }
 
   const changes = { added: [], deleted: [], moved: [], updated: [], skipped: [] };
@@ -644,9 +642,7 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
   // Tag descriptions from the spec's top-level `tags` array, used for the
   // per-tag category landing page (index.md).
   const tagDescriptions = new Map(
-    (Array.isArray(spec.tags) ? spec.tags : [])
-      .filter((t) => t && t.name)
-      .map((t) => [t.name, t.description || null]),
+    (Array.isArray(spec.tags) ? spec.tags : []).filter(t => t && t.name).map(t => [t.name, t.description || null]),
   );
   // Every description the spec supplies, regardless of which tag: what an
   // emptied tag folder's excerpt is checked against (see `isGeneratedTagIndex`).
@@ -697,11 +693,11 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
   // listed in `tags`) keeps its natural encounter order, appended after every
   // declared tag.
   const declaredOrder = (Array.isArray(spec.tags) ? spec.tags : [])
-    .filter((t) => t && t.name)
-    .map((t) => slugifyFolder(safeSegment(t.name, 'Other')) || 'other');
+    .filter(t => t && t.name)
+    .map(t => slugifyFolder(safeSegment(t.name, 'Other')) || 'other');
   const orderedFolders = [
-    ...declaredOrder.filter((folder) => groupsByFolder.has(folder)),
-    ...[...groupsByFolder.keys()].filter((folder) => !declaredOrder.includes(folder)),
+    ...declaredOrder.filter(folder => groupsByFolder.has(folder)),
+    ...[...groupsByFolder.keys()].filter(folder => !declaredOrder.includes(folder)),
   ];
 
   const groupDirs = new Map();
@@ -728,7 +724,7 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
       // With `apply-tag-changes`, the spec owns the category page's title and
       // excerpt too (a tag with no description clears the excerpt). Its body
       // and any other frontmatter are the user's and are kept.
-      const updated = updateFrontmatter(indexPath, (data) => {
+      const updated = updateFrontmatter(indexPath, data => {
         data.title = title;
         if (description) data.excerpt = description;
         else delete data.excerpt;
@@ -784,7 +780,7 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
     // its own `hidden` — removing the extension never unhides a page.
     if (op.xInternal.present) {
       const hidden = Boolean(op.xInternal.value);
-      const updated = updateFrontmatter(filePath, (data) => {
+      const updated = updateFrontmatter(filePath, data => {
         data.hidden = hidden;
       });
       if (updated) changes.updated.push(path.relative(refDir, filePath));
@@ -844,9 +840,9 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
     const indexPath = path.join(dir, 'index.md');
     if (!fs.existsSync(indexPath)) continue;
     const isNew = createdIndexes.has(indexPath);
-    const allHidden = children.every((x) => x.present && (isNew ? Boolean(x.value) : x.value === true));
+    const allHidden = children.every(x => x.present && (isNew ? Boolean(x.value) : x.value === true));
     if (!allHidden) continue;
-    const updated = updateFrontmatter(indexPath, (data) => {
+    const updated = updateFrontmatter(indexPath, data => {
       data.hidden = true;
     });
     if (updated && !isNew) changes.updated.push(path.relative(refDir, indexPath));
@@ -908,7 +904,7 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
  *   Returns null if there's no reference/ dir or no specs.
  */
 export function syncOas(input) {
-  const gitRoot = typeof input === 'string' ? input : (input?.cwd || process.cwd());
+  const gitRoot = typeof input === 'string' ? input : input?.cwd || process.cwd();
   const refDir = path.join(gitRoot, 'reference');
   if (!fs.existsSync(refDir)) return null;
 
@@ -960,7 +956,9 @@ export function printSyncResults(results) {
 
     const dot = hasChanges ? styles.warn('●') : styles.success('●');
     console.log();
-    console.log(`  ${dot} ${styles.bold(title)} ${styles.dim(`(${filename} · ${opCount} ${opCount === 1 ? 'endpoint' : 'endpoints'})`)}`);
+    console.log(
+      `  ${dot} ${styles.bold(title)} ${styles.dim(`(${filename} · ${opCount} ${opCount === 1 ? 'endpoint' : 'endpoints'})`)}`,
+    );
 
     if (!hasChanges) {
       continue;
@@ -979,9 +977,7 @@ export function printSyncResults(results) {
       console.log(`    ${styles.warn('~')} Updated ${file}`);
     }
     for (const { path: file, operationId } of changes.skipped) {
-      console.log(
-        `    ${styles.warn('!')} Skipped ${file} for "${operationId}" (destination already exists)`,
-      );
+      console.log(`    ${styles.warn('!')} Skipped ${file} for "${operationId}" (destination already exists)`);
       skipped.push({ filename, path: file, operationId });
     }
 
@@ -1029,8 +1025,7 @@ export async function run(_options, _cmd, ctx) {
     return;
   }
 
-  const { totalAdded, totalDeleted, totalMoved, totalUpdated, totalSkipped, skipped } =
-    printSyncResults(results);
+  const { totalAdded, totalDeleted, totalMoved, totalUpdated, totalSkipped, skipped } = printSyncResults(results);
 
   console.log();
   const total = totalAdded + totalDeleted + totalMoved + totalUpdated;
@@ -1047,7 +1042,9 @@ export async function run(_options, _cmd, ctx) {
   // to whoever wraps this command in CI to notice and fail on it themselves.
   if (totalSkipped > 0) {
     const syncedNote = total > 0 ? ` (${totalAdded} added, ${totalDeleted} deleted${extraNote})` : '';
-    styles.error(`${totalSkipped} ${totalSkipped === 1 ? 'page' : 'pages'} skipped${syncedNote} — see above for which, and why.`);
+    styles.error(
+      `${totalSkipped} ${totalSkipped === 1 ? 'page' : 'pages'} skipped${syncedNote} — see above for which, and why.`,
+    );
   } else if (total === 0) {
     styles.ok('Reference pages are already in sync.');
   } else {
