@@ -700,6 +700,27 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
     ...[...groupsByFolder.keys()].filter(folder => !declaredOrder.includes(folder)),
   ];
 
+  // Groups that will hold at least one of this spec's pages after this run:
+  // a new page is created in its folder, an existing page already lives
+  // anywhere under it (a direct child, or nested in a hand-made subfolder),
+  // or `apply-tag-changes` will move one in (see the move pass below). A group
+  // whose pages were all moved somewhere else (another category, or a folder
+  // spelled differently) gets no category page — creating one would leave an
+  // empty index.md with no children.
+  const populatedFolders = new Set();
+  for (const [key, op] of specOps) {
+    const { folder } = operationGroup(op);
+    const page = pagesByOpId.get(key);
+    const tagDir = path.join(apiDir, foldersBySlug.get(folder) || folder);
+    if (
+      !page ||
+      isWithin(tagDir, page.filePath) ||
+      (applyTagChanges && isWithin(apiDir, page.filePath) && path.basename(page.filePath) !== 'index.md')
+    ) {
+      populatedFolders.add(folder);
+    }
+  }
+
   const groupDirs = new Map();
   const createdIndexes = new Set();
   for (const folder of orderedFolders) {
@@ -707,9 +728,11 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
     const actualFolder = foldersBySlug.get(folder) || folder;
     const pageDir = path.join(refDir, infoTitle, actualFolder);
     if (!isWithin(refDir, pageDir)) continue;
-    groupDirs.set(folder, pageDir);
 
     const indexPath = path.join(pageDir, 'index.md');
+    if (!populatedFolders.has(folder) && !fs.existsSync(indexPath)) continue;
+    groupDirs.set(folder, pageDir);
+
     if (!fs.existsSync(indexPath)) {
       // Never overwrite an existing index.md — it may be a hand-written category.
       fs.mkdirSync(pageDir, { recursive: true });

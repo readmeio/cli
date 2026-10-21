@@ -146,6 +146,128 @@ test('sync backfills a missing tag index.md even when all op pages already exist
   }
 });
 
+test('a tag whose pages all live in another category gets no empty category page', () => {
+  const spec = JSON.stringify({
+    openapi: '3.0.0',
+    info: { title: 'Sites API' },
+    tags: [{ name: 'Sites API v2.0' }],
+    paths: {
+      '/1': { get: { operationId: 'getSites', tags: ['Sites API v2.0'] } },
+      '/2': { post: { operationId: 'addSite', tags: ['Sites API v2.0'] } },
+    },
+  });
+  const root = makeRepo({
+    'reference/sites.json': spec,
+    'reference/_order.yaml': '- Applications\n',
+    'reference/Applications/_order.yaml': '- sites-api-v20\n',
+    'reference/Applications/sites-api-v20/index.md': '---\ntitle: Sites API v2.0\nhidden: false\n---',
+    'reference/Applications/sites-api-v20/getsites.md': '---\napi:\n  file: sites.json\n  operationId: getSites\n---\n',
+    'reference/Applications/sites-api-v20/addsite.md': '---\napi:\n  file: sites.json\n  operationId: addSite\n---\n',
+  });
+  try {
+    const [result] = syncOas(root);
+    expect(result.changes.added).toStrictEqual([]);
+    expect(fs.existsSync(path.join(root, 'reference/Sites API'))).toBe(false);
+    expect(fs.readFileSync(path.join(root, 'reference/_order.yaml'), 'utf-8')).toBe('- Applications\n');
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('a tag whose pages live in a differently spelled folder of the same category gets no duplicate', () => {
+  const spec = JSON.stringify({
+    openapi: '3.0.0',
+    info: { title: 'Site API' },
+    paths: { '/1': { get: { operationId: 'getSite', tags: ['Site API v1.0'] } } },
+  });
+  const root = makeRepo({
+    'reference/site.json': spec,
+    'reference/Site API/site-api-v10/index.md': '---\ntitle: Site API v1.0\nhidden: false\n---',
+    'reference/Site API/site-api-v10/getsite.md': '---\napi:\n  file: site.json\n  operationId: getSite\n---\n',
+  });
+  try {
+    const [result] = syncOas(root);
+    expect(result.changes.added).toStrictEqual([]);
+    expect(fs.existsSync(path.join(root, 'reference/Site API/site-api-v1-0'))).toBe(false);
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('a tag whose only page is nested under its folder still gets its category page restored', () => {
+  // apply-tag-changes is off, so the page stays nested. The tag folder still
+  // holds it, so a missing index.md (and its order entries) must be restored.
+  const spec = JSON.stringify({
+    openapi: '3.0.0',
+    info: { title: 'API' },
+    tags: [{ name: 't', description: 'Tag t' }],
+    paths: { '/a': { get: { operationId: 'a', tags: ['t'] } } },
+  });
+  const root = makeRepo({
+    'reference/api.json': spec,
+    'reference/API/t/custom/a.md': '---\napi:\n  file: api.json\n  operationId: a\n---\n',
+  });
+  try {
+    const [result] = syncOas(root);
+    const indexPath = path.join(root, 'reference/API/t/index.md');
+    expect(fs.existsSync(indexPath), 'expected the category index.md to be restored').toBe(true);
+    const { data } = parseFrontmatter(fs.readFileSync(indexPath, 'utf-8'));
+    expect(data.title).toBe('t');
+    expect(data.excerpt).toBe('Tag t');
+    expect(fs.existsSync(path.join(root, 'reference/API/t/custom/a.md'))).toBe(true);
+    expect(fs.existsSync(path.join(root, 'reference/API/t/a.md'))).toBe(false);
+    expect(result.changes.added).toStrictEqual(['API/t/index.md']);
+    expect(order(root, 'reference/API/_order.yaml')).toStrictEqual(['t']);
+    expect(order(root, 'reference/_order.yaml')).toStrictEqual(['API']);
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('a tag with pages elsewhere still gets its category page when a new operation is added to it', () => {
+  const spec = JSON.stringify({
+    openapi: '3.0.0',
+    info: { title: 'API' },
+    paths: {
+      '/1': { get: { operationId: 'old', tags: ['t'] } },
+      '/2': { get: { operationId: 'new', tags: ['t'] } },
+    },
+  });
+  const root = makeRepo({
+    'reference/api.json': spec,
+    'reference/Elsewhere/old.md': '---\napi:\n  file: api.json\n  operationId: old\n---\n',
+  });
+  try {
+    syncOas(root);
+    expect(fs.existsSync(path.join(root, 'reference/API/t/index.md'))).toBe(true);
+    expect(fs.existsSync(path.join(root, 'reference/API/t/new.md'))).toBe(true);
+    expect(fs.existsSync(path.join(root, 'reference/Elsewhere/old.md'))).toBe(true);
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('with apply-tag-changes, a tag whose pages all live in another category still gets no empty category page', () => {
+  const spec = JSON.stringify({
+    openapi: '3.0.0',
+    info: { title: 'API' },
+    'x-readme': { 'apply-tag-changes': true },
+    paths: { '/1': { get: { operationId: 'a', tags: ['t'] } } },
+  });
+  const root = makeRepo({
+    'reference/api.json': spec,
+    'reference/Elsewhere/a.md': '---\napi:\n  file: api.json\n  operationId: a\nhidden: false\n---\n',
+  });
+  try {
+    const [result] = syncOas(root);
+    expect(result.changes.added).toStrictEqual([]);
+    expect(fs.existsSync(path.join(root, 'reference/API'))).toBe(false);
+    expect(fs.existsSync(path.join(root, 'reference/Elsewhere/a.md'))).toBe(true);
+  } finally {
+    rmRepo(root);
+  }
+});
+
 test('sync does not overwrite an existing tag index.md', () => {
   const spec = JSON.stringify({
     openapi: '3.0.0',
