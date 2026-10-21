@@ -1,14 +1,13 @@
-import fs from 'node:fs'
-import os from 'node:os'
-import path from 'node:path'
-import { spawn } from 'node:child_process'
-import { createRequire } from 'node:module'
-import { Option } from 'commander'
-import { query } from '@anthropic-ai/claude-agent-sdk'
-import * as styles from '../utils/styles.js'
-import { parseFrontmatter, toFrontmatter } from '../utils/markdown.js'
-import { syncOas } from './oas-sync.js'
-import OASNormalize from 'oas-normalize'
+import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import { createRequire } from 'node:module';
+import os from 'node:os';
+import path from 'node:path';
+
+import { query } from '@anthropic-ai/claude-agent-sdk';
+import { Option } from 'commander';
+import OASNormalize from 'oas-normalize';
+
 import {
   slotOrphansPrompt,
   slotOrphansOutputSchema,
@@ -18,53 +17,74 @@ import {
   organizeFromSectionsOutputSchema,
   organizeFromScratchPrompt,
   organizeFromScratchOutputSchema,
-} from '../prompts/index.js'
-import { analyzeLlmsTxt } from '../utils/llms.js'
-import { urlTrieSegs, extractUrlPathSegments, normalizePath, stripSegmentExtensions, compareCanonicalUrlPreference, llmsPageDedupeKey } from '../utils/url-segs.js'
+} from '../prompts/index.js';
+import { analyzeLlmsTxt } from '../utils/llms.js';
+import { parseFrontmatter, toFrontmatter } from '../utils/markdown.js';
+import * as styles from '../utils/styles.js';
+import {
+  urlTrieSegs,
+  extractUrlPathSegments,
+  normalizePath,
+  stripSegmentExtensions,
+  compareCanonicalUrlPreference,
+  llmsPageDedupeKey,
+} from '../utils/url-segs.js';
 
-export const command = 'import'
-export const order = 7
-export const description = 'Import content from a URL and package it as a ReadMe zip'
-export const hidden = true
-export const skipBootstrap = true
+import { syncOas } from './oas-sync.js';
 
-export const DEFAULT_MODEL = 'claude-sonnet-5'
+export const command = 'import';
+export const order = 7;
+export const description = 'Import content from a URL and package it as a ReadMe zip';
+export const hidden = true;
+export const skipBootstrap = true;
+
+export const DEFAULT_MODEL = 'claude-sonnet-5';
 
 export function getClaudeReasoningOptions(model) {
   if (model === 'sonnet' || model === DEFAULT_MODEL || model?.startsWith('claude-sonnet-5-')) {
-    return { thinking: { type: 'adaptive' }, effort: 'medium' }
+    return { thinking: { type: 'adaptive' }, effort: 'medium' };
   }
-  return {}
+  return {};
 }
 
 export function args(cmd) {
   cmd.requiredOption(
     '--source <url-or-file...>',
     'One or more URLs to import from (space-separated or repeated), or a single local OpenAPI spec (.json/.yaml/.yml)',
-  )
-  cmd.option('-o, --output <path>', 'Output zip path (defaults to <basename>-readme.zip in cwd)')
-  cmd.addOption(new Option('-m, --model <name>', 'Claude model alias: haiku, sonnet, opus').choices(['haiku', 'sonnet', 'opus']).default(DEFAULT_MODEL))
-  cmd.option('--firecrawl-key <key>', 'Firecrawl API key (or set FIRECRAWL_API_KEY env var) — enables JS-rendered sidebar scraping')
-  cmd.option('--skip-api-reference', 'Drop pages routed to the API Reference / reference dir. Use when uploading the OAS spec separately.')
+  );
+  cmd.option('-o, --output <path>', 'Output zip path (defaults to <basename>-readme.zip in cwd)');
+  cmd.addOption(
+    new Option('-m, --model <name>', 'Claude model alias: haiku, sonnet, opus')
+      .choices(['haiku', 'sonnet', 'opus'])
+      .default(DEFAULT_MODEL),
+  );
+  cmd.option(
+    '--firecrawl-key <key>',
+    'Firecrawl API key (or set FIRECRAWL_API_KEY env var) — enables JS-rendered sidebar scraping',
+  );
+  cmd.option(
+    '--skip-api-reference',
+    'Drop pages routed to the API Reference / reference dir. Use when uploading the OAS spec separately.',
+  );
   // Internal dev-only flag: skip the zip, keep staging, and boot the dev server
   // against it for quick visual previews. Hidden from --help.
-  cmd.addOption(new Option('--test').hideHelp())
+  cmd.addOption(new Option('--test').hideHelp());
   // Dump intermediate pipeline artifacts (llms parse, scraped nav, orphan
   // handling, final organized tree) so we can diff stages when the produced
   // sidebar disagrees with the source.
-  cmd.addOption(new Option('--debug').hideHelp())
+  cmd.addOption(new Option('--debug').hideHelp());
 }
 
 // Docs locations probed when the user hands us a bare homepage. Each is tried
 // as a subdomain swap (docs.example.com) and, unless subdomain-only, a path
 // prefix (example.com/docs/). Order is preference order — earlier wins ties.
-const WELL_KNOWN_DOC_ROUTES = ['docs', 'doc', 'developers', 'developer', 'documentation', 'documentations', 'platform']
+const WELL_KNOWN_DOC_ROUTES = ['docs', 'doc', 'developers', 'developer', 'documentation', 'documentations', 'platform'];
 // Routes probed only as a subdomain (platform.example.com). Their path form
 // (example.com/platform/) is usually a marketing/product page, not docs.
-const SUBDOMAIN_ONLY_DOC_ROUTES = new Set(['platform'])
+const SUBDOMAIN_ONLY_DOC_ROUTES = new Set(['platform']);
 // Max concurrent HTTP probes when checking whether a section's landing URL
 // (e.g. /docs/cli) really exists before importing it as a real overview page.
-const LANDING_PROBE_CAP = 8
+const LANDING_PROBE_CAP = 8;
 // Well-known spec locations probed on every import. Tried under the
 // post-adoption origin, the pre-adoption origin when the docs-route probe
 // switched hosts, and (first three only) under a path-kind docs base.
@@ -81,11 +101,11 @@ const WELL_KNOWN_OAS_PATHS = [
   'v3/api-docs',
   'api-docs',
   'swagger/v1/swagger.json',
-]
+];
 // Per-source cap on candidate specs. Candidates are sorted by discovery-source
 // confidence first, so the cap trims the least trusted ones.
-const MAX_OAS_CANDIDATES_PER_SOURCE = 10
-const OAS_SOURCE_CONFIDENCE = ['llms', 'mintlify', 'probe', 'html', 'sitemap', 'link-sweep']
+const MAX_OAS_CANDIDATES_PER_SOURCE = 10;
+const OAS_SOURCE_CONFIDENCE = ['llms', 'mintlify', 'probe', 'html', 'sitemap', 'link-sweep'];
 
 /**
  * Run the importer programmatically. Mirrors the CLI command but throws on
@@ -104,131 +124,133 @@ const OAS_SOURCE_CONFIDENCE = ['llms', 'mintlify', 'probe', 'html', 'sitemap', '
  * @returns {Promise<{ source: 'url' | 'oas', outputZip?: string, stagingDir?: string, fileCount: number, duration: number, phases: Array<{ label: string, ms: number }> }>}
  */
 export async function importDocs(options) {
-  const model = options.model || DEFAULT_MODEL
-  options = { ...options, model }
+  const model = options.model || DEFAULT_MODEL;
+  options = { ...options, model };
 
-  const startedAt = Date.now()
-  const phases = []
+  const startedAt = Date.now();
+  const phases = [];
   const timePhase = async (label, fn) => {
-    const t = Date.now()
-    const result = await fn()
-    phases.push({ label, ms: Date.now() - t })
-    return result
-  }
+    const t = Date.now();
+    const result = await fn();
+    phases.push({ label, ms: Date.now() - t });
+    return result;
+  };
 
-  const debugSnapshots = options.debug ? {} : null
+  const debugSnapshots = options.debug ? {} : null;
 
   // Normalize source → array; preserve back-compat with single-string callers.
-  const rawSources = Array.isArray(options.source) ? options.source : [options.source]
-  if (rawSources.length === 0) throw new Error('At least one --source is required')
+  const rawSources = Array.isArray(options.source) ? options.source : [options.source];
+  if (rawSources.length === 0) throw new Error('At least one --source is required');
 
   // Dispatch: any non-URL entry triggers the local-OAS path, which is
   // strictly single-source.
-  const hasNonUrl = rawSources.some((s) => !/^https?:\/\//i.test(s))
+  const hasNonUrl = rawSources.some(s => !/^https?:\/\//i.test(s));
   if (hasNonUrl) {
     if (rawSources.length > 1) {
-      throw new Error('OAS imports accept a single --source; URL imports can accept multiple.')
+      throw new Error('OAS imports accept a single --source; URL imports can accept multiple.');
     }
-    return runOasImport(rawSources[0], options, startedAt, phases, timePhase)
+    return runOasImport(rawSources[0], options, startedAt, phases, timePhase);
   }
 
-  const sourceUrls = rawSources.map((s) => {
+  const sourceUrls = rawSources.map(s => {
     try {
-      return new URL(s)
+      return new URL(s);
     } catch {
-      throw new Error(`Invalid --source URL: ${s}`)
+      throw new Error(`Invalid --source URL: ${s}`);
     }
-  })
+  });
 
-  const hostnameJoined = sourceUrls.map((u) => u.hostname).join('-')
-  const outputZip = path.resolve(options.output || path.join(process.cwd(), `${hostnameJoined}-readme.zip`))
+  const hostnameJoined = sourceUrls.map(u => u.hostname).join('-');
+  const outputZip = path.resolve(options.output || path.join(process.cwd(), `${hostnameJoined}-readme.zip`));
 
-  console.log()
+  console.log();
   if (sourceUrls.length === 1) {
-    styles.info(`Importing from ${styles.bold(sourceUrls[0].toString())}`)
+    styles.info(`Importing from ${styles.bold(sourceUrls[0].toString())}`);
   } else {
-    styles.info(`Importing from ${styles.bold(String(sourceUrls.length))} sources:`)
-    for (const u of sourceUrls) styles.info(styles.dim(`  · ${u.toString()}`))
+    styles.info(`Importing from ${styles.bold(String(sourceUrls.length))} sources:`);
+    for (const u of sourceUrls) styles.info(styles.dim(`  · ${u.toString()}`));
   }
-  if (!options.test) styles.info(`Output: ${styles.bold(outputZip)}`)
-  console.log()
+  if (!options.test) styles.info(`Output: ${styles.bold(outputZip)}`);
+  console.log();
 
   // Per-source pipeline: discovery + scrape + organize, in parallel.
   // Each call returns an `organized` object with the standard shape
   // `{ title, categories: [...] }`; we merge them before staging.
   const perSourceOrganized = await Promise.all(
-    sourceUrls.map((sourceUrl) => produceOrganizedForSource(sourceUrl, options, timePhase, debugSnapshots)),
-  )
+    sourceUrls.map(sourceUrl => produceOrganizedForSource(sourceUrl, options, timePhase, debugSnapshots)),
+  );
 
-  const organized = sourceUrls.length === 1 ? perSourceOrganized[0] : mergeOrganized(perSourceOrganized)
+  const organized = sourceUrls.length === 1 ? perSourceOrganized[0] : mergeOrganized(perSourceOrganized);
 
   // Union the candidate OpenAPI-spec URLs across all sources, deduped by URL
   // (mergeOrganized intentionally drops non-category fields, so collect from
   // the per-source results directly).
-  const oasJsonUrls = []
-  const seenOasUrls = new Set()
+  const oasJsonUrls = [];
+  const seenOasUrls = new Set();
   for (const o of perSourceOrganized) {
     for (const item of o.oasJsonUrls || []) {
-      if (seenOasUrls.has(item.url)) continue
-      seenOasUrls.add(item.url)
-      oasJsonUrls.push(item)
+      if (seenOasUrls.has(item.url)) continue;
+      seenOasUrls.add(item.url);
+      oasJsonUrls.push(item);
     }
   }
 
-  const llmsPaths = new Set()
+  const llmsPaths = new Set();
   for (const o of perSourceOrganized) {
-    for (const p of o.llmsPaths || []) llmsPaths.add(p)
+    for (const p of o.llmsPaths || []) llmsPaths.add(p);
   }
 
   if (debugSnapshots) {
-    debugSnapshots['05-organized.json'] = organized
-    const debugDir = path.join(os.tmpdir(), `readme-import-debug-${hostnameJoined}-${Date.now()}`)
-    fs.mkdirSync(debugDir, { recursive: true })
+    debugSnapshots['05-organized.json'] = organized;
+    const debugDir = path.join(os.tmpdir(), `readme-import-debug-${hostnameJoined}-${Date.now()}`);
+    fs.mkdirSync(debugDir, { recursive: true });
     // Probe-hit candidates carry prefetched spec bytes — summarize instead of
     // dumping megabytes of serialized Buffer into the snapshot.
     const bufferSummary = (key, value) =>
-      value && value.type === 'Buffer' && Array.isArray(value.data) ? `<Buffer ${value.data.length} bytes>` : value
+      value && value.type === 'Buffer' && Array.isArray(value.data) ? `<Buffer ${value.data.length} bytes>` : value;
     for (const [name, data] of Object.entries(debugSnapshots)) {
-      fs.writeFileSync(path.join(debugDir, name), JSON.stringify(data, bufferSummary, 2))
+      fs.writeFileSync(path.join(debugDir, name), JSON.stringify(data, bufferSummary, 2));
     }
-    styles.info(`${styles.dim(`Debug snapshots → ${debugDir}`)}`)
+    styles.info(`${styles.dim(`Debug snapshots → ${debugDir}`)}`);
   }
-  console.log()
+  console.log();
 
-  console.log(`  ${styles.bold(organized.title || '(untitled)')}`)
+  console.log(`  ${styles.bold(organized.title || '(untitled)')}`);
   for (const cat of organized.categories || []) {
-    console.log()
-    const iconLabel = cat.icon ? `${styles.brand(`[${cat.icon}]`)} ` : ''
-    console.log(`  ${iconLabel}${styles.bold(cat.title)}`)
-    printPagesTree(cat.pages || [], 2)
+    console.log();
+    const iconLabel = cat.icon ? `${styles.brand(`[${cat.icon}]`)} ` : '';
+    console.log(`  ${iconLabel}${styles.bold(cat.title)}`);
+    printPagesTree(cat.pages || [], 2);
   }
 
-  const stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'readme-import-'))
+  const stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'readme-import-'));
 
-  let result
+  let result;
   try {
-    styles.info(`Staging frontmatter stubs in ${styles.bold(stagingDir)}...`)
-    const stageStart = Date.now()
+    styles.info(`Staging frontmatter stubs in ${styles.bold(stagingDir)}...`);
+    const stageStart = Date.now();
     const staged = await timePhase('stage stubs', async () =>
       stageOrganized(organized, stagingDir, { skipApiReference: !!options.skipApiReference, llmsPaths }),
-    )
+    );
 
-    const movedChangelog = finalizeChangelogs(stagingDir)
+    const movedChangelog = finalizeChangelogs(stagingDir);
     if (movedChangelog > 0) {
       styles.info(
         `Staged ${styles.bold(String(movedChangelog))} changelog page${movedChangelog === 1 ? '' : 's'} in ${styles.bold('changelogs/')}.`,
-      )
+      );
     }
 
     const landingTitle =
       organized.title ||
-      (sourceUrls.length === 1 ? sourceUrls[0].hostname : sourceUrls.map((u) => u.hostname).join(' + '))
-    ensureDocsLandingPage(stagingDir, landingTitle)
+      (sourceUrls.length === 1 ? sourceUrls[0].hostname : sourceUrls.map(u => u.hostname).join(' + '));
+    ensureDocsLandingPage(stagingDir, landingTitle);
     styles.ok(
       `Staged ${styles.bold(String(staged.fileCount))} stub${staged.fileCount === 1 ? '' : 's'} across ${styles.bold(String(staged.dirCount))} director${staged.dirCount === 1 ? 'y' : 'ies'} in ${styles.bold(formatDuration(Date.now() - stageStart))}.`,
-    )
+    );
     if (staged.skippedApiRef > 0) {
-      styles.info(`Skipped ${styles.bold(String(staged.skippedApiRef))} API reference page${staged.skippedApiRef === 1 ? '' : 's'} (--skip-api-reference)`)
+      styles.info(
+        `Skipped ${styles.bold(String(staged.skippedApiRef))} API reference page${staged.skippedApiRef === 1 ? '' : 's'} (--skip-api-reference)`,
+      );
     }
 
     // Download captured candidate specs into <stagingDir>/oas/. Raw bytes only —
@@ -236,41 +258,47 @@ export async function importDocs(options) {
     // here (not in docs/ or reference/) so it rides the zip but is invisible to
     // the docs build. Non-fatal: a failed download is logged and skipped.
     if (oasJsonUrls.length > 0) {
-      const oasCount = await timePhase('download oas specs', () => downloadOasSpecs(oasJsonUrls, stagingDir))
+      const oasCount = await timePhase('download oas specs', () => downloadOasSpecs(oasJsonUrls, stagingDir));
       if (oasCount > 0) {
-        styles.ok(`Downloaded ${styles.bold(String(oasCount))} candidate OpenAPI spec${oasCount === 1 ? '' : 's'} into ${styles.bold('oas/')}.`)
+        styles.ok(
+          `Downloaded ${styles.bold(String(oasCount))} candidate OpenAPI spec${oasCount === 1 ? '' : 's'} into ${styles.bold('oas/')}.`,
+        );
       }
     }
-    console.log()
+    console.log();
 
     if (options.test) {
-      styles.ok(`Done in ${styles.bold(formatDuration(Date.now() - startedAt))}! Staged ${styles.bold(String(staged.fileCount))} files at ${styles.bold(stagingDir)}`)
-      console.log()
-      styles.info('Starting the dev server for preview...')
-      console.log()
-      await runDevPreview(stagingDir)
-      return { source: 'url', stagingDir, fileCount: staged.fileCount, duration: Date.now() - startedAt, phases }
+      styles.ok(
+        `Done in ${styles.bold(formatDuration(Date.now() - startedAt))}! Staged ${styles.bold(String(staged.fileCount))} files at ${styles.bold(stagingDir)}`,
+      );
+      console.log();
+      styles.info('Starting the dev server for preview...');
+      console.log();
+      await runDevPreview(stagingDir);
+      return { source: 'url', stagingDir, fileCount: staged.fileCount, duration: Date.now() - startedAt, phases };
     }
 
     if (staged.fileCount === 0) {
-      styles.warning('Staging directory is empty — skipping zip.')
-      return { source: 'url', fileCount: 0, duration: Date.now() - startedAt, phases }
+      styles.warning('Staging directory is empty — skipping zip.');
+      return { source: 'url', fileCount: 0, duration: Date.now() - startedAt, phases };
     }
 
-    styles.info(`Packaging ${styles.bold(String(staged.fileCount))} files into ${styles.bold(outputZip)}...`)
-    await timePhase('zip', () => createZip(stagingDir, outputZip))
+    styles.info(`Packaging ${styles.bold(String(staged.fileCount))} files into ${styles.bold(outputZip)}...`);
+    await timePhase('zip', () => createZip(stagingDir, outputZip));
 
-    console.log()
-    styles.ok(`Done in ${styles.bold(formatDuration(Date.now() - startedAt))}! Your ReadMe import is ready at ${styles.bold(outputZip)}`)
-    console.log(styles.dim(`  ⏱  ${phases.map((p) => `${p.label} ${formatDuration(p.ms)}`).join(' · ')}`))
-    result = { source: 'url', outputZip, fileCount: staged.fileCount, duration: Date.now() - startedAt, phases }
+    console.log();
+    styles.ok(
+      `Done in ${styles.bold(formatDuration(Date.now() - startedAt))}! Your ReadMe import is ready at ${styles.bold(outputZip)}`,
+    );
+    console.log(styles.dim(`  ⏱  ${phases.map(p => `${p.label} ${formatDuration(p.ms)}`).join(' · ')}`));
+    result = { source: 'url', outputZip, fileCount: staged.fileCount, duration: Date.now() - startedAt, phases };
   } finally {
     if (!options.test) {
-      fs.rmSync(stagingDir, { recursive: true, force: true })
+      fs.rmSync(stagingDir, { recursive: true, force: true });
     }
   }
 
-  return result
+  return result;
 }
 
 /**
@@ -283,26 +311,28 @@ export async function importDocs(options) {
  * the hostname so parallel runs don't clobber each other.
  */
 async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSnapshots) {
-  const redirected = await timePhase('follow source redirects', () => resolveRedirectedSourceUrl(sourceUrl))
+  const redirected = await timePhase('follow source redirects', () => resolveRedirectedSourceUrl(sourceUrl));
   if (redirected) {
-    styles.info(`${styles.bold(sourceUrl.toString())} redirects to ${styles.bold(redirected.toString())} — rebasing import onto the final URL.`)
-    sourceUrl = redirected
+    styles.info(
+      `${styles.bold(sourceUrl.toString())} redirects to ${styles.bold(redirected.toString())} — rebasing import onto the final URL.`,
+    );
+    sourceUrl = redirected;
   }
 
   // Probe well-known docs routes (docs./developer. subdomains and /docs/,
   // … path prefixes) and adopt the first that resolves as the real base, so everything downstream runs
-  const preAdoptionOrigin = sourceUrl.origin
-  const docsBase = await timePhase('probe well-known docs routes', () => resolveDocsBaseUrl(sourceUrl))
+  const preAdoptionOrigin = sourceUrl.origin;
+  const docsBase = await timePhase('probe well-known docs routes', () => resolveDocsBaseUrl(sourceUrl));
   if (docsBase) {
     styles.info(
       `${styles.bold(sourceUrl.toString())} looks like a homepage — switching to docs route ${styles.bold(docsBase.url.toString())}${styles.dim(docsBase.hasLlms ? ' (llms.txt found)' : ' (no llms.txt; using for scrape fallback)')}.`,
-    )
-    sourceUrl = docsBase.url
+    );
+    sourceUrl = docsBase.url;
   }
 
   // Fired here so the spec-path probe fully overlaps llms/scrape/organize;
   // awaited just before the candidates are attached to `organized`.
-  const oasProbePromise = probeWellKnownOasPaths(sourceUrl, docsBase, preAdoptionOrigin).catch(() => [])
+  const oasProbePromise = probeWellKnownOasPaths(sourceUrl, docsBase, preAdoptionOrigin).catch(() => []);
 
   // Discover llms.txt files by BFS walking parents AND children. Seed the
   // frontier with the walk-up paths (source → root). Any "hit" (file exists
@@ -312,43 +342,47 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
   // hits contribute content to the merged result. See
   // mydocs.com/section1/section2 → also tries /section1/, /, and every
   // sibling section2 we discover along the way.
-  styles.info(`Discovering llms.txt (walking up and down from ${styles.bold(sourceUrl.toString())})...`)
+  styles.info(`Discovering llms.txt (walking up and down from ${styles.bold(sourceUrl.toString())})...`);
 
-  const discovery = await timePhase('discover llms.txt', () => discoverLlmsTxt(sourceUrl))
+  const discovery = await timePhase('discover llms.txt', () => discoverLlmsTxt(sourceUrl));
   for (const hit of discovery.hits) {
     if (hit.usable) {
-      styles.info(styles.dim(`  ${hit.llmsUrl} → valid (${hit.stats.linkItems} links)`))
+      styles.info(styles.dim(`  ${hit.llmsUrl} → valid (${hit.stats.linkItems} links)`));
     } else {
-      styles.info(styles.dim(`  ${hit.llmsUrl} → invalid: ${hit.reason} (kept as stepping stone)`))
+      styles.info(styles.dim(`  ${hit.llmsUrl} → invalid: ${hit.reason} (kept as stepping stone)`));
     }
   }
   for (const miss of discovery.misses) {
-    styles.info(styles.dim(`  ${miss.url} → ${miss.status ? `HTTP ${miss.status}` : miss.error || 'no llms.txt'}`))
+    styles.info(styles.dim(`  ${miss.url} → ${miss.status ? `HTTP ${miss.status}` : miss.error || 'no llms.txt'}`));
   }
-  let llms = mergeValidHits(discovery.hits)
-  let llmsUrl = llms?.llmsUrl || null
-  const skippedLlms = discovery.skipped
+  let llms = mergeValidHits(discovery.hits);
+  let llmsUrl = llms?.llmsUrl || null;
+  const skippedLlms = discovery.skipped;
 
   // Capture spec-shaped links (.json/.yaml/.yml — candidate OpenAPI specs)
   // BEFORE anything else sees the parsed tree. They're removed in place here,
   // downloaded into the staged `oas/` dir by importDocs, and validated +
   // uploaded by the runner. Stub generation never sees them.
-  const oasCandidates = []
-  const seenOasCandidateUrls = new Set()
-  const addOasCandidates = (items) => {
+  const oasCandidates = [];
+  const seenOasCandidateUrls = new Set();
+  const addOasCandidates = items => {
     for (const item of items || []) {
-      if (!item || !item.url) continue
-      const url = item.url.split('#')[0]
-      if (seenOasCandidateUrls.has(url)) continue
-      seenOasCandidateUrls.add(url)
-      oasCandidates.push({ ...item, url })
+      if (!item || !item.url) continue;
+      const url = item.url.split('#')[0];
+      if (seenOasCandidateUrls.has(url)) continue;
+      seenOasCandidateUrls.add(url);
+      oasCandidates.push({ ...item, url });
     }
-  }
+  };
   if (llms) {
-    const llmsSpecUrls = extractOasSpecUrlsFromParsed(llms.parsed)
+    const llmsSpecUrls = extractOasSpecUrlsFromParsed(llms.parsed);
     if (llmsSpecUrls.length > 0) {
-      styles.info(styles.dim(`Captured ${llmsSpecUrls.length} spec link${llmsSpecUrls.length === 1 ? '' : 's'} as candidate OpenAPI spec${llmsSpecUrls.length === 1 ? '' : 's'} → oas/.`))
-      addOasCandidates(llmsSpecUrls)
+      styles.info(
+        styles.dim(
+          `Captured ${llmsSpecUrls.length} spec link${llmsSpecUrls.length === 1 ? '' : 's'} as candidate OpenAPI spec${llmsSpecUrls.length === 1 ? '' : 's'} → oas/.`,
+        ),
+      );
+      addOasCandidates(llmsSpecUrls);
     }
   }
 
@@ -357,20 +391,24 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
   // AND the "use llms.txt sections directly" organize path — sees a clean URL
   // list. Spec-shaped items were already pulled out above.
   if (llms) {
-    const dropped = dropAssetItemsFromParsed(llms.parsed)
+    const dropped = dropAssetItemsFromParsed(llms.parsed);
     if (dropped > 0) {
-      styles.info(styles.dim(`Dropped ${dropped} asset/meta URL${dropped === 1 ? '' : 's'} (.yaml/.xml/.toml, llms*.txt) from llms.txt items.`))
+      styles.info(
+        styles.dim(
+          `Dropped ${dropped} asset/meta URL${dropped === 1 ? '' : 's'} (.yaml/.xml/.toml, llms*.txt) from llms.txt items.`,
+        ),
+      );
     }
   }
 
   if (llms) {
-    const narrowed = narrowToDocsSubtreeIfNeeded(llms, sourceUrl, discovery.hits)
+    const narrowed = narrowToDocsSubtreeIfNeeded(llms, sourceUrl, discovery.hits);
     if (narrowed) {
       styles.info(
         styles.dim(
           `Narrowed merged result to /${narrowed.segment}/ subtree (kept ${narrowed.kept}, dropped ${narrowed.dropped} out-of-scope page${narrowed.dropped === 1 ? '' : 's'}).`,
         ),
-      )
+      );
     }
   }
 
@@ -379,60 +417,71 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
   // MIN_LINK_ROWS=10 check (now relaxed in utils/llms.js) with a global
   // post-merge floor — many tiny per-product llms.txt files can still pass
   // as long as their union clears the bar.
-  const MIN_MERGED_LINK_COUNT = 10
+  const MIN_MERGED_LINK_COUNT = 10;
   if (llms) {
-    const mergedLinkCount = llms.parsed.sections.reduce((n, s) => n + s.items.length, 0)
+    const mergedLinkCount = llms.parsed.sections.reduce((n, s) => n + s.items.length, 0);
     if (mergedLinkCount < MIN_MERGED_LINK_COUNT) {
       styles.warning(
         `Merged llms.txt has only ${styles.bold(String(mergedLinkCount))} endpoint${mergedLinkCount === 1 ? '' : 's'} (< ${MIN_MERGED_LINK_COUNT}) — falling back to scrape.`,
-      )
-      skippedLlms.push({ url: llmsUrl, reason: `merged total only ${mergedLinkCount} link${mergedLinkCount === 1 ? '' : 's'}` })
-      llms = null
-      llmsUrl = null
+      );
+      skippedLlms.push({
+        url: llmsUrl,
+        reason: `merged total only ${mergedLinkCount} link${mergedLinkCount === 1 ? '' : 's'}`,
+      });
+      llms = null;
+      llmsUrl = null;
     }
   }
-  console.log()
+  console.log();
 
-  let sitemapUrl = null
-  let sitemapKnownUrls = []
+  let sitemapUrl = null;
+  let sitemapKnownUrls = [];
   if (!llms) {
     // Sitemap fallback: gives us a flat URL list to anchor the scrape (slot
     // orphans by path) even though it lacks llms.txt's section structure.
     // Scope is narrowed to the docs subtree of the source URL when possible
     // so we don't pull in marketing/blog pages from a whole-site sitemap.
-    const sitemapCandidates = buildSitemapCandidates(sourceUrl)
-    const scopePrefix = deriveSitemapScope(sourceUrl)
+    const sitemapCandidates = buildSitemapCandidates(sourceUrl);
+    const scopePrefix = deriveSitemapScope(sourceUrl);
     styles.info(
       `${skippedLlms.length > 0 ? 'No usable llms.txt' : 'No llms.txt'} — checking for sitemap.xml (${sitemapCandidates.length} candidate${sitemapCandidates.length === 1 ? '' : 's'})${scopePrefix ? `, scoped to ${styles.bold(scopePrefix)}` : ''}...`,
-    )
+    );
     const sitemapResult = await timePhase('fetch sitemap.xml', async () => {
       for (const candidate of sitemapCandidates) {
-        const res = await fetchSitemap(candidate, scopePrefix)
-        if (res.ok && res.urls.length > 0) return { url: candidate, urls: res.urls }
-        const reason = res.ok ? '0 urls in scope' : res.status ? `HTTP ${res.status}` : res.error || 'failed'
-        styles.info(styles.dim(`  ${candidate} → ${reason}`))
+        const res = await fetchSitemap(candidate, scopePrefix);
+        if (res.ok && res.urls.length > 0) return { url: candidate, urls: res.urls };
+        const reason = res.ok ? '0 urls in scope' : res.status ? `HTTP ${res.status}` : res.error || 'failed';
+        styles.info(styles.dim(`  ${candidate} → ${reason}`));
       }
-      return null
-    })
-    console.log()
+      return null;
+    });
+    console.log();
     if (sitemapResult) {
-      sitemapUrl = sitemapResult.url
-      const sitemapOasSink = []
-      sitemapKnownUrls = sitemapUrlsToKnownUrls(sitemapResult.urls, sitemapOasSink)
-      addOasCandidates(sitemapOasSink)
-      styles.ok(`Found sitemap.xml at ${styles.bold(sitemapUrl)} — ${styles.bold(String(sitemapKnownUrls.length))} URL${sitemapKnownUrls.length === 1 ? '' : 's'} in scope.`)
+      sitemapUrl = sitemapResult.url;
+      const sitemapOasSink = [];
+      sitemapKnownUrls = sitemapUrlsToKnownUrls(sitemapResult.urls, sitemapOasSink);
+      addOasCandidates(sitemapOasSink);
+      styles.ok(
+        `Found sitemap.xml at ${styles.bold(sitemapUrl)} — ${styles.bold(String(sitemapKnownUrls.length))} URL${sitemapKnownUrls.length === 1 ? '' : 's'} in scope.`,
+      );
     } else {
-      styles.warning(`No llms.txt or sitemap.xml found — falling back to sidebar discovery via scrape.`)
+      styles.warning(`No llms.txt or sitemap.xml found — falling back to sidebar discovery via scrape.`);
     }
   } else {
-    const s = llms.stats
+    const s = llms.stats;
     if (llms.sourceFiles.length === 1) {
-      styles.info(styles.dim(`Using ${llmsUrl} (${s.conforming}/${s.total} lines conforming, ratio ${s.ratio.toFixed(2)}).`))
+      styles.info(
+        styles.dim(`Using ${llmsUrl} (${s.conforming}/${s.total} lines conforming, ratio ${s.ratio.toFixed(2)}).`),
+      );
     } else {
-      styles.info(styles.dim(`Merged ${llms.sourceFiles.length} llms.txt files (root: ${llmsUrl}; aggregate ratio ${s.ratio.toFixed(2)}).`))
+      styles.info(
+        styles.dim(
+          `Merged ${llms.sourceFiles.length} llms.txt files (root: ${llmsUrl}; aggregate ratio ${s.ratio.toFixed(2)}).`,
+        ),
+      );
     }
     if (llms.parsed.h3Fallback) {
-      styles.info(styles.dim(`H2 sections oversized — re-parsed using H3 (###) headings as section boundaries.`))
+      styles.info(styles.dim(`H2 sections oversized — re-parsed using H3 (###) headings as section boundaries.`));
     }
   }
 
@@ -442,20 +491,20 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
   // here,
   // before knownUrls is derived, so every downstream consumer operates on the
   // already-changelog-free view.
-  let extractedChangelog = []
+  let extractedChangelog = [];
   if (llms) {
-    extractedChangelog = extractChangelogFromSections(llms.parsed.sections)
+    extractedChangelog = extractChangelogFromSections(llms.parsed.sections);
   } else if (sitemapKnownUrls.length > 0) {
-    const { extracted, kept } = partitionChangelogFromKnownUrls(sitemapKnownUrls)
-    extractedChangelog = extracted
-    sitemapKnownUrls = kept
+    const { extracted, kept } = partitionChangelogFromKnownUrls(sitemapKnownUrls);
+    extractedChangelog = extracted;
+    sitemapKnownUrls = kept;
   }
   if (extractedChangelog.length > 0) {
     styles.info(
       styles.dim(
         `Pre-extracted ${extractedChangelog.length} changelog page${extractedChangelog.length === 1 ? '' : 's'} — bypassing organization, attaching as Changelog category at the end.`,
       ),
-    )
+    );
   }
 
   // Dedupe items across llms.parsed.sections by URL (first occurrence wins).
@@ -464,141 +513,157 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
   // in multiple sidebar sections regardless of which path (direct, icons, full
   // reorg) runs downstream.
   if (llms) {
-    const seenItemUrls = new Set()
-    let deduped = 0
+    const seenItemUrls = new Set();
+    let deduped = 0;
     for (const section of llms.parsed.sections) {
-      const before = section.items.length
-      section.items = section.items.filter((item) => {
-        const key = normalizePath(item.url)
-        if (seenItemUrls.has(key)) return false
-        seenItemUrls.add(key)
-        return true
-      })
-      deduped += before - section.items.length
+      const before = section.items.length;
+      section.items = section.items.filter(item => {
+        const key = normalizePath(item.url);
+        if (seenItemUrls.has(key)) return false;
+        seenItemUrls.add(key);
+        return true;
+      });
+      deduped += before - section.items.length;
     }
     if (deduped > 0) {
-      styles.info(styles.dim(`Deduped ${deduped} cross-section duplicate URL${deduped === 1 ? '' : 's'} from llms.txt sections.`))
+      styles.info(
+        styles.dim(`Deduped ${deduped} cross-section duplicate URL${deduped === 1 ? '' : 's'} from llms.txt sections.`),
+      );
     }
   }
 
-  const dbgSuffix = `-${sourceUrl.hostname}`
+  const dbgSuffix = `-${sourceUrl.hostname}`;
   if (debugSnapshots) {
-    debugSnapshots[`01-llms-parsed${dbgSuffix}.json`] = { llmsUrl, parsed: llms ? llms.parsed : null, skipped: skippedLlms }
-    debugSnapshots[`01b-sitemap${dbgSuffix}.json`] = { sitemapUrl, urls: sitemapKnownUrls }
-    debugSnapshots[`01c-extracted-changelog${dbgSuffix}.json`] = extractedChangelog
+    debugSnapshots[`01-llms-parsed${dbgSuffix}.json`] = {
+      llmsUrl,
+      parsed: llms ? llms.parsed : null,
+      skipped: skippedLlms,
+    };
+    debugSnapshots[`01b-sitemap${dbgSuffix}.json`] = { sitemapUrl, urls: sitemapKnownUrls };
+    debugSnapshots[`01c-extracted-changelog${dbgSuffix}.json`] = extractedChangelog;
   }
 
-  let knownUrls = []
+  let knownUrls = [];
   if (llms) {
-    const totalItems = llms.parsed.sections.reduce((n, s) => n + s.items.length, 0)
-    const srcCount = llms.sourceFiles.length
-    const srcLabel = srcCount === 1 ? 'llms.txt' : `${srcCount} llms.txt files (merged)`
+    const totalItems = llms.parsed.sections.reduce((n, s) => n + s.items.length, 0);
+    const srcCount = llms.sourceFiles.length;
+    const srcLabel = srcCount === 1 ? 'llms.txt' : `${srcCount} llms.txt files (merged)`;
     styles.ok(
       `Found ${srcLabel} — ${styles.bold(String(totalItems))} page${totalItems === 1 ? '' : 's'} across ${styles.bold(String(llms.parsed.sections.length))} section${llms.parsed.sections.length === 1 ? '' : 's'}${llms.parsed.title ? ` (${llms.parsed.title})` : ''}.`,
-    )
+    );
 
-    const rawKnownUrls = llms.parsed.sections.flatMap((s) => s.items.map((i) => ({ title: i.text, url: i.url, description: i.description })))
+    const rawKnownUrls = llms.parsed.sections.flatMap(s =>
+      s.items.map(i => ({ title: i.text, url: i.url, description: i.description })),
+    );
 
     // Dedupe llms.txt entries by pathname. Some sites (zod.dev, fumadocs) list
     // every in-page anchor as its own llms.txt row (`/v4?id=wrapping-up`,
     // `/v4?id=metadata`, …) even though they all live on one rendered page.
     // Prefer direct markdown source forms over shorter rendered URLs because
     // they are better import sources for downstream content fetching.
-    const byKnownPath = new Map()
+    const byKnownPath = new Map();
     for (const p of rawKnownUrls) {
-      const key = normalizePath(p.url)
-      const prev = byKnownPath.get(key)
-      if (!prev || compareCanonicalUrlPreference(p.url, prev.url) < 0) byKnownPath.set(key, p)
+      const key = normalizePath(p.url);
+      const prev = byKnownPath.get(key);
+      if (!prev || compareCanonicalUrlPreference(p.url, prev.url) < 0) byKnownPath.set(key, p);
     }
-    knownUrls = Array.from(byKnownPath.values())
-    const dropped = rawKnownUrls.length - knownUrls.length
+    knownUrls = Array.from(byKnownPath.values());
+    const dropped = rawKnownUrls.length - knownUrls.length;
     if (dropped > 0) {
-      styles.info(`${styles.dim(`Collapsed ${dropped} anchor/query duplicates → ${knownUrls.length} unique pages.`)}`)
+      styles.info(`${styles.dim(`Collapsed ${dropped} anchor/query duplicates → ${knownUrls.length} unique pages.`)}`);
     }
   } else if (sitemapKnownUrls.length > 0) {
-    knownUrls = sitemapKnownUrls
+    knownUrls = sitemapKnownUrls;
   }
 
-  console.log()
-  const firecrawlKey = options.firecrawlKey || process.env.FIRECRAWL_API_KEY || null
+  console.log();
+  const firecrawlKey = options.firecrawlKey || process.env.FIRECRAWL_API_KEY || null;
 
   // Mintlify fast path — the canonical sidebar lives in docs.json/mint.json
   // at origin root. When present it gives us perfect structure with zero
   // HTML parsing, so try it before falling back to generic nav scraping.
-  styles.info(`Probing for Mintlify config (docs.json, mint.json)...`)
-  const mintlifyStart = Date.now()
-  const mintlifyOasSink = []
-  const mintlifyNav = await timePhase('mintlify probe', () => tryMintlifyNav(sourceUrl.toString(), knownUrls, firecrawlKey, mintlifyOasSink))
-  addOasCandidates(mintlifyOasSink)
+  styles.info(`Probing for Mintlify config (docs.json, mint.json)...`);
+  const mintlifyStart = Date.now();
+  const mintlifyOasSink = [];
+  const mintlifyNav = await timePhase('mintlify probe', () =>
+    tryMintlifyNav(sourceUrl.toString(), knownUrls, firecrawlKey, mintlifyOasSink),
+  );
+  addOasCandidates(mintlifyOasSink);
   if (debugSnapshots) {
-    debugSnapshots[`02a-mintlify-nav${dbgSuffix}.json`] = mintlifyNav ? JSON.parse(JSON.stringify(mintlifyNav)) : null
+    debugSnapshots[`02a-mintlify-nav${dbgSuffix}.json`] = mintlifyNav ? JSON.parse(JSON.stringify(mintlifyNav)) : null;
   }
   if (mintlifyNav) {
-    const pageCount = mintlifyNav.categories.reduce((n, c) => n + countUrlPagesDeep(c.pages), 0)
+    const pageCount = mintlifyNav.categories.reduce((n, c) => n + countUrlPagesDeep(c.pages), 0);
     styles.ok(
       `Found Mintlify config at ${styles.bold(mintlifyNav.source)} in ${styles.bold(formatDuration(Date.now() - mintlifyStart))} — ${styles.bold(String(mintlifyNav.categories.length))} categor${mintlifyNav.categories.length === 1 ? 'y' : 'ies'}, ${styles.bold(String(pageCount))} pages.`,
-    )
+    );
   }
-  console.log()
+  console.log();
 
   // Fern sites ship the canonical sidebar in RSC flight chunks on every
   // page — deterministic structure where the Firecrawl scrape usually fails
   // acceptance and llms.txt clustering invents categories.
-  let fernNav = null
+  let fernNav = null;
   if (!mintlifyNav) {
-    styles.info(`Probing for Fern nav tree...`)
-    const fernStart = Date.now()
-    fernNav = await timePhase('fern probe', () => tryFernNav(sourceUrl.toString(), knownUrls))
+    styles.info(`Probing for Fern nav tree...`);
+    const fernStart = Date.now();
+    fernNav = await timePhase('fern probe', () => tryFernNav(sourceUrl.toString(), knownUrls));
     if (fernNav) {
-      const pageCount = fernNav.categories.reduce((n, c) => n + countUrlPagesDeep(c.pages), 0)
+      const pageCount = fernNav.categories.reduce((n, c) => n + countUrlPagesDeep(c.pages), 0);
       styles.ok(
         `Found Fern nav tree in ${styles.bold(formatDuration(Date.now() - fernStart))} — ${styles.bold(String(fernNav.categories.length))} categor${fernNav.categories.length === 1 ? 'y' : 'ies'}, ${styles.bold(String(pageCount))} page${pageCount === 1 ? '' : 's'}.`,
-      )
+      );
     }
-    console.log()
+    console.log();
   }
   if (debugSnapshots) {
-    debugSnapshots[`02a2-fern-nav${dbgSuffix}.json`] = fernNav ? JSON.parse(JSON.stringify(fernNav)) : null
+    debugSnapshots[`02a2-fern-nav${dbgSuffix}.json`] = fernNav ? JSON.parse(JSON.stringify(fernNav)) : null;
   }
 
   // Archbee sites embed the canonical document tree in Next.js page data.
   // Their llms.txt export can be a flat, shuffled list, so prefer the tree
   // when present.
-  let archbeeNav = null
+  let archbeeNav = null;
   if (!mintlifyNav && !fernNav) {
-    styles.info(`Probing for Archbee document tree...`)
-    const archbeeStart = Date.now()
-    const archbeeOasSink = []
-    archbeeNav = await timePhase('archbee probe', () => tryArchbeeNav(sourceUrl.toString(), knownUrls, firecrawlKey, archbeeOasSink))
-    addOasCandidates(archbeeOasSink)
+    styles.info(`Probing for Archbee document tree...`);
+    const archbeeStart = Date.now();
+    const archbeeOasSink = [];
+    archbeeNav = await timePhase('archbee probe', () =>
+      tryArchbeeNav(sourceUrl.toString(), knownUrls, firecrawlKey, archbeeOasSink),
+    );
+    addOasCandidates(archbeeOasSink);
     if (archbeeNav) {
-      const pageCount = archbeeNav.categories.reduce((n, c) => n + countUrlPagesDeep(c.pages), 0)
+      const pageCount = archbeeNav.categories.reduce((n, c) => n + countUrlPagesDeep(c.pages), 0);
       styles.ok(
         `Found Archbee document tree in ${styles.bold(formatDuration(Date.now() - archbeeStart))} — ${styles.bold(String(pageCount))} page${pageCount === 1 ? '' : 's'}.`,
-      )
+      );
     }
-    console.log()
+    console.log();
   }
 
-  let scraped
-  let scrapeStart = Date.now()
-  const scrapeDiagnostics = {}
+  let scraped;
+  let scrapeStart = Date.now();
+  const scrapeDiagnostics = {};
   if (mintlifyNav) {
-    scraped = { title: mintlifyNav.title, categories: mintlifyNav.categories }
+    scraped = { title: mintlifyNav.title, categories: mintlifyNav.categories };
   } else if (fernNav) {
-    scraped = { title: fernNav.title, categories: fernNav.categories }
+    scraped = { title: fernNav.title, categories: fernNav.categories };
   } else if (archbeeNav) {
-    scraped = { title: archbeeNav.title, categories: archbeeNav.categories }
+    scraped = { title: archbeeNav.title, categories: archbeeNav.categories };
   } else {
-    styles.info(`Scraping sidebar nav from ${styles.bold(sourceUrl.toString())}${firecrawlKey ? ' ' + styles.dim('(via Firecrawl)') : ''}...`)
-    scrapeStart = Date.now()
-    const scrapeOasSink = []
-    scraped = await timePhase('scrape nav', () => scrapeNavFromSite(sourceUrl.toString(), knownUrls, firecrawlKey, scrapeDiagnostics, scrapeOasSink))
-    addOasCandidates(scrapeOasSink)
-    if (!scraped) scrapeDiagnostics.reason ??= 'unknown'
+    styles.info(
+      `Scraping sidebar nav from ${styles.bold(sourceUrl.toString())}${firecrawlKey ? ` ${styles.dim('(via Firecrawl)')}` : ''}...`,
+    );
+    scrapeStart = Date.now();
+    const scrapeOasSink = [];
+    scraped = await timePhase('scrape nav', () =>
+      scrapeNavFromSite(sourceUrl.toString(), knownUrls, firecrawlKey, scrapeDiagnostics, scrapeOasSink),
+    );
+    addOasCandidates(scrapeOasSink);
+    if (!scraped) scrapeDiagnostics.reason ??= 'unknown';
   }
   if (debugSnapshots) {
-    debugSnapshots[`02-scraped-raw${dbgSuffix}.json`] = scraped ? JSON.parse(JSON.stringify(scraped)) : null
+    debugSnapshots[`02-scraped-raw${dbgSuffix}.json`] = scraped ? JSON.parse(JSON.stringify(scraped)) : null;
   }
   // If the sidebar scrape covers less than 75% of the llms.txt URLs, the
   // scrape is too thin to trust as the import's spine. Common on multi-tab
@@ -613,49 +678,53 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
   // omit generated endpoint stubs, and those pages are swept into reference/
   // regardless of nav quality, so they say nothing about the nav's fitness as
   // the import's spine.
-  let scrapeDiscardedForCoverage = false
+  let scrapeDiscardedForCoverage = false;
   if (scraped && llms && knownUrls.length > 0) {
-    const scrapedPages = scraped.categories.reduce((n, c) => n + countUrlPagesDeep(c.pages), 0)
-    const nonReferenceKnown = knownUrls.filter((p) => !urlIsApiReference(p.url))
-    const coverage = nonReferenceKnown.length > 0 ? scrapedPages / nonReferenceKnown.length : 1
+    const scrapedPages = scraped.categories.reduce((n, c) => n + countUrlPagesDeep(c.pages), 0);
+    const nonReferenceKnown = knownUrls.filter(p => !urlIsApiReference(p.url));
+    const coverage = nonReferenceKnown.length > 0 ? scrapedPages / nonReferenceKnown.length : 1;
     if (coverage < 0.75) {
       styles.info(
-        `Scrape covered ${styles.bold(Math.round(coverage * 100) + '%')} of llms.txt pages (need ≥75%${nonReferenceKnown.length < knownUrls.length ? `, ${knownUrls.length - nonReferenceKnown.length} api-reference pages excluded` : ''}) — discarding scrape and organizing from llms.txt.`,
-      )
-      scraped = null
-      scrapeDiscardedForCoverage = true
+        `Scrape covered ${styles.bold(`${Math.round(coverage * 100)}%`)} of llms.txt pages (need ≥75%${nonReferenceKnown.length < knownUrls.length ? `, ${knownUrls.length - nonReferenceKnown.length} api-reference pages excluded` : ''}) — discarding scrape and organizing from llms.txt.`,
+      );
+      scraped = null;
+      scrapeDiscardedForCoverage = true;
     }
   }
 
   if (scraped) {
-    const directMatches = scraped.categories.reduce((n, c) => n + countUrlPagesDeep(c.pages), 0)
+    const directMatches = scraped.categories.reduce((n, c) => n + countUrlPagesDeep(c.pages), 0);
     if (knownUrls.length > 0) {
-      const slotted = slotOrphansByPath(scraped, knownUrls)
+      const slotted = slotOrphansByPath(scraped, knownUrls);
       if (debugSnapshots) {
         debugSnapshots[`03-after-slot-by-path${dbgSuffix}.json`] = {
           scraped: JSON.parse(JSON.stringify(scraped)),
           unslottedOrphans: slotted,
-        }
+        };
       }
-      const totalMatched = scraped.categories.reduce((n, c) => n + countUrlPagesDeep(c.pages), 0)
+      const totalMatched = scraped.categories.reduce((n, c) => n + countUrlPagesDeep(c.pages), 0);
       styles.ok(
         `Scraped nav in ${styles.bold(formatDuration(Date.now() - scrapeStart))} — ${styles.bold(String(scraped.categories.length))} categor${scraped.categories.length === 1 ? 'y' : 'ies'}, ${styles.bold(String(directMatches))} direct matches + ${styles.bold(String(totalMatched - directMatches))} slotted by path = ${styles.bold(String(totalMatched))}/${knownUrls.length}.`,
-      )
+      );
       // Sweep pass first: any page whose URL has a strong reference segment
       // (e.g. `/api-reference/...`) belongs in the API Reference category,
       // even if the site's sidebar spotlighted it under Developers or similar.
       // Sidebars often surface a few endpoints as "featured" outside the
       // reference section — we respect the URL over the nav here.
-      const moved = reclassifyReferencePages(scraped)
+      const moved = reclassifyReferencePages(scraped);
       if (moved > 0) {
-        styles.info(`Moved ${styles.bold(String(moved))} page${moved === 1 ? '' : 's'} into ${styles.bold('API Reference')} based on URL path.`)
+        styles.info(
+          `Moved ${styles.bold(String(moved))} page${moved === 1 ? '' : 's'} into ${styles.bold('API Reference')} based on URL path.`,
+        );
       }
 
       // Same idea for changelog / release-notes pages — pull any whose URL
       // carries a changelog-style segment into one "Changelog" category.
-      const movedChangelog = reclassifyChangelogPages(scraped)
+      const movedChangelog = reclassifyChangelogPages(scraped);
       if (movedChangelog > 0) {
-        styles.info(`Moved ${styles.bold(String(movedChangelog))} page${movedChangelog === 1 ? '' : 's'} into ${styles.bold('Changelog')} based on URL path.`)
+        styles.info(
+          `Moved ${styles.bold(String(movedChangelog))} page${movedChangelog === 1 ? '' : 's'} into ${styles.bold('Changelog')} based on URL path.`,
+        );
       }
 
       if (slotted.length > 0) {
@@ -670,27 +739,27 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
         // Trip when orphans are at least 2× the direct matches: the scrape
         // accounts for less than a third of the known pages, so its category
         // labels aren't a trustworthy spine for the remainder.
-        const orphansDwarfDirect = slotted.length >= directMatches * 2
-        const scrapeAllPages = scraped.categories.flatMap((c) => collectUrlPagesDeep(c.pages))
-        let reclustered = null
+        const orphansDwarfDirect = slotted.length >= directMatches * 2;
+        const scrapeAllPages = scraped.categories.flatMap(c => collectUrlPagesDeep(c.pages));
+        let reclustered = null;
         if (orphansDwarfDirect) {
-          reclustered = clusterByUrlPath([...scrapeAllPages, ...slotted])
+          reclustered = clusterByUrlPath([...scrapeAllPages, ...slotted]);
         }
         styles.info(
           styles.dim(
             `  orphan triage: ${slotted.length} orphan${slotted.length === 1 ? '' : 's'} vs ${directMatches} direct match${directMatches === 1 ? '' : 'es'} (ratio ${directMatches === 0 ? '∞' : (slotted.length / directMatches).toFixed(2)}) — gate ${orphansDwarfDirect ? 'tripped' : 'NOT tripped'} (need ≥2.00); URL re-cluster ${reclustered ? `→ ${reclustered.length} categor${reclustered.length === 1 ? 'y' : 'ies'}` : 'skipped'}`,
           ),
-        )
+        );
         if (reclustered) {
-          scraped.categories = reclustered.map((c) => ({ title: c.title, pages: c.pages }))
+          scraped.categories = reclustered.map(c => ({ title: c.title, pages: c.pages }));
           styles.info(
-            `Scrape covered only ${styles.bold(String(directMatches))}/${styles.bold(String(knownUrls.length))} pages — discarded as too thin and re-clustered ${styles.bold(String(scrapeAllPages.length + slotted.length))} pages by URL path into ${styles.bold(String(reclustered.length))} categor${reclustered.length === 1 ? 'y' : 'ies'}: ${reclustered.map((c) => styles.bold(c.title)).join(', ')}.`,
-          )
+            `Scrape covered only ${styles.bold(String(directMatches))}/${styles.bold(String(knownUrls.length))} pages — discarded as too thin and re-clustered ${styles.bold(String(scrapeAllPages.length + slotted.length))} pages by URL path into ${styles.bold(String(reclustered.length))} categor${reclustered.length === 1 ? 'y' : 'ies'}: ${reclustered.map(c => styles.bold(c.title)).join(', ')}.`,
+          );
           if (debugSnapshots) {
             debugSnapshots[`04-after-orphan-buckets${dbgSuffix}.json`] = {
               mode: 'reclustered-by-url-path',
               scraped: JSON.parse(JSON.stringify(scraped)),
-            }
+            };
           }
         } else {
           // Mintlify-style docs put API endpoints in a separate tab rooted at
@@ -699,35 +768,37 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
           // category the sweep pass just built, if any) and nest it by resource
           // segment so routeCategory() maps the whole thing to ReadMe's
           // `reference/` top-level dir.
-          const linkSweepOasSink = []
-          const apiResult = collectApiReferencePages(slotted, scraped, linkSweepOasSink)
-          const otherOrphans = apiResult.nonApiOrphans
-          if (apiResult.category) scraped.categories.push(apiResult.category)
+          const linkSweepOasSink = [];
+          const apiResult = collectApiReferencePages(slotted, scraped, linkSweepOasSink);
+          const otherOrphans = apiResult.nonApiOrphans;
+          if (apiResult.category) scraped.categories.push(apiResult.category);
 
-          const buckets = bucketOrphansByPathType(otherOrphans, scraped, linkSweepOasSink)
-          for (const b of buckets) scraped.categories.push(b)
-          addOasCandidates(linkSweepOasSink)
+          const buckets = bucketOrphansByPathType(otherOrphans, scraped, linkSweepOasSink);
+          for (const b of buckets) scraped.categories.push(b);
+          addOasCandidates(linkSweepOasSink);
           if (debugSnapshots) {
             debugSnapshots[`04-after-orphan-buckets${dbgSuffix}.json`] = {
               apiReferenceCollected: apiResult.category
                 ? {
-                  pageCount: apiResult.category.pages.length,
-                  mergedFromScraped: apiResult.mergedScrapedTitles,
-                }
+                    pageCount: apiResult.category.pages.length,
+                    mergedFromScraped: apiResult.mergedScrapedTitles,
+                  }
                 : null,
               buckets,
               scraped: JSON.parse(JSON.stringify(scraped)),
-            }
+            };
           }
-          const parts = []
+          const parts = [];
           if (apiResult.category) {
-            parts.push(`${styles.bold(String(apiResult.category.pages.length))} in ${styles.bold('API Reference')}`)
+            parts.push(`${styles.bold(String(apiResult.category.pages.length))} in ${styles.bold('API Reference')}`);
           }
           for (const b of buckets) {
-            parts.push(`${styles.bold(String(b.pages.length))} in ${styles.bold(b.title)}`)
+            parts.push(`${styles.bold(String(b.pages.length))} in ${styles.bold(b.title)}`);
           }
           if (parts.length > 0) {
-            styles.info(`${styles.bold(String(slotted.length))} orphan page${slotted.length === 1 ? '' : 's'} bucketed by URL type: ${parts.join(', ')}.`)
+            styles.info(
+              `${styles.bold(String(slotted.length))} orphan page${slotted.length === 1 ? '' : 's'} bucketed by URL type: ${parts.join(', ')}.`,
+            );
           }
         }
       }
@@ -738,63 +809,69 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
       // structure: pages that share a common prefix often live under the
       // same section in the site's real hierarchy.
       if (scraped.categories.length === 1) {
-        const reclustered = clusterByUrlPath(scraped.categories[0].pages)
+        const reclustered = clusterByUrlPath(scraped.categories[0].pages);
         if (reclustered) {
-          scraped.categories = reclustered
+          scraped.categories = reclustered;
           styles.ok(
             `Scraped nav in ${styles.bold(formatDuration(Date.now() - scrapeStart))} — re-clustered by URL path into ${styles.bold(String(scraped.categories.length))} categor${scraped.categories.length === 1 ? 'y' : 'ies'}, ${styles.bold(String(directMatches))} pages discovered (no llms.txt).`,
-          )
+          );
         } else {
           styles.ok(
             `Scraped nav in ${styles.bold(formatDuration(Date.now() - scrapeStart))} — ${styles.bold(String(scraped.categories.length))} categor${scraped.categories.length === 1 ? 'y' : 'ies'}, ${styles.bold(String(directMatches))} pages discovered (no llms.txt).`,
-          )
+          );
         }
       } else {
         styles.ok(
           `Scraped nav in ${styles.bold(formatDuration(Date.now() - scrapeStart))} — ${styles.bold(String(scraped.categories.length))} categor${scraped.categories.length === 1 ? 'y' : 'ies'}, ${styles.bold(String(directMatches))} pages discovered (no llms.txt).`,
-        )
+        );
       }
     }
   } else if (!llms && knownUrls.length === 0) {
-    throw new Error(`No llms.txt or sitemap.xml and the sidebar scrape found no usable structure — can't import ${sourceUrl.toString()}.`)
+    throw new Error(
+      `No llms.txt or sitemap.xml and the sidebar scrape found no usable structure — can't import ${sourceUrl.toString()}.`,
+    );
   } else if (llms) {
     if (!scrapeDiscardedForCoverage) {
-      const d = scrapeDiagnostics || {}
+      const d = scrapeDiagnostics || {};
       if (d.reason === 'no-categories-round0') {
-        styles.warning(`Sidebar scrape found no nav structure on the round-0 fetch — falling back to llms.txt organization.`)
+        styles.warning(
+          `Sidebar scrape found no nav structure on the round-0 fetch — falling back to llms.txt organization.`,
+        );
       } else if (d.reason === 'below-threshold') {
         styles.warning(
           `Sidebar scrape below acceptance threshold (got ${d.categories} categor${d.categories === 1 ? 'y' : 'ies'}, ${d.matched} matched pages — need ${d.need}) — falling back to llms.txt organization.`,
-        )
+        );
       } else {
-        styles.warning(`Sidebar scrape returned no usable nav — falling back to llms.txt organization.`)
+        styles.warning(`Sidebar scrape returned no usable nav — falling back to llms.txt organization.`);
       }
     }
   } else {
     if (!scrapeDiscardedForCoverage) {
-      const d = scrapeDiagnostics || {}
+      const d = scrapeDiagnostics || {};
       if (d.reason === 'no-categories-round0') {
-        styles.warning(`Sidebar scrape found no nav structure on the round-0 fetch — falling back to sitemap URL clustering.`)
+        styles.warning(
+          `Sidebar scrape found no nav structure on the round-0 fetch — falling back to sitemap URL clustering.`,
+        );
       } else if (d.reason === 'below-threshold') {
         styles.warning(
           `Sidebar scrape below acceptance threshold (got ${d.categories} categor${d.categories === 1 ? 'y' : 'ies'}, ${d.matched} matched pages — need ${d.need}) — falling back to sitemap URL clustering.`,
-        )
+        );
       } else {
-        styles.warning(`Sidebar scrape returned no usable nav — falling back to sitemap URL clustering.`)
+        styles.warning(`Sidebar scrape returned no usable nav — falling back to sitemap URL clustering.`);
       }
     }
   }
-  console.log()
+  console.log();
 
-  let organized
-  const organizeStart = Date.now()
+  let organized;
+  const organizeStart = Date.now();
   if (scraped) {
     // No Claude call — icons deferred. Use a neutral placeholder so the tree
     // view still prints cleanly.
     organized = {
       title: (llms && llms.parsed.title) || null,
-      categories: scraped.categories.map((c) => ({ title: c.title, icon: null, pages: c.pages })),
-    }
+      categories: scraped.categories.map(c => ({ title: c.title, icon: null, pages: c.pages })),
+    };
   } else if (llms) {
     if (llms.sourceFiles.length > 1) {
       // Multi-file merge: H2 section headings across the merged files are
@@ -804,49 +881,53 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
       // categories like `docs/Docs`, `docs/Products`, `docs/API Docs`).
       // Throw away the section grouping and re-cluster by URL path instead.
       // Per-page metadata (title, url, description) is still carried over.
-      const flatPages = llms.parsed.sections.flatMap((s) =>
-        s.items.map((it) => ({
+      const flatPages = llms.parsed.sections.flatMap(s =>
+        s.items.map(it => ({
           title: it.text,
           url: it.url,
           ...(it.description ? { description: it.description } : {}),
         })),
-      )
-      const clustered = clusterByUrlPath(flatPages) || [{ title: 'Documentation', pages: flatPages }]
+      );
+      const clustered = clusterByUrlPath(flatPages) || [{ title: 'Documentation', pages: flatPages }];
       styles.info(
         `Multi-file llms.txt merge — clustered ${styles.bold(String(flatPages.length))} pages by URL path into ${styles.bold(String(clustered.length))} categor${clustered.length === 1 ? 'y' : 'ies'} (H2 sections discarded).`,
-      )
+      );
       organized = {
         title: llms.parsed.title || null,
-        categories: clustered.map((c) => ({ title: c.title, icon: null, pages: c.pages })),
-      }
+        categories: clustered.map(c => ({ title: c.title, icon: null, pages: c.pages })),
+      };
     } else {
       // Single-file mode: H2 structure IS the author's intended organization,
       // so trust it. Use sections directly when usable; otherwise run Claude.
-      const usable = usableSections(llms.parsed.sections)
-      const avgPages = usable.length > 0 ? usable.reduce((n, s) => n + s.items.length, 0) / usable.length : 0
+      const usable = usableSections(llms.parsed.sections);
+      const avgPages = usable.length > 0 ? usable.reduce((n, s) => n + s.items.length, 0) / usable.length : 0;
       if (sectionsLookUsable(llms.parsed.sections) && avgPages < 50) {
         styles.info(
           `Using llms.txt sections directly — ${styles.bold(String(usable.length))} sections, ${styles.bold(avgPages.toFixed(1))} avg pages/section (≤50). Skipping Claude.`,
-        )
+        );
         organized = {
           title: llms.parsed.title || null,
-          categories: usable.map((s) => ({
+          categories: usable.map(s => ({
             title: s.title,
             icon: null,
-            pages: s.items.map((it) => ({
+            pages: s.items.map(it => ({
               title: it.text,
               url: it.url,
               ...(it.description ? { description: it.description } : {}),
             })),
           })),
-        }
+        };
       } else {
-        const fastPath = sectionsLookUsable(llms.parsed.sections)
-        styles.info(`Organizing with Claude (${styles.bold(options.model)}, ${fastPath ? 'fast path: icons only' : 'full reorg'})...`)
-        organized = await timePhase('claude organize', () => organizeWithClaude(llms.parsed, options.model))
-        const movedRef = reclassifyReferencePages(organized)
+        const fastPath = sectionsLookUsable(llms.parsed.sections);
+        styles.info(
+          `Organizing with Claude (${styles.bold(options.model)}, ${fastPath ? 'fast path: icons only' : 'full reorg'})...`,
+        );
+        organized = await timePhase('claude organize', () => organizeWithClaude(llms.parsed, options.model));
+        const movedRef = reclassifyReferencePages(organized);
         if (movedRef > 0) {
-          styles.info(`Moved ${styles.bold(String(movedRef))} page${movedRef === 1 ? '' : 's'} into ${styles.bold('API Reference')} based on URL path.`)
+          styles.info(
+            `Moved ${styles.bold(String(movedRef))} page${movedRef === 1 ? '' : 's'} into ${styles.bold('API Reference')} based on URL path.`,
+          );
         }
       }
     }
@@ -854,61 +935,63 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
     // Sitemap-only fallback: synthesize categories by clustering the URL
     // paths. clusterByUrlPath returns null when the URLs don't split cleanly,
     // in which case everything lands in a single Documentation bucket.
-    const clustered = clusterByUrlPath(knownUrls) || [{ title: 'Documentation', pages: knownUrls }]
+    const clustered = clusterByUrlPath(knownUrls) || [{ title: 'Documentation', pages: knownUrls }];
     organized = {
       title: null,
-      categories: clustered.map((c) => ({ title: c.title, icon: null, pages: c.pages })),
-    }
+      categories: clustered.map(c => ({ title: c.title, icon: null, pages: c.pages })),
+    };
   }
 
   // Re-attach the pre-extracted changelog pages as their own Changelog
   // category. Done before nestByUrlHierarchy so the injected pages get nested
   // alongside the rest of the tree for consistency. Merges into a pre-existing
   // Changelog category (scrape path's reclassifier may have already built one).
-  injectChangelogCategory(organized, extractedChangelog)
+  injectChangelogCategory(organized, extractedChangelog);
 
   // Import section landing pages (e.g. /docs/cli) that llms.txt models as a
   // bare heading + child links and so never lists as a page of their own.
   // Runs before nesting so the injected page lands at its trie node and
   // nestByUrlHierarchy renders it as the real parent of its children.
-  await injectSectionLandingPages(organized, sourceUrl)
+  await injectSectionLandingPages(organized, sourceUrl);
 
   // A Fern tree is the authored sidebar: re-nesting by URL invents parent
   // folders the source site renders flat (a section landing absorbing its
   // path-descendant siblings, e.g. vapi's /server-url under Webhooks). Only
   // the sweep-synthesized categories still nest — their pages were moved in
   // flat and have no authored structure.
-  const sweepCategories = new Set(['API Reference', 'Changelog'])
+  const sweepCategories = new Set(['API Reference', 'Changelog']);
   for (const cat of organized.categories || []) {
-    if (fernNav && !sweepCategories.has(cat.title)) continue
-    cat.pages = nestByUrlHierarchy(cat.pages)
+    if (fernNav && !sweepCategories.has(cat.title)) continue;
+    cat.pages = nestByUrlHierarchy(cat.pages);
   }
 
-  styles.ok(`Organized in ${styles.bold(formatDuration(Date.now() - organizeStart))}.`)
+  styles.ok(`Organized in ${styles.bold(formatDuration(Date.now() - organizeStart))}.`);
 
-  addOasCandidates(await oasProbePromise)
-  oasCandidates.sort((a, b) => OAS_SOURCE_CONFIDENCE.indexOf(a.source) - OAS_SOURCE_CONFIDENCE.indexOf(b.source))
-  const cappedOasCandidates = oasCandidates.slice(0, MAX_OAS_CANDIDATES_PER_SOURCE)
+  addOasCandidates(await oasProbePromise);
+  oasCandidates.sort((a, b) => OAS_SOURCE_CONFIDENCE.indexOf(a.source) - OAS_SOURCE_CONFIDENCE.indexOf(b.source));
+  const cappedOasCandidates = oasCandidates.slice(0, MAX_OAS_CANDIDATES_PER_SOURCE);
   if (oasCandidates.length > 0) {
-    const bySource = new Map()
-    for (const c of cappedOasCandidates) bySource.set(c.source, (bySource.get(c.source) || 0) + 1)
-    const summary = Array.from(bySource, ([source, n]) => `${n} ${source}`).join(', ')
-    const overCap = oasCandidates.length - cappedOasCandidates.length
+    const bySource = new Map();
+    for (const c of cappedOasCandidates) bySource.set(c.source, (bySource.get(c.source) || 0) + 1);
+    const summary = Array.from(bySource, ([source, n]) => `${n} ${source}`).join(', ');
+    const overCap = oasCandidates.length - cappedOasCandidates.length;
     styles.info(
-      styles.dim(`OAS candidates: ${summary}${overCap > 0 ? `; dropped ${overCap} over the cap of ${MAX_OAS_CANDIDATES_PER_SOURCE}` : ''}.`),
-    )
+      styles.dim(
+        `OAS candidates: ${summary}${overCap > 0 ? `; dropped ${overCap} over the cap of ${MAX_OAS_CANDIDATES_PER_SOURCE}` : ''}.`,
+      ),
+    );
   }
-  organized.oasJsonUrls = cappedOasCandidates
+  organized.oasJsonUrls = cappedOasCandidates;
 
   // Record which page URLs came from llms.txt
-  const llmsPaths = new Set()
+  const llmsPaths = new Set();
   if (llms) {
     for (const p of [...knownUrls, ...extractedChangelog]) {
-      if (p.url) llmsPaths.add(normalizePath(p.url))
+      if (p.url) llmsPaths.add(normalizePath(p.url));
     }
   }
-  organized.llmsPaths = llmsPaths
-  return organized
+  organized.llmsPaths = llmsPaths;
+  return organized;
 }
 
 /**
@@ -920,26 +1003,26 @@ async function produceOrganizedForSource(sourceUrl, options, timePhase, debugSna
  * is the concatenation of input sources in argument order.
  */
 function mergeOrganized(perSource) {
-  const title = perSource.map((o) => o.title).find(Boolean) || null
+  const title = perSource.map(o => o.title).find(Boolean) || null;
 
-  const byTitle = new Map()
-  const order = []
+  const byTitle = new Map();
+  const order = [];
   for (const o of perSource) {
     for (const cat of o.categories || []) {
-      const key = cat.title
-      const existing = byTitle.get(key)
+      const key = cat.title;
+      const existing = byTitle.get(key);
       if (existing) {
-        existing.pages.push(...(cat.pages || []))
-        if (!existing.icon && cat.icon) existing.icon = cat.icon
+        existing.pages.push(...(cat.pages || []));
+        if (!existing.icon && cat.icon) existing.icon = cat.icon;
       } else {
-        const copy = { ...cat, pages: [...(cat.pages || [])] }
-        byTitle.set(key, copy)
-        order.push(copy)
+        const copy = { ...cat, pages: [...(cat.pages || [])] };
+        byTitle.set(key, copy);
+        order.push(copy);
       }
     }
   }
 
-  return { title, categories: order }
+  return { title, categories: order };
 }
 
 /**
@@ -951,12 +1034,12 @@ function mergeOrganized(perSource) {
  */
 export async function run(options) {
   try {
-    await importDocs(options)
+    await importDocs(options);
   } catch (err) {
-    styles.error(err.message || String(err))
-    process.exit(1)
+    styles.error(err.message || String(err));
+    process.exit(1);
   }
-  process.exit(0)
+  process.exit(0);
 }
 
 /**
@@ -965,40 +1048,40 @@ export async function run(options) {
  * from the spec at render time, so we don't need to stub anything here.
  */
 async function runOasImport(sourcePath, options, startedAt, phases, timePhase) {
-  const absPath = path.resolve(sourcePath)
+  const absPath = path.resolve(sourcePath);
   if (!fs.existsSync(absPath) || !fs.statSync(absPath).isFile()) {
-    throw new Error(`File not found: ${absPath}`)
+    throw new Error(`File not found: ${absPath}`);
   }
-  const ext = path.extname(absPath).toLowerCase()
+  const ext = path.extname(absPath).toLowerCase();
   if (!['.json', '.yaml', '.yml'].includes(ext)) {
-    throw new Error(`Unsupported file type ${ext || '(none)'} — expected .json, .yaml, or .yml.`)
+    throw new Error(`Unsupported file type ${ext || '(none)'} — expected .json, .yaml, or .yml.`);
   }
 
-  const basename = path.basename(absPath, ext)
-  const outputZip = path.resolve(options.output || path.join(process.cwd(), `${basename}-readme.zip`))
+  const basename = path.basename(absPath, ext);
+  const outputZip = path.resolve(options.output || path.join(process.cwd(), `${basename}-readme.zip`));
 
-  console.log()
-  styles.info(`Importing OpenAPI spec from ${styles.bold(absPath)}`)
-  if (!options.test) styles.info(`Output: ${styles.bold(outputZip)}`)
-  console.log()
+  console.log();
+  styles.info(`Importing OpenAPI spec from ${styles.bold(absPath)}`);
+  if (!options.test) styles.info(`Output: ${styles.bold(outputZip)}`);
+  console.log();
 
   // Parse + sanity-check it's actually an OAS before we stage anything.
   // We do this in two stages: a cheap parse + looks-like-OAS check (fail
   // fast on clearly wrong inputs), then a normalize step that will repair
   // fixable issues (Swagger 2 → OpenAPI 3 conversion, bundling $refs, etc.).
   const { spec, opCount, wasFixed, fixReason } = await timePhase('parse spec', async () => {
-    const raw = fs.readFileSync(absPath, 'utf-8')
-    let parsed
+    const raw = fs.readFileSync(absPath, 'utf-8');
+    let parsed;
     try {
-      parsed = ext === '.json' ? JSON.parse(raw) : yamlRequire().load(raw)
+      parsed = ext === '.json' ? JSON.parse(raw) : yamlRequire().load(raw);
     } catch (e) {
-      throw new Error(`Couldn't parse ${absPath} as ${ext === '.json' ? 'JSON' : 'YAML'}: ${e.message}`)
+      throw new Error(`Couldn't parse ${absPath} as ${ext === '.json' ? 'JSON' : 'YAML'}: ${e.message}`, { cause: e });
     }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      throw new Error(`File isn't a usable object: ${absPath}`)
+      throw new Error(`File isn't a usable object: ${absPath}`);
     }
     if (!looksLikeOas(parsed)) {
-      throw new Error(`Not an OpenAPI/Swagger spec — no top-level openapi / swagger field and no paths section.`)
+      throw new Error(`Not an OpenAPI/Swagger spec — no top-level openapi / swagger field and no paths section.`);
     }
 
     // Normalize via oas-normalize. `bundle()` handles the common fix-ups:
@@ -1006,110 +1089,117 @@ async function runOasImport(sourcePath, options, startedAt, phases, timePhase) {
     // resolution. We try it first (even on apparently-valid specs) so Postman
     // collections actually get converted. If bundle errors we fall back to
     // the original spec when it passes validate, else fail hard.
-    const normalizer = new OASNormalize(parsed)
+    const normalizer = new OASNormalize(parsed);
     try {
-      const bundled = await normalizer.bundle()
-      const changed = JSON.stringify(bundled) !== JSON.stringify(parsed)
+      const bundled = await normalizer.bundle();
+      const changed = JSON.stringify(bundled) !== JSON.stringify(parsed);
       return {
         spec: bundled,
         opCount: countOperations(bundled),
         wasFixed: changed,
         fixReason: changed ? 'normalized (Swagger 2 → OpenAPI 3, Postman conversion, or $ref inlining)' : null,
-      }
+      };
     } catch (bundleErr) {
       try {
-        await normalizer.validate()
-        return { spec: parsed, opCount: countOperations(parsed), wasFixed: false }
+        await normalizer.validate();
+        return { spec: parsed, opCount: countOperations(parsed), wasFixed: false };
       } catch (validateErr) {
         throw new Error(
           `Spec is invalid and couldn't be auto-fixed.\n  Validation error: ${validateErr.message.split('\n')[0]}\n  Fix attempt error: ${bundleErr.message.split('\n')[0]}`,
-        )
+          { cause: validateErr },
+        );
       }
     }
-  })
+  });
 
   if (wasFixed) {
-    styles.warning(`Spec had issues — auto-fixed (${fixReason}).`)
+    styles.warning(`Spec had issues — auto-fixed (${fixReason}).`);
   }
 
-  const title = spec.info?.title || basename
-  const version = spec.info?.version || null
-  styles.ok(`Parsed OpenAPI ${version ? 'v' + version + ' ' : ''}spec — ${styles.bold(title)} (${styles.bold(String(opCount))} operation${opCount === 1 ? '' : 's'}).`)
-  console.log()
+  const title = spec.info?.title || basename;
+  const version = spec.info?.version || null;
+  styles.ok(
+    `Parsed OpenAPI ${version ? `v${version} ` : ''}spec — ${styles.bold(title)} (${styles.bold(String(opCount))} operation${opCount === 1 ? '' : 's'}).`,
+  );
+  console.log();
 
-  const stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'readme-import-'))
-  let result
+  const stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'readme-import-'));
+  let result;
   try {
     const { stagedName } = await timePhase('stage spec', async () => {
       // If we auto-fixed the spec, serialize the fixed version as JSON (always
       // writable, avoids YAML-ambiguity regressions). Otherwise copy the
       // original file verbatim so formatting/comments are preserved.
-      const rawName = path.basename(absPath)
-      let targetName
-      let targetContent
+      const rawName = path.basename(absPath);
+      let targetName;
+      let targetContent;
       if (wasFixed) {
-        targetName = rawName.replace(/\.(ya?ml|json)$/i, '.json')
-        targetContent = JSON.stringify(spec, null, 2)
+        targetName = rawName.replace(/\.(ya?ml|json)$/i, '.json');
+        targetContent = JSON.stringify(spec, null, 2);
       } else {
-        targetName = rawName
-        targetContent = null // signal to copy
+        targetName = rawName;
+        targetContent = null; // signal to copy
       }
-      const targetPath = path.join(stagingDir, 'reference', targetName)
-      fs.mkdirSync(path.dirname(targetPath), { recursive: true })
+      const targetPath = path.join(stagingDir, 'reference', targetName);
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
       if (targetContent === null) {
-        fs.copyFileSync(absPath, targetPath)
+        fs.copyFileSync(absPath, targetPath);
       } else {
-        fs.writeFileSync(targetPath, targetContent)
+        fs.writeFileSync(targetPath, targetContent);
       }
 
       // syncOas walks reference/ and generates one <operationId>.md per
       // operation, grouped by tag. We pass stagingDir as the "git root" so
       // its refDir lookup lands on stagingDir/reference/.
-      syncOas(stagingDir)
-      return { stagedName: targetName }
-    })
+      syncOas(stagingDir);
+      return { stagedName: targetName };
+    });
 
     // Ensure there's always at least a landing page — OAS-only imports leave
     // docs/ empty, which makes `--test` dev server show "no pages" at /.
-    ensureDocsLandingPage(stagingDir, title, opCount)
+    ensureDocsLandingPage(stagingDir, title, opCount);
 
     // OAS operation pages don't need an x-import URL — their content is
     // intrinsic to the spec (summary/description live in the OpenAPI doc,
     // and the page's `api:` frontmatter already points back to it).
-    const pageCount = countReferencePages(stagingDir, stagedName)
+    const pageCount = countReferencePages(stagingDir, stagedName);
 
-    styles.ok(`Staged ${styles.bold(stagedName)} and generated ${styles.bold(String(pageCount))} operation page${pageCount === 1 ? '' : 's'} under ${styles.bold('reference/')}.`)
-    console.log()
+    styles.ok(
+      `Staged ${styles.bold(stagedName)} and generated ${styles.bold(String(pageCount))} operation page${pageCount === 1 ? '' : 's'} under ${styles.bold('reference/')}.`,
+    );
+    console.log();
 
     if (options.test) {
-      styles.ok(`Done in ${styles.bold(formatDuration(Date.now() - startedAt))}! Staged at ${styles.bold(stagingDir)}`)
-      console.log()
-      styles.info('Starting the dev server for preview...')
-      console.log()
-      await runDevPreview(stagingDir)
-      return { source: 'oas', stagingDir, fileCount: pageCount, duration: Date.now() - startedAt, phases }
+      styles.ok(`Done in ${styles.bold(formatDuration(Date.now() - startedAt))}! Staged at ${styles.bold(stagingDir)}`);
+      console.log();
+      styles.info('Starting the dev server for preview...');
+      console.log();
+      await runDevPreview(stagingDir);
+      return { source: 'oas', stagingDir, fileCount: pageCount, duration: Date.now() - startedAt, phases };
     }
 
-    await timePhase('zip', () => createZip(stagingDir, outputZip))
+    await timePhase('zip', () => createZip(stagingDir, outputZip));
 
-    console.log()
-    styles.ok(`Done in ${styles.bold(formatDuration(Date.now() - startedAt))}! Your ReadMe import is ready at ${styles.bold(outputZip)}`)
-    console.log(styles.dim(`  ⏱  ${phases.map((p) => `${p.label} ${formatDuration(p.ms)}`).join(' · ')}`))
-    result = { source: 'oas', outputZip, fileCount: pageCount, duration: Date.now() - startedAt, phases }
+    console.log();
+    styles.ok(
+      `Done in ${styles.bold(formatDuration(Date.now() - startedAt))}! Your ReadMe import is ready at ${styles.bold(outputZip)}`,
+    );
+    console.log(styles.dim(`  ⏱  ${phases.map(p => `${p.label} ${formatDuration(p.ms)}`).join(' · ')}`));
+    result = { source: 'oas', outputZip, fileCount: pageCount, duration: Date.now() - startedAt, phases };
   } finally {
-    if (!options.test) fs.rmSync(stagingDir, { recursive: true, force: true })
+    if (!options.test) fs.rmSync(stagingDir, { recursive: true, force: true });
   }
-  return result
+  return result;
 }
 
 // Load js-yaml lazily so the JSON-only import path doesn't pay for it.
-let _yaml = null
+let _yaml = null;
 function yamlRequire() {
   if (!_yaml) {
-    const require = createRequire(import.meta.url)
-    _yaml = require('js-yaml')
+    const require = createRequire(import.meta.url);
+    _yaml = require('js-yaml');
   }
-  return _yaml
+  return _yaml;
 }
 
 /**
@@ -1119,22 +1209,22 @@ function yamlRequire() {
  * catch malformed inputs that slip through here.
  */
 function looksLikeOas(obj) {
-  if (!obj || typeof obj !== 'object') return false
-  if (typeof obj.openapi === 'string' || typeof obj.swagger === 'string') return true
-  if (obj.paths && typeof obj.paths === 'object') return true
+  if (!obj || typeof obj !== 'object') return false;
+  if (typeof obj.openapi === 'string' || typeof obj.swagger === 'string') return true;
+  if (obj.paths && typeof obj.paths === 'object') return true;
   // Postman collections — oas-normalize auto-converts these to OpenAPI.
-  if (obj.info && typeof obj.info.schema === 'string' && /getpostman\.com/i.test(obj.info.schema)) return true
-  return false
+  if (obj.info && typeof obj.info.schema === 'string' && /getpostman\.com/i.test(obj.info.schema)) return true;
+  return false;
 }
 
 function countOperations(spec) {
-  let n = 0
+  let n = 0;
   for (const p of Object.values(spec.paths || {})) {
     for (const k of Object.keys(p || {})) {
-      if (/^(get|post|put|patch|delete|options|head|trace)$/i.test(k)) n++
+      if (/^(get|post|put|patch|delete|options|head|trace)$/i.test(k)) n++;
     }
   }
-  return n
+  return n;
 }
 
 /**
@@ -1142,26 +1232,26 @@ function countOperations(spec) {
  * given spec file. Used only for the "generated N pages" success message.
  */
 function countReferencePages(stagingDir, specFilename) {
-  const refDir = path.join(stagingDir, 'reference')
-  if (!fs.existsSync(refDir)) return 0
+  const refDir = path.join(stagingDir, 'reference');
+  if (!fs.existsSync(refDir)) return 0;
 
-  let count = 0
-  const walk = (dir) => {
+  let count = 0;
+  const walk = dir => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      const full = path.join(dir, entry.name)
+      const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        walk(full)
-        continue
+        walk(full);
+        continue;
       }
-      if (!entry.name.endsWith('.md')) continue
+      if (!entry.name.endsWith('.md')) continue;
 
-      const parsed = parseFrontmatter(fs.readFileSync(full, 'utf-8'))
-      const fm = parsed.data || {}
-      if (fm.api && fm.api.file === specFilename) count++
+      const parsed = parseFrontmatter(fs.readFileSync(full, 'utf-8'));
+      const fm = parsed.data || {};
+      if (fm.api && fm.api.file === specFilename) count++;
     }
-  }
-  walk(refDir)
-  return count
+  };
+  walk(refDir);
+  return count;
 }
 
 /**
@@ -1172,21 +1262,24 @@ function countReferencePages(stagingDir, specFilename) {
  * `/docs/...` makes it look like nothing imported.
  */
 function ensureDocsLandingPage(stagingDir, siteTitle, opCount = 0) {
-  const docsDir = path.join(stagingDir, 'docs')
-  if (fs.existsSync(docsDir) && fs.readdirSync(docsDir).length > 0) return
+  const docsDir = path.join(stagingDir, 'docs');
+  if (fs.existsSync(docsDir) && fs.readdirSync(docsDir).length > 0) return;
 
-  const categoryDir = path.join(docsDir, 'Getting Started')
-  fs.mkdirSync(categoryDir, { recursive: true })
+  const categoryDir = path.join(docsDir, 'Getting Started');
+  fs.mkdirSync(categoryDir, { recursive: true });
 
-  const name = siteTitle || 'your API'
-  const title = siteTitle ? `Welcome to ${siteTitle}` : 'Getting Started'
+  const name = siteTitle || 'your API';
+  const title = siteTitle ? `Welcome to ${siteTitle}` : 'Getting Started';
   const body =
     opCount > 0
       ? `This import brought in **${opCount} API operation${opCount === 1 ? '' : 's'}** from ${name}.\n\n👉 [Browse the API Reference →](/reference)\n\nThis page is a placeholder landing. Replace or expand it with onboarding content specific to your API.\n`
-      : `This is a placeholder landing page. Replace it with your docs.\n`
-  fs.writeFileSync(path.join(categoryDir, 'getting-started.md'), toFrontmatter({ title, icon: formatIconClass('rocket') }, body))
-  fs.writeFileSync(path.join(categoryDir, '_order.yaml'), '- getting-started\n')
-  fs.writeFileSync(path.join(docsDir, '_order.yaml'), '- Getting Started\n')
+      : `This is a placeholder landing page. Replace it with your docs.\n`;
+  fs.writeFileSync(
+    path.join(categoryDir, 'getting-started.md'),
+    toFrontmatter({ title, icon: formatIconClass('rocket') }, body),
+  );
+  fs.writeFileSync(path.join(categoryDir, '_order.yaml'), '- getting-started\n');
+  fs.writeFileSync(path.join(docsDir, '_order.yaml'), '- Getting Started\n');
 }
 
 /**
@@ -1209,46 +1302,46 @@ export async function runAgent({ userPrompt, systemPrompt, cwd, model }) {
     if (message.type === 'assistant' && message.message?.content) {
       for (const block of message.message.content) {
         if (block.type === 'text' && block.text?.trim()) {
-          console.log(styles.dim(block.text.trim()))
+          console.log(styles.dim(block.text.trim()));
         } else if (block.type === 'tool_use') {
-          console.log(`${styles.brand('›')} ${styles.bold(block.name)}`)
+          console.log(`${styles.brand('›')} ${styles.bold(block.name)}`);
         }
       }
     } else if (message.type === 'result') {
       if (message.subtype && message.subtype !== 'success') {
-        const details = claudeResultDetails(message)
-        const err = new Error(`Agent result subtype=${message.subtype}${details ? ` — ${details}` : ''}`)
-        err.subtype = message.subtype
-        err.result = message
-        throw err
+        const details = claudeResultDetails(message);
+        const err = new Error(`Agent result subtype=${message.subtype}${details ? ` — ${details}` : ''}`);
+        err.subtype = message.subtype;
+        err.result = message;
+        throw err;
       }
-      return
+      return;
     }
   }
 }
 
 function makeStagingGuard(stagingDir) {
-  const absStaging = path.resolve(stagingDir)
-  const WRITE_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit', 'MultiEdit'])
+  const absStaging = path.resolve(stagingDir);
+  const WRITE_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit', 'MultiEdit']);
 
   return async (toolName, input) => {
-    if (!WRITE_TOOLS.has(toolName)) return { behavior: 'allow' }
-    const fp = input?.file_path
+    if (!WRITE_TOOLS.has(toolName)) return { behavior: 'allow' };
+    const fp = input?.file_path;
     if (typeof fp !== 'string' || !fp) {
-      return { behavior: 'deny', message: `${toolName}: missing file_path` }
+      return { behavior: 'deny', message: `${toolName}: missing file_path` };
     }
-    const abs = path.isAbsolute(fp) ? path.resolve(fp) : path.resolve(absStaging, fp)
-    const rel = path.relative(absStaging, abs)
-    const inside = rel && !rel.startsWith('..') && !path.isAbsolute(rel)
+    const abs = path.isAbsolute(fp) ? path.resolve(fp) : path.resolve(absStaging, fp);
+    const rel = path.relative(absStaging, abs);
+    const inside = rel && !rel.startsWith('..') && !path.isAbsolute(rel);
     if (!inside) {
-      styles.warning(`Blocked ${toolName} outside staging: ${fp}`)
+      styles.warning(`Blocked ${toolName} outside staging: ${fp}`);
       return {
         behavior: 'deny',
         message: `Writes must stay inside the staging directory ${absStaging}. Refused: ${fp}`,
-      }
+      };
     }
-    return { behavior: 'allow' }
-  }
+    return { behavior: 'allow' };
+  };
 }
 
 /**
@@ -1260,69 +1353,71 @@ function makeStagingGuard(stagingDir) {
  */
 function runDevPreview(stagingDir) {
   return new Promise((resolve, reject) => {
-    const selfBin = process.argv[1] && fs.existsSync(process.argv[1]) ? process.argv[1] : null
-    const [cmd, args] = selfBin ? [process.execPath, [selfBin, 'dev', '--no-check']] : ['npx', ['--yes', '@readme/cli', 'dev', '--no-check']]
+    const selfBin = process.argv[1] && fs.existsSync(process.argv[1]) ? process.argv[1] : null;
+    const [cmd, args] = selfBin
+      ? [process.execPath, [selfBin, 'dev', '--no-check']]
+      : ['npx', ['--yes', '@readme/cli', 'dev', '--no-check']];
     const child = spawn(cmd, args, {
       cwd: stagingDir,
       stdio: ['inherit', 'pipe', 'inherit'],
-    })
+    });
 
-    let opened = false
-    child.stdout.on('data', (chunk) => {
-      process.stdout.write(chunk)
-      if (opened) return
-      const match = chunk.toString().match(/https?:\/\/localhost:\d+/)
+    let opened = false;
+    child.stdout.on('data', chunk => {
+      process.stdout.write(chunk);
+      if (opened) return;
+      const match = chunk.toString().match(/https?:\/\/localhost:\d+/);
       if (match) {
-        opened = true
-        openUrl(match[0])
+        opened = true;
+        openUrl(match[0]);
       }
-    })
+    });
 
-    child.on('close', () => resolve())
-    child.on('error', reject)
-  })
+    child.on('close', () => resolve());
+    child.on('error', reject);
+  });
 }
 
 function openUrl(url) {
-  const cmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'cmd' : 'xdg-open'
-  const args = process.platform === 'win32' ? ['/c', 'start', '""', url] : [url]
+  const cmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'cmd' : 'xdg-open';
+  const args = process.platform === 'win32' ? ['/c', 'start', '""', url] : [url];
   try {
-    spawn(cmd, args, { stdio: 'ignore', detached: true }).unref()
+    spawn(cmd, args, { stdio: 'ignore', detached: true }).unref();
   } catch {
     // Best-effort — the URL is still in the terminal output for the user.
   }
 }
 
 function listFiles(dir, prefix = '') {
-  const results = []
-  if (!fs.existsSync(dir)) return results
+  const results = [];
+  if (!fs.existsSync(dir)) return results;
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name.startsWith('.')) continue
-    const rel = prefix ? `${prefix}/${entry.name}` : entry.name
+    if (entry.name.startsWith('.')) continue;
+    const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
     if (entry.isDirectory()) {
-      results.push(...listFiles(path.join(dir, entry.name), rel))
+      results.push(...listFiles(path.join(dir, entry.name), rel));
     } else {
-      results.push(rel)
+      results.push(rel);
     }
   }
-  return results
+  return results;
 }
 
 function createZip(sourceDir, outputZip) {
-  fs.mkdirSync(path.dirname(outputZip), { recursive: true })
-  if (fs.existsSync(outputZip)) fs.rmSync(outputZip)
+  fs.mkdirSync(path.dirname(outputZip), { recursive: true });
+  if (fs.existsSync(outputZip)) fs.rmSync(outputZip);
 
   return new Promise((resolve, reject) => {
     const child = spawn('zip', ['-r', '-q', outputZip, '.'], {
       cwd: sourceDir,
       stdio: 'inherit',
-    })
-    child.on('close', (code) => {
-      if (code === 0) resolve()
-      else reject(new Error(`zip exited with code ${code}`))
-    })
-    child.on('error', reject)
-  })
+    });
+    child.on('close', code => {
+      if (code === 0) resolve();
+      else reject(new Error(`zip exited with code ${code}`));
+    });
+    child.on('error', reject);
+  });
 }
 
 /**
@@ -1344,26 +1439,26 @@ function createZip(sourceDir, outputZip) {
  * found or parseable.
  */
 async function tryMintlifyNav(sourceUrl, knownPages, firecrawlKey, oasSink) {
-  const origin = new URL(sourceUrl).origin
-  const fetchHtml = firecrawlKey ? makeFirecrawlFetcher(firecrawlKey) : fetchHtmlDirect
+  const origin = new URL(sourceUrl).origin;
+  const fetchHtml = firecrawlKey ? makeFirecrawlFetcher(firecrawlKey) : fetchHtmlDirect;
 
-  const byPath = new Map()
-  for (const p of knownPages) byPath.set(normalizePath(p.url), p)
+  const byPath = new Map();
+  for (const p of knownPages) byPath.set(normalizePath(p.url), p);
 
   for (const filename of ['docs.json', 'mint.json']) {
-    const configUrl = `${origin}/${filename}`
-    const body = await fetchHtml(configUrl)
-    if (!body) continue
-    const config = extractMintlifyConfig(body)
-    if (!config) continue
-    if (oasSink) oasSink.push(...extractMintlifyOasCandidates(config, origin))
-    if (!config.navigation) continue
-    const parsed = parseMintlifyConfig(config, origin, byPath)
+    const configUrl = `${origin}/${filename}`;
+    const body = await fetchHtml(configUrl);
+    if (!body) continue;
+    const config = extractMintlifyConfig(body);
+    if (!config) continue;
+    if (oasSink) oasSink.push(...extractMintlifyOasCandidates(config, origin));
+    if (!config.navigation) continue;
+    const parsed = parseMintlifyConfig(config, origin, byPath);
     if (parsed.categories.length > 0) {
-      return { source: configUrl, title: parsed.title, categories: parsed.categories }
+      return { source: configUrl, title: parsed.title, categories: parsed.categories };
     }
   }
-  return null
+  return null;
 }
 
 /**
@@ -1375,23 +1470,23 @@ async function tryMintlifyNav(sourceUrl, knownPages, firecrawlKey, oasSink) {
  */
 function extractMintlifyConfig(body) {
   try {
-    return JSON.parse(body)
-  } catch { }
+    return JSON.parse(body);
+  } catch {}
   // Pull out the first balanced `{ ... }` that contains a "navigation" key.
-  const navIdx = body.indexOf('"navigation"')
-  if (navIdx === -1) return null
-  let start = body.lastIndexOf('{', navIdx)
+  const navIdx = body.indexOf('"navigation"');
+  if (navIdx === -1) return null;
+  let start = body.lastIndexOf('{', navIdx);
   while (start !== -1) {
     for (let end = body.lastIndexOf('}'); end > start; end = body.lastIndexOf('}', end - 1)) {
-      const candidate = body.slice(start, end + 1)
+      const candidate = body.slice(start, end + 1);
       try {
-        const parsed = JSON.parse(candidate)
-        if (parsed && parsed.navigation) return parsed
-      } catch { }
+        const parsed = JSON.parse(candidate);
+        if (parsed && parsed.navigation) return parsed;
+      } catch {}
     }
-    start = body.lastIndexOf('{', start - 1)
+    start = body.lastIndexOf('{', start - 1);
   }
-  return null
+  return null;
 }
 
 /**
@@ -1402,67 +1497,67 @@ function extractMintlifyConfig(body) {
  * specs.
  */
 function extractMintlifyOasCandidates(config, origin) {
-  const candidates = []
-  const seen = new Set()
-  const addUrl = (raw) => {
-    if (typeof raw !== 'string' || !raw.trim()) return
-    let abs
+  const candidates = [];
+  const seen = new Set();
+  const addUrl = raw => {
+    if (typeof raw !== 'string' || !raw.trim()) return;
+    let abs;
     try {
-      abs = new URL(raw, origin)
+      abs = new URL(raw, origin);
     } catch {
-      return
+      return;
     }
-    if (abs.protocol !== 'http:' && abs.protocol !== 'https:') return
-    const href = abs.toString()
-    if (seen.has(href)) return
-    seen.add(href)
-    candidates.push({ url: href, text: null, source: 'mintlify' })
-  }
-  const addValue = (value) => {
-    if (typeof value === 'string') addUrl(value)
-    else if (Array.isArray(value)) for (const v of value) addValue(v)
-    else if (value && typeof value === 'object') addUrl(value.source)
-  }
-  const NAV_KEYS = ['navigation', 'tabs', 'groups', 'anchors', 'versions', 'languages', 'pages', 'dropdowns']
-  const walk = (node) => {
+    if (abs.protocol !== 'http:' && abs.protocol !== 'https:') return;
+    const href = abs.toString();
+    if (seen.has(href)) return;
+    seen.add(href);
+    candidates.push({ url: href, text: null, source: 'mintlify' });
+  };
+  const addValue = value => {
+    if (typeof value === 'string') addUrl(value);
+    else if (Array.isArray(value)) for (const v of value) addValue(v);
+    else if (value && typeof value === 'object') addUrl(value.source);
+  };
+  const NAV_KEYS = ['navigation', 'tabs', 'groups', 'anchors', 'versions', 'languages', 'pages', 'dropdowns'];
+  const walk = node => {
     if (Array.isArray(node)) {
-      for (const n of node) walk(n)
-      return
+      for (const n of node) walk(n);
+      return;
     }
-    if (!node || typeof node !== 'object') return
-    if (node.openapi !== undefined) addValue(node.openapi)
+    if (!node || typeof node !== 'object') return;
+    if (node.openapi !== undefined) addValue(node.openapi);
     for (const key of NAV_KEYS) {
-      if (node[key] !== undefined) walk(node[key])
+      if (node[key] !== undefined) walk(node[key]);
     }
-  }
-  walk(config)
-  return candidates
+  };
+  walk(config);
+  return candidates;
 }
 
 function parseMintlifyConfig(config, origin, byPath) {
-  const title = config.name || null
-  const categories = []
+  const title = config.name || null;
+  const categories = [];
 
-  const slugToTitle = (slug) => {
-    const base = String(slug).split('/').pop() || slug
+  const slugToTitle = slug => {
+    const base = String(slug).split('/').pop() || slug;
     return base
       .split(/[-_]/)
       .filter(Boolean)
-      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-      .join(' ')
-  }
+      .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(' ');
+  };
 
-  const pageToEntry = (p) => {
+  const pageToEntry = p => {
     // Simple slug string → leaf page
     if (typeof p === 'string') {
-      const slug = p.replace(/^\//, '')
-      const url = `${origin}/${slug}.md`
-      const known = byPath.get(normalizePath(url))
+      const slug = p.replace(/^\//, '');
+      const url = `${origin}/${slug}.md`;
+      const known = byPath.get(normalizePath(url));
       return {
         title: known?.title || slugToTitle(slug),
         url,
         ...(known?.description ? { description: known.description } : {}),
-      }
+      };
     }
     if (p && typeof p === 'object') {
       // Nested group: recurse
@@ -1471,52 +1566,52 @@ function parseMintlifyConfig(config, origin, byPath) {
           title: p.group,
           url: null,
           pages: p.pages.map(pageToEntry).filter(Boolean),
-        }
+        };
       }
       // Some v2 shapes: { page: "slug", title?: "..." }
       if (typeof p.page === 'string') {
-        const slug = p.page.replace(/^\//, '')
-        const url = `${origin}/${slug}.md`
-        const known = byPath.get(normalizePath(url))
+        const slug = p.page.replace(/^\//, '');
+        const url = `${origin}/${slug}.md`;
+        const known = byPath.get(normalizePath(url));
         return {
           title: p.title || known?.title || slugToTitle(slug),
           url,
           ...(known?.description ? { description: known.description } : {}),
-        }
+        };
       }
     }
-    return null
-  }
+    return null;
+  };
 
-  const pushGroup = (group) => {
-    if (!group || !Array.isArray(group.pages)) return
-    const pages = group.pages.map(pageToEntry).filter(Boolean)
-    if (pages.length === 0) return
-    categories.push({ title: group.group || 'Untitled', pages })
-  }
+  const pushGroup = group => {
+    if (!group || !Array.isArray(group.pages)) return;
+    const pages = group.pages.map(pageToEntry).filter(Boolean);
+    if (pages.length === 0) return;
+    categories.push({ title: group.group || 'Untitled', pages });
+  };
 
-  const nav = config.navigation
+  const nav = config.navigation;
   // v1: navigation is an array of groups
   if (Array.isArray(nav)) {
-    for (const g of nav) pushGroup(g)
+    for (const g of nav) pushGroup(g);
   }
   // v2: navigation.tabs[].groups[]
   else if (Array.isArray(nav?.tabs)) {
     for (const tab of nav.tabs) {
-      for (const g of tab.groups || []) pushGroup(g)
+      for (const g of tab.groups || []) pushGroup(g);
     }
   }
   // v2: navigation.groups[] (no tabs)
   else if (Array.isArray(nav?.groups)) {
-    for (const g of nav.groups) pushGroup(g)
+    for (const g of nav.groups) pushGroup(g);
   }
   // v2: navigation.pages[] (flat)
   else if (Array.isArray(nav?.pages)) {
-    const pages = nav.pages.map(pageToEntry).filter(Boolean)
-    if (pages.length > 0) categories.push({ title: 'Documentation', pages })
+    const pages = nav.pages.map(pageToEntry).filter(Boolean);
+    if (pages.length > 0) categories.push({ title: 'Documentation', pages });
   }
 
-  return { title, categories }
+  return { title, categories };
 }
 
 /**
@@ -1528,80 +1623,80 @@ function parseMintlifyConfig(config, origin, byPath) {
  * embedded tree is unavailable.
  */
 async function tryArchbeeNav(sourceUrl, knownPages, firecrawlKey, oasSink) {
-  const origin = new URL(sourceUrl).origin
-  const fetchHtml = firecrawlKey ? makeFirecrawlFetcher(firecrawlKey) : fetchHtmlDirect
-  const html = await fetchHtml(toBrowsableUrl(sourceUrl))
+  const origin = new URL(sourceUrl).origin;
+  const fetchHtml = firecrawlKey ? makeFirecrawlFetcher(firecrawlKey) : fetchHtmlDirect;
+  const html = await fetchHtml(toBrowsableUrl(sourceUrl));
   if (html && oasSink) {
-    oasSink.push(...extractOasUrlsFromHtml(html, sourceUrl).map((url) => ({ url, text: null, source: 'html' })))
+    oasSink.push(...extractOasUrlsFromHtml(html, sourceUrl).map(url => ({ url, text: null, source: 'html' })));
   }
-  if (!html || !/publicDocsTree|Archbee/i.test(html)) return null
+  if (!html || !/publicDocsTree|Archbee/i.test(html)) return null;
 
-  const nextData = extractNextData(html)
-  const docSpace = nextData?.props?.pageProps?._docSpace
-  const tree = docSpace?.publicDocsTree
-  if (!Array.isArray(tree) || tree.length === 0) return null
+  const nextData = extractNextData(html);
+  const docSpace = nextData?.props?.pageProps?._docSpace;
+  const tree = docSpace?.publicDocsTree;
+  if (!Array.isArray(tree) || tree.length === 0) return null;
 
-  const byPath = new Map()
-  for (const p of knownPages) byPath.set(normalizePath(p.url), p)
+  const byPath = new Map();
+  for (const p of knownPages) byPath.set(normalizePath(p.url), p);
 
-  const pageFromNode = (node) => {
-    if (!node || typeof node !== 'object') return null
-    if (node.isHidden === true) return null
+  const pageFromNode = node => {
+    if (!node || typeof node !== 'object') return null;
+    if (node.isHidden === true) return null;
 
-    const title = String(node.name || node.title || node.urlKey || '').trim()
-    const children = Array.isArray(node.children) ? node.children.map(pageFromNode).filter(Boolean) : []
-    if (!title && children.length === 0) return null
+    const title = String(node.name || node.title || node.urlKey || '').trim();
+    const children = Array.isArray(node.children) ? node.children.map(pageFromNode).filter(Boolean) : [];
+    if (!title && children.length === 0) return null;
 
-    const url = archbeeNodeUrl(origin, node.urlKey)
-    const known = url ? byPath.get(normalizePath(url)) : null
+    const url = archbeeNodeUrl(origin, node.urlKey);
+    const known = url ? byPath.get(normalizePath(url)) : null;
     const page = {
       title: known?.title || title || 'Untitled',
       url,
       ...(known?.description ? { description: known.description } : {}),
       ...(children.length > 0 ? { pages: children } : {}),
-    }
+    };
 
     // Root docs pages have no URL path segments, but should stay in their
     // authored position when the later URL-trie nesting pass runs.
     if (url && extractUrlPathSegments(url).length === 0) {
-      page._virtualPathSegs = [kebabCase(page.title || 'home') || 'home']
+      page._virtualPathSegs = [kebabCase(page.title || 'home') || 'home'];
     }
 
-    return page
-  }
+    return page;
+  };
 
-  const pages = tree.map(pageFromNode).filter(Boolean)
-  if (pages.length === 0) return null
+  const pages = tree.map(pageFromNode).filter(Boolean);
+  if (pages.length === 0) return null;
 
   return {
     title: docSpace.hostingTitle || docSpace.name || null,
     categories: [{ title: 'Documentation', pages }],
-  }
+  };
 }
 
 function extractNextData(html) {
-  const m = String(html).match(/<script\b(?=[^>]*\bid=["']__NEXT_DATA__["'])[^>]*>([\s\S]*?)<\/script>/i)
-  if (!m) return null
+  const m = String(html).match(/<script\b(?=[^>]*\bid=["']__NEXT_DATA__["'])[^>]*>([\s\S]*?)<\/script>/i);
+  if (!m) return null;
   try {
-    return JSON.parse(m[1])
+    return JSON.parse(m[1]);
   } catch {
-    return null
+    return null;
   }
 }
 
 function archbeeNodeUrl(origin, urlKey) {
-  if (urlKey === undefined || urlKey === null) return null
-  const key = String(urlKey || '').trim()
-  if (!key || key === '/') return `${origin}/`
-  if (/^https?:\/\//i.test(key)) return key
-  return `${origin}/${key.replace(/^\/+/, '')}`
+  if (urlKey === undefined || urlKey === null) return null;
+  const key = String(urlKey || '').trim();
+  if (!key || key === '/') return `${origin}/`;
+  if (/^https?:\/\//i.test(key)) return key;
+  return `${origin}/${key.replace(/^\/+/, '')}`;
 }
 
 // Max page fetches while filling in non-active Fern tab trees (one per tab).
-const FERN_TAB_FETCH_CAP = 8
+const FERN_TAB_FETCH_CAP = 8;
 
-const FERN_SECTION_NODE_TYPES = new Set(['section', 'apiReference', 'apiPackage'])
-const FERN_SKIP_NODE_TYPES = new Set(['link', 'changelog', 'tab'])
+const FERN_SECTION_NODE_TYPES = new Set(['section', 'apiReference', 'apiPackage']);
+const FERN_SKIP_NODE_TYPES = new Set(['link', 'changelog', 'tab']);
 
 /**
  * Fern-powered docs sites embed the complete nav tree in Next.js RSC flight
@@ -1622,83 +1717,85 @@ const FERN_SKIP_NODE_TYPES = new Set(['link', 'changelog', 'tab'])
  */
 async function tryFernNav(sourceUrl, knownPages) {
   try {
-    const origin = new URL(sourceUrl).origin
-    const looksFern = (html) => /<aside[^>]*id="fern-sidebar"/.test(html) || /<meta[^>]+name="generator"[^>]+content="[^"]*buildwithfern/i.test(html)
-    let entryUrl = toBrowsableUrl(sourceUrl)
-    let entryHtml = await fetchHtmlDirect(entryUrl)
+    const origin = new URL(sourceUrl).origin;
+    const looksFern = html =>
+      /<aside[^>]*id="fern-sidebar"/.test(html) ||
+      /<meta[^>]+name="generator"[^>]+content="[^"]*buildwithfern/i.test(html);
+    let entryUrl = toBrowsableUrl(sourceUrl);
+    let entryHtml = await fetchHtmlDirect(entryUrl);
     if (!looksFern(entryHtml)) {
       // A stale entry deep link 404s on Fern (the not-found boundary renders
       // with a truncated tree), so retry once from a known live page.
-      const retry = knownPages.find((p) => normalizePath(p.url) !== normalizePath(sourceUrl))
-      if (!retry) return null
-      entryUrl = toBrowsableUrl(retry.url)
-      entryHtml = await fetchHtmlDirect(entryUrl)
-      if (!looksFern(entryHtml)) return null
+      const retry = knownPages.find(p => normalizePath(p.url) !== normalizePath(sourceUrl));
+      if (!retry) return null;
+      entryUrl = toBrowsableUrl(retry.url);
+      entryHtml = await fetchHtmlDirect(entryUrl);
+      if (!looksFern(entryHtml)) return null;
     }
 
-    const byPath = new Map()
-    for (const p of knownPages) byPath.set(normalizePath(p.url), p)
+    const byPath = new Map();
+    for (const p of knownPages) byPath.set(normalizePath(p.url), p);
 
-    const ctx = { origin, byPath, seenPaths: new Set() }
-    const categories = []
+    const ctx = { origin, byPath, seenPaths: new Set() };
+    const categories = [];
     const collect = (html, tabTitle) => {
-      const blob = decodeFernFlightBlob(html)
-      addFernCategories(categories, extractFernNavNodes(blob), { ...ctx, tabTitle })
-      return blob
-    }
+      const blob = decodeFernFlightBlob(html);
+      addFernCategories(categories, extractFernNavNodes(blob), { ...ctx, tabTitle });
+      return blob;
+    };
 
-    const entryBlob = collect(entryHtml, null)
-    const entryPath = normalizePath(entryUrl)
-    const seenTabTargets = new Set()
-    let tabFetches = 0
+    const entryBlob = collect(entryHtml, null);
+    const entryPath = normalizePath(entryUrl);
+    const seenTabTargets = new Set();
+    let tabFetches = 0;
     for (const tab of extractFernTabs(entryBlob)) {
-      if (seenTabTargets.has(tab.pointsTo)) continue
-      seenTabTargets.add(tab.pointsTo)
-      const tabUrl = `${origin}/${tab.pointsTo}`
-      if (normalizePath(tabUrl) === entryPath) continue
-      if (tabFetches >= FERN_TAB_FETCH_CAP) break
-      tabFetches++
-      const tabHtml = await fetchHtmlDirect(tabUrl)
-      if (!tabHtml) continue
-      collect(tabHtml, tab.title)
+      if (seenTabTargets.has(tab.pointsTo)) continue;
+      seenTabTargets.add(tab.pointsTo);
+      const tabUrl = `${origin}/${tab.pointsTo}`;
+      if (normalizePath(tabUrl) === entryPath) continue;
+      if (tabFetches >= FERN_TAB_FETCH_CAP) break;
+      tabFetches++;
+      const tabHtml = await fetchHtmlDirect(tabUrl);
+      if (!tabHtml) continue;
+      collect(tabHtml, tab.title);
     }
 
-    const pageCount = categories.reduce((n, c) => n + countUrlPagesDeep(c.pages), 0)
-    if (pageCount === 0) return null
-    return { title: null, categories }
+    const pageCount = categories.reduce((n, c) => n + countUrlPagesDeep(c.pages), 0);
+    if (pageCount === 0) return null;
+    return { title: null, categories };
   } catch {
-    return null
+    return null;
   }
 }
 
 function decodeFernFlightBlob(html) {
-  const chunks = []
-  const chunkRe = /self\.__next_f\.push\(\[1,"((?:[^"\\]|\\.)*)"\]\)/g
-  let m
+  const chunks = [];
+  const chunkRe = /self\.__next_f\.push\(\[1,"((?:[^"\\]|\\.)*)"\]\)/g;
+  let m;
   while ((m = chunkRe.exec(html)) !== null) {
     try {
-      chunks.push(JSON.parse(`"${m[1]}"`))
-    } catch { }
+      chunks.push(JSON.parse(`"${m[1]}"`));
+    } catch {}
   }
-  return chunks.join('')
+  return chunks.join('');
 }
 
 function extractBalancedObject(str, start) {
-  let depth = 0
-  let inString = false
+  let depth = 0;
+  let inString = false;
   for (let i = start; i < str.length; i++) {
-    const ch = str[i]
+    const ch = str[i];
     if (inString) {
-      if (ch === '\\') i++
-      else if (ch === '"') inString = false
-    } else if (ch === '"') inString = true
-    else if (ch === '{') depth++
+      if (ch === '\\') i++;
+      else if (ch === '"') inString = false;
+    } else if (ch === '"') inString = true;
+    else if (ch === '{') depth++;
     else if (ch === '}') {
-      depth--
-      if (depth === 0) return str.slice(start, i + 1)
+      depth--;
+      if (depth === 0) return str.slice(start, i + 1);
     }
   }
-  return null
+  return null;
 }
 
 /**
@@ -1708,73 +1805,73 @@ function extractBalancedObject(str, start) {
  * that fall inside an already-extracted object are its children and skipped.
  */
 function extractFernNavNodes(blob) {
-  const nodes = []
-  const markerRe = /\{"type":"(?:sidebarRoot|sidebarGroup|section|apiReference|apiPackage)"/g
-  let consumedUpTo = -1
-  let m
+  const nodes = [];
+  const markerRe = /\{"type":"(?:sidebarRoot|sidebarGroup|section|apiReference|apiPackage)"/g;
+  let consumedUpTo = -1;
+  let m;
   while ((m = markerRe.exec(blob)) !== null) {
-    if (m.index < consumedUpTo) continue
-    const raw = extractBalancedObject(blob, m.index)
-    if (!raw) continue
-    consumedUpTo = m.index + raw.length
+    if (m.index < consumedUpTo) continue;
+    const raw = extractBalancedObject(blob, m.index);
+    if (!raw) continue;
+    consumedUpTo = m.index + raw.length;
     try {
-      nodes.push(JSON.parse(raw))
-    } catch { }
+      nodes.push(JSON.parse(raw));
+    } catch {}
   }
-  return nodes
+  return nodes;
 }
 
 function extractFernTabs(blob) {
-  const tabs = []
-  const tabRe = /\{"type":"tab",/g
-  let m
+  const tabs = [];
+  const tabRe = /\{"type":"tab",/g;
+  let m;
   while ((m = tabRe.exec(blob)) !== null) {
-    const raw = extractBalancedObject(blob, m.index)
-    if (!raw) continue
-    let tab
+    const raw = extractBalancedObject(blob, m.index);
+    if (!raw) continue;
+    let tab;
     try {
-      tab = JSON.parse(raw)
+      tab = JSON.parse(raw);
     } catch {
-      continue
+      continue;
     }
-    const pointsTo = fernField(tab.pointsTo)
-    if (!pointsTo) continue
-    tabs.push({ title: fernField(tab.title), pointsTo })
+    const pointsTo = fernField(tab.pointsTo);
+    if (!pointsTo) continue;
+    tabs.push({ title: fernField(tab.title), pointsTo });
   }
-  return tabs
+  return tabs;
 }
 
 // Absent fields serialize as the literal string "$undefined" in flight payloads.
 function fernField(value) {
-  return typeof value === 'string' && value !== '$undefined' && value !== '' ? value : null
+  return typeof value === 'string' && value !== '$undefined' && value !== '' ? value : null;
 }
 
 function fernPageFromNode(node, ctx) {
-  if (!node || typeof node !== 'object' || node.hidden === true) return null
-  if (FERN_SKIP_NODE_TYPES.has(node.type)) return null
-  const children = Array.isArray(node.children) ? node.children.map((c) => fernPageFromNode(c, ctx)).filter(Boolean) : []
+  if (!node || typeof node !== 'object' || node.hidden === true) return null;
+  if (FERN_SKIP_NODE_TYPES.has(node.type)) return null;
+  const children = Array.isArray(node.children) ? node.children.map(c => fernPageFromNode(c, ctx)).filter(Boolean) : [];
   if (FERN_SECTION_NODE_TYPES.has(node.type)) {
     // A section owns a page only when overviewPageId is set — it then renders
     // at the section's own slug. pointsTo is a navigation alias to the
     // section's first descendant page, never a page of the section itself.
-    const landing = fernField(node.overviewPageId) ? fernField(node.slug) : null
-    const title = fernField(node.title) || 'Untitled'
+    const landing = fernField(node.overviewPageId) ? fernField(node.slug) : null;
+    const title = fernField(node.title) || 'Untitled';
     if (!landing) {
-      if (children.length === 0) return null
-      return { title, url: null, _emptyParent: true, _virtualPathSegs: [kebabCase(title) || 'group'], pages: children }
+      if (children.length === 0) return null;
+      return { title, url: null, _emptyParent: true, _virtualPathSegs: [kebabCase(title) || 'group'], pages: children };
     }
-    const landingUrl = `${ctx.origin}/${landing}`
-    const known = ctx.byPath.get(normalizePath(landingUrl))
+    const landingUrl = `${ctx.origin}/${landing}`;
+    const known = ctx.byPath.get(normalizePath(landingUrl));
     return {
       title,
       url: known?.url || landingUrl,
       ...(children.length > 0 ? { pages: children } : {}),
-    }
+    };
   }
-  const slug = fernField(node.slug)
+  const slug = fernField(node.slug);
   if (slug) {
-    const url = `${ctx.origin}/${slug}`
-    const known = ctx.byPath.get(normalizePath(url))
+    const url = `${ctx.origin}/${slug}`;
+    const known = ctx.byPath.get(normalizePath(url));
     return {
       // The payload title is the sidebar label as rendered; llms.txt titles
       // come from page headings, which can differ from the nav.
@@ -1782,11 +1879,11 @@ function fernPageFromNode(node, ctx) {
       url: known?.url || url,
       ...(known?.description ? { description: known.description } : {}),
       ...(children.length > 0 ? { pages: children } : {}),
-    }
+    };
   }
-  if (children.length === 1) return children[0]
-  if (children.length > 1) return { title: fernField(node.title) || 'Untitled', url: null, pages: children }
-  return null
+  if (children.length === 1) return children[0];
+  if (children.length > 1) return { title: fernField(node.title) || 'Untitled', url: null, pages: children };
+  return null;
 }
 
 /**
@@ -1799,45 +1896,45 @@ function fernPageFromNode(node, ctx) {
  * same API groups under both a product tab and the API-reference tab.
  */
 function addFernCategories(categories, nodes, ctx) {
-  const roots = []
+  const roots = [];
   for (const node of nodes) {
-    if (node.type === 'sidebarRoot' || node.type === 'sidebarGroup') roots.push(...(node.children || []))
-    else roots.push(node)
+    if (node.type === 'sidebarRoot' || node.type === 'sidebarGroup') roots.push(...(node.children || []));
+    else roots.push(node);
   }
-  const loosePages = []
+  const loosePages = [];
   for (const root of roots) {
     if (FERN_SECTION_NODE_TYPES.has(root.type)) {
-      const section = fernPageFromNode(root, ctx)
-      if (!section) continue
-      if (!fernField(root.title) && ctx.tabTitle) section.title = ctx.tabTitle
-      const pages = section.pages || []
-      if (section.url && !pages.some((p) => p.url && normalizePath(p.url) === normalizePath(section.url))) {
-        pages.unshift({ title: section.title, url: section.url })
+      const section = fernPageFromNode(root, ctx);
+      if (!section) continue;
+      if (!fernField(root.title) && ctx.tabTitle) section.title = ctx.tabTitle;
+      const pages = section.pages || [];
+      if (section.url && !pages.some(p => p.url && normalizePath(p.url) === normalizePath(section.url))) {
+        pages.unshift({ title: section.title, url: section.url });
       }
-      const deduped = dedupeFernPages(pages, ctx.seenPaths)
-      if (deduped.length > 0) categories.push({ title: section.title, pages: deduped })
+      const deduped = dedupeFernPages(pages, ctx.seenPaths);
+      if (deduped.length > 0) categories.push({ title: section.title, pages: deduped });
     } else {
-      const page = fernPageFromNode(root, ctx)
-      if (page) loosePages.push(page)
+      const page = fernPageFromNode(root, ctx);
+      if (page) loosePages.push(page);
     }
   }
-  const deduped = dedupeFernPages(loosePages, ctx.seenPaths)
-  if (deduped.length > 0) categories.push({ title: ctx.tabTitle || 'Documentation', pages: deduped })
+  const deduped = dedupeFernPages(loosePages, ctx.seenPaths);
+  if (deduped.length > 0) categories.push({ title: ctx.tabTitle || 'Documentation', pages: deduped });
 }
 
 function dedupeFernPages(pages, seenPaths) {
-  const out = []
+  const out = [];
   for (const p of pages) {
-    const urlSeen = p.url ? seenPaths.has(normalizePath(p.url)) : false
-    if (p.url && !urlSeen) seenPaths.add(normalizePath(p.url))
-    const kids = p.pages ? dedupeFernPages(p.pages, seenPaths) : []
-    if (kids.length === 0 && (urlSeen || !p.url)) continue
-    const entry = { ...p, url: urlSeen ? null : p.url }
-    if (kids.length > 0) entry.pages = kids
-    else delete entry.pages
-    out.push(entry)
+    const urlSeen = p.url ? seenPaths.has(normalizePath(p.url)) : false;
+    if (p.url && !urlSeen) seenPaths.add(normalizePath(p.url));
+    const kids = p.pages ? dedupeFernPages(p.pages, seenPaths) : [];
+    if (kids.length === 0 && (urlSeen || !p.url)) continue;
+    const entry = { ...p, url: urlSeen ? null : p.url };
+    if (kids.length > 0) entry.pages = kids;
+    else delete entry.pages;
+    out.push(entry);
   }
-  return out
+  return out;
 }
 
 /**
@@ -1852,26 +1949,26 @@ function dedupeFernPages(pages, seenPaths) {
  * sidebar won), sometimes last (a flat alphabetized index block won).
  */
 function scoreNavTree(tree) {
-  const count = tree.categories.reduce((n, c) => n + c.pages.length, 0)
-  const cats = tree.categories.length
-  const hierarchyBonus = cats >= 2 ? cats * 5 : -20
+  const count = tree.categories.reduce((n, c) => n + c.pages.length, 0);
+  const cats = tree.categories.length;
+  const hierarchyBonus = cats >= 2 ? cats * 5 : -20;
   // Alphabetical penalty: real sidebars are curated (Overview first, related
   // topics grouped). Auto-generated indexes, search clouds, and footer link
   // lists tend to be strictly alphabetized. When a category's pages come in
   // alpha order it's almost always noise masquerading as structure.
-  let alphaPenalty = 0
+  let alphaPenalty = 0;
   for (const c of tree.categories) {
-    const titles = (c.pages || []).map((p) => (p.title || '').toLowerCase())
-    if (titles.length >= 3 && isMonotonicAlpha(titles)) alphaPenalty -= 15
+    const titles = (c.pages || []).map(p => (p.title || '').toLowerCase());
+    if (titles.length >= 3 && isMonotonicAlpha(titles)) alphaPenalty -= 15;
   }
-  return count + hierarchyBonus + alphaPenalty
+  return count + hierarchyBonus + alphaPenalty;
 }
 
 function isMonotonicAlpha(titles) {
   for (let i = 1; i < titles.length; i++) {
-    if (titles[i] < titles[i - 1]) return false
+    if (titles[i] < titles[i - 1]) return false;
   }
-  return true
+  return true;
 }
 
 /**
@@ -1881,54 +1978,54 @@ function isMonotonicAlpha(titles) {
  * already fetched — zero extra requests.
  */
 function extractOasUrlsFromHtml(html, pageUrl) {
-  const doc = String(html)
-  const raws = []
+  const doc = String(html);
+  const raws = [];
 
   // Swagger UI: `SwaggerUIBundle({ url: "…" })` or `urls: [{ url: "…" }, …]`.
   // Scanning a bounded window after each init call handles both shapes
   // without catastrophic backtracking.
-  const swaggerInitRe = /SwaggerUI(?:Bundle)?\s*\(/g
-  let m
+  const swaggerInitRe = /SwaggerUI(?:Bundle)?\s*\(/g;
+  let m;
   while ((m = swaggerInitRe.exec(doc)) !== null) {
-    const windowText = doc.slice(m.index, m.index + 3000)
-    const urlRe = /["']?\burl["']?\s*:\s*["']([^"']+)["']/g
-    let u
-    while ((u = urlRe.exec(windowText)) !== null) raws.push(u[1])
+    const windowText = doc.slice(m.index, m.index + 3000);
+    const urlRe = /["']?\burl["']?\s*:\s*["']([^"']+)["']/g;
+    let u;
+    while ((u = urlRe.exec(windowText)) !== null) raws.push(u[1]);
   }
 
-  const redocAttrRe = /<redoc\b[^>]*?\bspec-url\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/gi
-  while ((m = redocAttrRe.exec(doc)) !== null) raws.push(m[1] ?? m[2] ?? m[3])
-  const redocInitRe = /Redoc\.init\s*\(\s*["']([^"']+)["']/g
-  while ((m = redocInitRe.exec(doc)) !== null) raws.push(m[1])
+  const redocAttrRe = /<redoc\b[^>]*?\bspec-url\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/gi;
+  while ((m = redocAttrRe.exec(doc)) !== null) raws.push(m[1] ?? m[2] ?? m[3]);
+  const redocInitRe = /Redoc\.init\s*\(\s*["']([^"']+)["']/g;
+  while ((m = redocInitRe.exec(doc)) !== null) raws.push(m[1]);
 
   // Scalar: <script id="api-reference" data-url="…"> — attr-order agnostic.
-  const scriptTagRe = /<script\b[^>]*>/gi
+  const scriptTagRe = /<script\b[^>]*>/gi;
   while ((m = scriptTagRe.exec(doc)) !== null) {
-    const tag = m[0]
-    if (!/\bid\s*=\s*["']api-reference["']/i.test(tag)) continue
-    const u = /\bdata-url\s*=\s*["']([^"']+)["']/i.exec(tag)
-    if (u) raws.push(u[1])
+    const tag = m[0];
+    if (!/\bid\s*=\s*["']api-reference["']/i.test(tag)) continue;
+    const u = /\bdata-url\s*=\s*["']([^"']+)["']/i.exec(tag);
+    if (u) raws.push(u[1]);
   }
 
-  const stoplightRe = /apiDescriptionUrl\s*=\s*"([^"]+)"/g
-  while ((m = stoplightRe.exec(doc)) !== null) raws.push(m[1])
+  const stoplightRe = /apiDescriptionUrl\s*=\s*"([^"]+)"/g;
+  while ((m = stoplightRe.exec(doc)) !== null) raws.push(m[1]);
 
-  const out = []
-  const seen = new Set()
+  const out = [];
+  const seen = new Set();
   for (const raw of raws) {
-    let abs
+    let abs;
     try {
-      abs = new URL(raw, pageUrl)
+      abs = new URL(raw, pageUrl);
     } catch {
-      continue
+      continue;
     }
-    if (abs.protocol !== 'http:' && abs.protocol !== 'https:') continue
-    const href = abs.toString()
-    if (seen.has(href)) continue
-    seen.add(href)
-    out.push(href)
+    if (abs.protocol !== 'http:' && abs.protocol !== 'https:') continue;
+    const href = abs.toString();
+    if (seen.has(href)) continue;
+    seen.add(href);
+    out.push(href);
   }
-  return out
+  return out;
 }
 
 /**
@@ -1942,44 +2039,44 @@ function extractOasUrlsFromHtml(html, pageUrl) {
  */
 async function scrapeNavFromSite(sourceUrl, knownPages, firecrawlKey, diagnostics = {}, oasSink) {
   // Index known pages by normalized pathname so we can match nav hrefs against them.
-  const byPath = new Map()
-  for (const p of knownPages) byPath.set(normalizePath(p.url), p)
+  const byPath = new Map();
+  for (const p of knownPages) byPath.set(normalizePath(p.url), p);
 
-  const fetchHtml = firecrawlKey ? makeFirecrawlFetcher(firecrawlKey) : fetchHtmlDirect
+  const fetchHtml = firecrawlKey ? makeFirecrawlFetcher(firecrawlKey) : fetchHtmlDirect;
 
-  const visited = new Set()
-  const matched = new Map() // normalizedPath → page
-  const placed = new Set() // URLs already placed into some category (prevents cross-category duplication when round-1 visits reshape the tree)
-  const categoryByTitle = new Map()
-  const categoryOrder = []
+  const visited = new Set();
+  const matched = new Map(); // normalizedPath → page
+  const placed = new Set(); // URLs already placed into some category (prevents cross-category duplication when round-1 visits reshape the tree)
+  const categoryByTitle = new Map();
+  const categoryOrder = [];
 
   // Fetch one URL, pick its best nav block, and merge anything new into our
   // running tree. Each page on a typical docs site renders the full sidebar
   // with its own branch expanded, so repeated visits into different branches
   // accumulate coverage.
   async function visit(url) {
-    const vkey = normalizePath(url)
-    if (visited.has(vkey)) return 0
-    visited.add(vkey)
+    const vkey = normalizePath(url);
+    if (visited.has(vkey)) return 0;
+    visited.add(vkey);
 
-    const html = await fetchHtml(url)
-    if (!html) return 0
+    const html = await fetchHtml(url);
+    if (!html) return 0;
     if (oasSink) {
-      oasSink.push(...extractOasUrlsFromHtml(html, url).map((u) => ({ url: u, text: null, source: 'html' })))
+      oasSink.push(...extractOasUrlsFromHtml(html, url).map(u => ({ url: u, text: null, source: 'html' })));
     }
 
-    const base = new URL(url)
-    let best = { score: -Infinity, count: 0, tree: null }
+    const base = new URL(url);
+    let best = { score: -Infinity, count: 0, tree: null };
 
     // Tier 1: <nav>/<aside> elements — semantic markup, almost always the real sidebar.
-    const blockRegex = /<(nav|aside)\b[^>]*>([\s\S]*?)<\/\1>/gi
-    let m
+    const blockRegex = /<(nav|aside)\b[^>]*>([\s\S]*?)<\/\1>/gi;
+    let m;
     while ((m = blockRegex.exec(html)) !== null) {
-      const tree = parseNavBlock(m[2], base, byPath)
-      const score = scoreNavTree(tree)
+      const tree = parseNavBlock(m[2], base, byPath);
+      const score = scoreNavTree(tree);
       if (score > best.score) {
-        const count = tree.categories.reduce((n, c) => n + c.pages.length, 0)
-        best = { score, count, tree }
+        const count = tree.categories.reduce((n, c) => n + c.pages.length, 0);
+        best = { score, count, tree };
       }
     }
 
@@ -1988,11 +2085,11 @@ async function scrapeNavFromSite(sourceUrl, knownPages, firecrawlKey, diagnostic
     // Mintlify-style stacks (greenflash.ai, mintlify.com clones) where the sidebar
     // lives in a plain <div>. We need balanced-tag extraction since divs nest.
     for (const block of extractSidebarContainers(html)) {
-      const tree = parseNavBlock(block, base, byPath)
-      const score = scoreNavTree(tree)
+      const tree = parseNavBlock(block, base, byPath);
+      const score = scoreNavTree(tree);
       if (score > best.score) {
-        const count = tree.categories.reduce((n, c) => n + c.pages.length, 0)
-        best = { score, count, tree }
+        const count = tree.categories.reduce((n, c) => n + c.pages.length, 0);
+        best = { score, count, tree };
       }
     }
 
@@ -2000,36 +2097,36 @@ async function scrapeNavFromSite(sourceUrl, knownPages, firecrawlKey, diagnostic
     // alphabetical link clusters elsewhere on the page (TOCs, footers, indexes)
     // can pollute the result. Only used when earlier tiers didn't find enough.
     if (best.count < 10) {
-      const wholeTree = parseNavBlock(html, base, byPath)
-      const seen = new Set()
-      const filtered = []
+      const wholeTree = parseNavBlock(html, base, byPath);
+      const seen = new Set();
+      const filtered = [];
       for (const cat of wholeTree.categories) {
-        const keptPages = filterDedupePages(cat.pages, seen)
-        if (keptPages.length >= 2) filtered.push({ ...cat, pages: keptPages })
+        const keptPages = filterDedupePages(cat.pages, seen);
+        if (keptPages.length >= 2) filtered.push({ ...cat, pages: keptPages });
       }
-      const filteredCount = filtered.reduce((n, c) => n + c.pages.length, 0)
-      const filteredTree = { title: null, categories: filtered }
-      const filteredScore = scoreNavTree(filteredTree)
+      const filteredCount = filtered.reduce((n, c) => n + c.pages.length, 0);
+      const filteredTree = { title: null, categories: filtered };
+      const filteredScore = scoreNavTree(filteredTree);
       // Compare on score, not count — a noisy 20-link alphabetical cluster
       // shouldn't replace a clean 8-link real sidebar.
       if (filteredScore > best.score) {
-        best = { score: filteredScore, count: filteredCount, tree: filteredTree }
+        best = { score: filteredScore, count: filteredCount, tree: filteredTree };
       }
     }
 
-    if (!best.tree) return 0
+    if (!best.tree) return 0;
 
-    let added = 0
+    let added = 0;
     for (const cat of best.tree.categories) {
-      let existing = categoryByTitle.get(cat.title)
+      let existing = categoryByTitle.get(cat.title);
       if (!existing) {
-        existing = { title: cat.title, pages: [] }
-        categoryByTitle.set(cat.title, existing)
-        categoryOrder.push(existing)
+        existing = { title: cat.title, pages: [] };
+        categoryByTitle.set(cat.title, existing);
+        categoryOrder.push(existing);
       }
-      added += mergePages(cat.pages, existing, matched)
+      added += mergePages(cat.pages, existing, matched);
     }
-    return added
+    return added;
   }
 
   /**
@@ -2041,47 +2138,48 @@ async function scrapeNavFromSite(sourceUrl, knownPages, firecrawlKey, diagnostic
    * Returns the number of newly-added unique pages across the entire sub-tree.
    */
   function mergePages(incoming, target, matched) {
-    let added = 0
+    let added = 0;
     for (const page of incoming) {
-      const norm = normalizePath(page.url)
-      let existing = target.pages.find((p) => p.url === page.url) || target.pages.find((p) => normalizePath(p.url) === norm)
+      const norm = normalizePath(page.url);
+      let existing =
+        target.pages.find(p => p.url === page.url) || target.pages.find(p => normalizePath(p.url) === norm);
       if (!existing) {
         // Already lives in a different category — don't add here.
         if (placed.has(norm)) {
           if (page.pages && page.pages.length > 0) {
             // Still merge its children into wherever the canonical page lives.
-            const canonical = matched.get(norm)
-            if (canonical) added += mergePages(page.pages, canonical, matched)
+            const canonical = matched.get(norm);
+            if (canonical) added += mergePages(page.pages, canonical, matched);
           }
-          continue
+          continue;
         }
         existing = {
           title: page.title,
           url: page.url,
           ...(page.description ? { description: page.description } : {}),
           pages: [],
-        }
-        target.pages.push(existing)
-        placed.add(norm)
+        };
+        target.pages.push(existing);
+        placed.add(norm);
         if (!matched.has(norm)) {
-          matched.set(norm, existing)
-          added++
+          matched.set(norm, existing);
+          added++;
         }
       }
       if (page.pages && page.pages.length > 0) {
-        added += mergePages(page.pages, existing, matched)
+        added += mergePages(page.pages, existing, matched);
       }
     }
-    return added
+    return added;
   }
 
   // Round 0: the source URL itself — reveals top-level + the source page's branch.
-  const r0Start = Date.now()
-  await visit(sourceUrl)
-  const r0Ms = Date.now() - r0Start
+  const r0Start = Date.now();
+  await visit(sourceUrl);
+  const r0Ms = Date.now() - r0Start;
   if (categoryOrder.length === 0) {
-    diagnostics.reason = 'no-categories-round0'
-    return null
+    diagnostics.reason = 'no-categories-round0';
+    return null;
   }
 
   // Round 1 (parallel): visit pages so each branch has a chance to expose
@@ -2094,63 +2192,65 @@ async function scrapeNavFromSite(sourceUrl, knownPages, firecrawlKey, diagnostic
   // enough. Without llms.txt (discovery mode) everything may have collapsed
   // into a single flat category and we don't yet know which of those pages
   // is a parent; visit all of them up to a cap.
-  const isDiscovery = knownPages.length === 0
-  const MAX_DISCOVERY_FETCHES = 20
+  const isDiscovery = knownPages.length === 0;
+  const MAX_DISCOVERY_FETCHES = 20;
   const r1Urls = isDiscovery
     ? flattenTree(categoryOrder).slice(0, MAX_DISCOVERY_FETCHES)
     : categoryOrder
-      .map((c) => c.pages[0])
-      .filter(Boolean)
-      .map((p) => toBrowsableUrl(p.url))
-  const r1Start = Date.now()
+        .map(c => c.pages[0])
+        .filter(Boolean)
+        .map(p => toBrowsableUrl(p.url));
+  const r1Start = Date.now();
   // Firecrawl standard-plan concurrency is 10; 5 leaves headroom for retries.
   // Native HTTP can run hotter since we're hitting our own loopback.
-  await visitAllInParallel(r1Urls, visit, firecrawlKey ? 5 : 10)
-  const r1Ms = Date.now() - r1Start
+  await visitAllInParallel(r1Urls, visit, firecrawlKey ? 5 : 10);
+  const r1Ms = Date.now() - r1Start;
   console.log(
-    styles.dim(`  ⏱  scrape breakdown: round0=${formatDuration(r0Ms)} round1=${formatDuration(r1Ms)} (${r1Urls.length} ${isDiscovery ? 'discovery' : 'category rep'} fetches)`),
-  )
+    styles.dim(
+      `  ⏱  scrape breakdown: round0=${formatDuration(r0Ms)} round1=${formatDuration(r1Ms)} (${r1Urls.length} ${isDiscovery ? 'discovery' : 'category rep'} fetches)`,
+    ),
+  );
 
   // Prune login/account chrome now that crawling is done. On Stoplight sites
   // the "Sign in" → /auth link is the only seed on the bare landing page, so we
   // had to keep it discoverable to reach the real sidebar — but it's not a doc.
-  const pruneAuthPages = (pages) => {
-    let removed = 0
+  const pruneAuthPages = pages => {
+    let removed = 0;
     for (let i = pages.length - 1; i >= 0; i--) {
-      const page = pages[i]
-      if (page.pages && page.pages.length > 0) removed += pruneAuthPages(page.pages)
+      const page = pages[i];
+      if (page.pages && page.pages.length > 0) removed += pruneAuthPages(page.pages);
       if (isAuthChromeUrl(page.url) && (!page.pages || page.pages.length === 0)) {
-        matched.delete(normalizePath(page.url))
-        pages.splice(i, 1)
-        removed++
+        matched.delete(normalizePath(page.url));
+        pages.splice(i, 1);
+        removed++;
       }
     }
-    return removed
-  }
-  for (const cat of categoryOrder) pruneAuthPages(cat.pages)
+    return removed;
+  };
+  for (const cat of categoryOrder) pruneAuthPages(cat.pages);
 
   // Accept thresholds — looser in discovery mode (no llms.txt) where even a
   // single flat "Overview" bucket is better than nothing, stricter when we
   // have llms.txt to compare against.
-  const categories = categoryOrder.filter((c) => c.pages.length > 0)
+  const categories = categoryOrder.filter(c => c.pages.length > 0);
   if (isDiscovery) {
     if (categories.length < 1 || matched.size < 5) {
-      diagnostics.reason = 'below-threshold'
-      diagnostics.categories = categories.length
-      diagnostics.matched = matched.size
-      diagnostics.need = '≥1 category, ≥5 matched pages'
-      return null
+      diagnostics.reason = 'below-threshold';
+      diagnostics.categories = categories.length;
+      diagnostics.matched = matched.size;
+      diagnostics.need = '≥1 category, ≥5 matched pages';
+      return null;
     }
   } else {
     if (categories.length < 2 || matched.size < 10) {
-      diagnostics.reason = 'below-threshold'
-      diagnostics.categories = categories.length
-      diagnostics.matched = matched.size
-      diagnostics.need = '≥2 categories, ≥10 matched pages'
-      return null
+      diagnostics.reason = 'below-threshold';
+      diagnostics.categories = categories.length;
+      diagnostics.matched = matched.size;
+      diagnostics.need = '≥2 categories, ≥10 matched pages';
+      return null;
     }
   }
-  return { title: null, categories }
+  return { title: null, categories };
 }
 
 /**
@@ -2166,29 +2266,29 @@ async function scrapeNavFromSite(sourceUrl, knownPages, firecrawlKey, diagnostic
  * boundaries.
  */
 function extractSidebarContainers(html) {
-  const SIDEBAR_TAGS = ['div', 'ul', 'section']
+  const SIDEBAR_TAGS = ['div', 'ul', 'section'];
   // Match attribute patterns commonly used for the sidebar. Case-insensitive
   // partial-string matches on id/class so "sidebar-group", "sidebarNav",
   // "DocsSidebar__container" etc. all hit.
   const SIDEBAR_ATTR_RE =
-    /\b(?:id|class|aria-label|data-testid)=(?:"[^"]*sidebar[^"]*"|'[^']*sidebar[^']*'|"[^"]*navigation[^"]*"|'[^']*navigation[^']*')|\brole=(?:"navigation"|'navigation')/i
+    /\b(?:id|class|aria-label|data-testid)=(?:"[^"]*sidebar[^"]*"|'[^']*sidebar[^']*'|"[^"]*navigation[^"]*"|'[^']*navigation[^']*')|\brole=(?:"navigation"|'navigation')/i;
 
   // Layout-wrapper modifiers like `Page--with-sidebar` / `has-sidebar` describe
   // an element that CONTAINS a sidebar, not one that IS a sidebar.
-  const WRAPPER_MODIFIER_RE = /(?:^|[\s"'-])(?:with|has)-sidebar(?=[\s"']|$)/i
+  const WRAPPER_MODIFIER_RE = /(?:^|[\s"'-])(?:with|has)-sidebar(?=[\s"']|$)/i;
 
-  const out = []
+  const out = [];
   for (const tag of SIDEBAR_TAGS) {
-    const openRe = new RegExp(`<${tag}\\b([^>]*)>`, 'gi')
-    let m
+    const openRe = new RegExp(`<${tag}\\b([^>]*)>`, 'gi');
+    let m;
     while ((m = openRe.exec(html)) !== null) {
-      if (!SIDEBAR_ATTR_RE.test(m[1])) continue
-      if (WRAPPER_MODIFIER_RE.test(m[1])) continue
-      const inner = extractBalancedTag(html, tag, m.index + m[0].length)
-      if (inner != null && inner.length > 100) out.push(inner)
+      if (!SIDEBAR_ATTR_RE.test(m[1])) continue;
+      if (WRAPPER_MODIFIER_RE.test(m[1])) continue;
+      const inner = extractBalancedTag(html, tag, m.index + m[0].length);
+      if (inner != null && inner.length > 100) out.push(inner);
     }
   }
-  return out
+  return out;
 }
 
 /**
@@ -2200,20 +2300,20 @@ function extractSidebarContainers(html) {
  * (we only call this for non-void containers: div/ul/section).
  */
 function extractBalancedTag(html, tag, startIdx) {
-  const re = new RegExp(`<(/?)${tag}\\b[^>]*>`, 'gi')
-  re.lastIndex = startIdx
-  let depth = 1
-  let m
+  const re = new RegExp(`<(/?)${tag}\\b[^>]*>`, 'gi');
+  re.lastIndex = startIdx;
+  let depth = 1;
+  let m;
   while ((m = re.exec(html)) !== null) {
     if (m[1] === '/') {
-      depth--
-      if (depth === 0) return html.slice(startIdx, m.index)
+      depth--;
+      if (depth === 0) return html.slice(startIdx, m.index);
     } else {
-      depth++
+      depth++;
     }
-    if (re.lastIndex - startIdx > 1_500_000) return null // safety cap
+    if (re.lastIndex - startIdx > 1_500_000) return null; // safety cap
   }
-  return null
+  return null;
 }
 
 function parseNavBlock(blockHtml, base, byPath) {
@@ -2226,98 +2326,102 @@ function parseNavBlock(blockHtml, base, byPath) {
   //  4. <ul …>            — start of nested list → subsequent <a>s are
   //     children of the most recently emitted <a> at the outer level
   //  5. </ul>             — close of nested list → pop parent stack
-  const tokenRegex = /<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>|<a\b[^>]*\bhref="([^"]+)"[^>]*>([\s\S]*?)<\/a>|<p\b[^>]*>([\s\S]*?)<\/p>|<ul\b[^>]*>|<\/ul>/gi
+  const tokenRegex =
+    /<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>|<a\b[^>]*\bhref="([^"]+)"[^>]*>([\s\S]*?)<\/a>|<p\b[^>]*>([\s\S]*?)<\/p>|<ul\b[^>]*>|<\/ul>/gi;
 
-  const categories = []
-  let current = null
-  let leading = null
+  const categories = [];
+  let current = null;
+  let leading = null;
   // Stack of parent page objects. When inside a nested <ul>, new links attach
   // to the top of the stack (= the <a> that preceded the opening <ul>).
-  const parentStack = []
+  const parentStack = [];
   // The most recent link we emitted, at the current depth. Becomes the parent
   // if a <ul> opens next.
-  let lastLinkAtDepth = null
+  let lastLinkAtDepth = null;
 
   const resetCategoryState = () => {
-    parentStack.length = 0
-    lastLinkAtDepth = null
-  }
+    parentStack.length = 0;
+    lastLinkAtDepth = null;
+  };
 
-  let m
+  let m;
   while ((m = tokenRegex.exec(blockHtml)) !== null) {
-    const token = m[0]
+    const token = m[0];
 
     if (/^<\/ul\b/i.test(token)) {
-      parentStack.pop()
-      lastLinkAtDepth = null
-      continue
+      parentStack.pop();
+      lastLinkAtDepth = null;
+      continue;
     }
     if (/^<ul\b/i.test(token)) {
       // A <ul> opening right after a link means that link becomes a parent.
-      if (lastLinkAtDepth) parentStack.push(lastLinkAtDepth)
-      lastLinkAtDepth = null
-      continue
+      if (lastLinkAtDepth) parentStack.push(lastLinkAtDepth);
+      lastLinkAtDepth = null;
+      continue;
     }
 
     if (m[1]) {
-      const title = stripTags(m[2]).trim()
-      if (!title) continue
-      current = { title, pages: [] }
-      categories.push(current)
-      resetCategoryState()
-      continue
+      const title = stripTags(m[2]).trim();
+      if (!title) continue;
+      current = { title, pages: [] };
+      categories.push(current);
+      resetCategoryState();
+      continue;
     }
     if (m[5] !== undefined) {
-      const title = stripTags(m[5]).trim()
-      if (!title || title.length > 60 || /[.!?]\s*$/.test(title)) continue
-      current = { title, pages: [] }
-      categories.push(current)
-      resetCategoryState()
-      continue
+      const title = stripTags(m[5]).trim();
+      if (!title || title.length > 60 || /[.!?]\s*$/.test(title)) continue;
+      current = { title, pages: [] };
+      categories.push(current);
+      resetCategoryState();
+      continue;
     }
 
     // Link.
-    const href = m[3]
-    if (!href || href.startsWith('#') || href.startsWith('mailto:') || href.startsWith('javascript:')) continue
-    let abs
+    const href = m[3];
+    if (!href || href.startsWith('#') || href.startsWith('mailto:') || href.startsWith('javascript:')) continue;
+    let abs;
     try {
-      abs = new URL(href, base).toString()
+      abs = new URL(href, base).toString();
     } catch {
-      continue
+      continue;
     }
 
     // byPath is populated from llms.txt. When it's empty we're in discovery
     // mode — fall back to synthesizing a page entry from the link itself,
     // filtered to same-origin non-asset URLs so we don't slurp every footer,
     // social, or static file link on the page.
-    let page = byPath.size > 0 ? byPath.get(normalizePath(abs)) : null
+    let page = byPath.size > 0 ? byPath.get(normalizePath(abs)) : null;
     if (!page && byPath.size === 0) {
-      if (!isDiscoverableLink(abs, base)) continue
-      const text = stripTags(m[4] || '').trim()
-      if (!text || text.length > 150) continue
-      page = { title: text, url: abs }
+      if (!isDiscoverableLink(abs, base)) continue;
+      const text = stripTags(m[4] || '').trim();
+      if (!text || text.length > 150) continue;
+      page = { title: text, url: abs };
     }
-    if (!page) continue
+    if (!page) continue;
 
-    const parent = parentStack.length > 0 ? parentStack[parentStack.length - 1] : current || leading || (leading = { title: 'Overview', pages: [] })
-    if (leading && parent === leading && categories[0] !== leading) categories.unshift(leading)
+    const parent =
+      parentStack.length > 0
+        ? parentStack[parentStack.length - 1]
+        : current || leading || (leading = { title: 'Overview', pages: [] });
+    if (leading && parent === leading && categories[0] !== leading) categories.unshift(leading);
 
-    const existing = parent.pages.find((p) => p.url === page.url)
+    const existing = parent.pages.find(p => p.url === page.url);
     if (existing) {
-      lastLinkAtDepth = existing
+      lastLinkAtDepth = existing;
     } else {
       const newPage = {
         title: page.title,
         url: page.url,
         ...(page.description ? { description: page.description } : {}),
         pages: [],
-      }
-      parent.pages.push(newPage)
-      lastLinkAtDepth = newPage
+      };
+      parent.pages.push(newPage);
+      lastLinkAtDepth = newPage;
     }
   }
 
-  return { title: null, categories: categories.filter((c) => c.pages.length > 0) }
+  return { title: null, categories: categories.filter(c => c.pages.length > 0) };
 }
 
 /**
@@ -2334,54 +2438,54 @@ function parseNavBlock(blockHtml, base, byPath) {
  * Returns { category, nonApiOrphans, mergedScrapedTitles }.
  */
 function collectApiReferencePages(orphans, scraped, oasSink) {
-  const API_PREFIX_RE = /^\/(api[-_]?reference|api|reference)(\/|$)/i
-  const isApiUrl = (url) => {
+  const API_PREFIX_RE = /^\/(api[-_]?reference|api|reference)(\/|$)/i;
+  const isApiUrl = url => {
     try {
-      return API_PREFIX_RE.test(new URL(url).pathname)
+      return API_PREFIX_RE.test(new URL(url).pathname);
     } catch {
-      return false
+      return false;
     }
-  }
-  const cleanTitle = (t) => (t || '').replace(/[\u200B-\u200F\uFEFF]/g, '').trim()
-  const isApiCategoryTitle = (t) => /^(api[ -]?reference|reference)$/i.test(cleanTitle(t))
+  };
+  const cleanTitle = t => (t || '').replace(/[\u200B-\u200F\uFEFF]/g, '').trim();
+  const isApiCategoryTitle = t => /^(api[ -]?reference|reference)$/i.test(cleanTitle(t));
 
-  const apiPages = []
-  const seenUrls = new Set()
-  const push = (p) => {
-    if (!p || !p.url) return
+  const apiPages = [];
+  const seenUrls = new Set();
+  const push = p => {
+    if (!p || !p.url) return;
     // Non-page assets like /api-reference/openapi.json that some llms.txt
     // files list alongside real pages become spec candidates, not doc stubs.
     if (/\.(json|ya?ml)$/i.test(p.url)) {
-      if (oasSink) oasSink.push({ url: p.url, text: p.title || null, source: 'link-sweep' })
-      return
+      if (oasSink) oasSink.push({ url: p.url, text: p.title || null, source: 'link-sweep' });
+      return;
     }
-    if (seenUrls.has(p.url)) return
-    seenUrls.add(p.url)
-    apiPages.push(p)
-  }
+    if (seenUrls.has(p.url)) return;
+    seenUrls.add(p.url);
+    apiPages.push(p);
+  };
 
   // Pull pages out of any scraped category that already looks like API
   // Reference — even (especially) if it's a partial, DOM-polluted one.
-  const mergedScrapedTitles = []
-  const keptCategories = []
+  const mergedScrapedTitles = [];
+  const keptCategories = [];
   for (const cat of scraped.categories) {
     if (isApiCategoryTitle(cat.title)) {
-      mergedScrapedTitles.push(cat.title)
-      for (const p of cat.pages || []) push(p)
+      mergedScrapedTitles.push(cat.title);
+      for (const p of cat.pages || []) push(p);
     } else {
-      keptCategories.push(cat)
+      keptCategories.push(cat);
     }
   }
-  scraped.categories = keptCategories
+  scraped.categories = keptCategories;
 
-  const nonApiOrphans = []
+  const nonApiOrphans = [];
   for (const p of orphans) {
-    if (isApiUrl(p.url)) push(p)
-    else nonApiOrphans.push(p)
+    if (isApiUrl(p.url)) push(p);
+    else nonApiOrphans.push(p);
   }
 
   if (apiPages.length === 0) {
-    return { category: null, nonApiOrphans, mergedScrapedTitles }
+    return { category: null, nonApiOrphans, mergedScrapedTitles };
   }
 
   // Nest by the resource segment after the API prefix, e.g.
@@ -2390,49 +2494,49 @@ function collectApiReferencePages(orphans, scraped, oasSink) {
   //   /api-reference/openapi.json              → top-level (no resource)
   // Preserves first-encountered order for both groups and their pages so the
   // final sidebar mirrors input order.
-  const groupOrder = []
-  const groupPages = new Map()
-  const topLevel = []
+  const groupOrder = [];
+  const groupPages = new Map();
+  const topLevel = [];
   for (const p of apiPages) {
-    let segs = []
+    let segs = [];
     try {
-      segs = new URL(p.url).pathname.split('/').filter(Boolean)
-    } catch { }
+      segs = new URL(p.url).pathname.split('/').filter(Boolean);
+    } catch {}
     // segs[0] is the api-prefix itself; segs[1] (if any) is the resource.
-    const resource = segs.length >= 3 ? segs[1] : null
+    const resource = segs.length >= 3 ? segs[1] : null;
     if (!resource) {
-      topLevel.push(p)
-      continue
+      topLevel.push(p);
+      continue;
     }
     if (!groupPages.has(resource)) {
-      groupPages.set(resource, [])
-      groupOrder.push(resource)
+      groupPages.set(resource, []);
+      groupOrder.push(resource);
     }
-    groupPages.get(resource).push(p)
+    groupPages.get(resource).push(p);
   }
 
-  const titleize = (slug) =>
+  const titleize = slug =>
     String(slug)
       .split(/[-_]/)
       .filter(Boolean)
-      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-      .join(' ')
+      .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(' ');
 
-  const pages = []
-  for (const p of topLevel) pages.push(p)
+  const pages = [];
+  for (const p of topLevel) pages.push(p);
   for (const key of groupOrder) {
     pages.push({
       title: titleize(key),
       url: null,
       pages: groupPages.get(key),
-    })
+    });
   }
 
   return {
     category: { title: 'API Reference', pages },
     nonApiOrphans,
     mergedScrapedTitles,
-  }
+  };
 }
 
 /**
@@ -2461,73 +2565,74 @@ function bucketOrphansByPathType(orphans, scraped, oasSink) {
     guides: 'Guides',
     docs: 'Other Docs',
     doc: 'Other Docs',
-  }
+  };
   // Strong top-level type segments. If ANY path segment matches, treat that
   // as the bucket type — `/api-reference/prompts/archive-prompt` belongs in
   // "API Reference", not in a sub-bucket called "Prompts".
-  const STRONG_TYPE = /^(api[-_]?reference|endpoints?|changelog|release[-_]?notes?|releases)$/i
+  const STRONG_TYPE = /^(api[-_]?reference|endpoints?|changelog|release[-_]?notes?|releases)$/i;
   // Segments that look like version/locale prefixes, not category types.
   // Walked from the end until we find a real category-type segment.
-  const VERSION_LOCALE = /^(v?\d+(\.\d+)*|main|master|latest|stable|next|current|ent|enterprise|en|en-us|en_us|fr|de|es|ja|zh|ko|pt)$/i
+  const VERSION_LOCALE =
+    /^(v?\d+(\.\d+)*|main|master|latest|stable|next|current|ent|enterprise|en|en-us|en_us|fr|de|es|ja|zh|ko|pt)$/i;
   // Normalize title for merge-matching: strip invisible chars, lowercase, trim.
-  const normTitle = (t) =>
+  const normTitle = t =>
     String(t || '')
       .replace(INVISIBLE_CHARS, '')
       .trim()
-      .toLowerCase()
+      .toLowerCase();
 
   // Map existing scraped categories by normalized title so we can merge
   // orphans into them instead of creating a parallel "(orphans)" bucket that
   // routes to the wrong top-level directory.
-  const byNormTitle = new Map()
-  for (const cat of scraped.categories) byNormTitle.set(normTitle(cat.title), cat)
+  const byNormTitle = new Map();
+  for (const cat of scraped.categories) byNormTitle.set(normTitle(cat.title), cat);
   // Buckets we've created so later orphans can pile onto the same one.
-  const newBuckets = new Map()
+  const newBuckets = new Map();
 
   for (const p of orphans) {
-    let url
+    let url;
     try {
-      url = new URL(p.url)
+      url = new URL(p.url);
     } catch {
-      continue
+      continue;
     }
-    const pathname = url.pathname
+    const pathname = url.pathname;
     // OAS spec endpoints — `/api-reference/openapi.json` etc. aren't
     // documentation pages; capture them as spec candidates instead of stubs.
     if (/\.(json|ya?ml)$/i.test(pathname)) {
-      if (oasSink) oasSink.push({ url: p.url, text: p.title || null, source: 'link-sweep' })
-      continue
+      if (oasSink) oasSink.push({ url: p.url, text: p.title || null, source: 'link-sweep' });
+      continue;
     }
 
-    const segs = pathname.split('/').filter(Boolean)
-    let type = null
+    const segs = pathname.split('/').filter(Boolean);
+    let type = null;
     // First: any strong top-level type anywhere in the path wins.
     for (const seg of segs) {
       if (STRONG_TYPE.test(seg)) {
-        type = seg.toLowerCase()
-        break
+        type = seg.toLowerCase();
+        break;
       }
     }
     // Fallback: walk the segment-before-slug backwards, skip version/locale.
     if (!type) {
       for (let i = segs.length - 2; i >= 0; i--) {
         if (!VERSION_LOCALE.test(segs[i])) {
-          type = segs[i].toLowerCase()
-          break
+          type = segs[i].toLowerCase();
+          break;
         }
       }
     }
 
-    const rawTitle = type ? TYPE_TITLES[type] || titleCase(type) : 'Other'
-    const key = normTitle(rawTitle)
+    const rawTitle = type ? TYPE_TITLES[type] || titleCase(type) : 'Other';
+    const key = normTitle(rawTitle);
 
-    let bucket = byNormTitle.get(key)
+    let bucket = byNormTitle.get(key);
     if (!bucket) {
-      bucket = newBuckets.get(key)
+      bucket = newBuckets.get(key);
       if (!bucket) {
-        bucket = { title: rawTitle, pages: [] }
-        newBuckets.set(key, bucket)
-        byNormTitle.set(key, bucket)
+        bucket = { title: rawTitle, pages: [] };
+        newBuckets.set(key, bucket);
+        byNormTitle.set(key, bucket);
       }
     }
 
@@ -2535,18 +2640,18 @@ function bucketOrphansByPathType(orphans, scraped, oasSink) {
       title: p.title,
       url: p.url,
       ...(p.description ? { description: p.description } : {}),
-    })
+    });
   }
 
   // Existing scraped categories were mutated in place. Return only genuinely
   // new buckets for the caller to append.
-  return Array.from(newBuckets.values()).sort((a, b) => b.pages.length - a.pages.length)
+  return Array.from(newBuckets.values()).sort((a, b) => b.pages.length - a.pages.length);
 }
 
 function titleCase(s) {
   return String(s)
     .replace(/[-_]+/g, ' ')
-    .replace(/\b\w/g, (c) => c.toUpperCase())
+    .replace(/\b\w/g, c => c.toUpperCase());
 }
 
 /**
@@ -2562,65 +2667,65 @@ function titleCase(s) {
  * category is appended. Returns the number of pages relocated.
  */
 function reclassifyPagesByUrlSegment(scraped, { segmentRe, categoryRe, defaultTitle }) {
-  const normTitle = (t) =>
+  const normTitle = t =>
     String(t || '')
       .replace(INVISIBLE_CHARS, '')
       .trim()
-      .toLowerCase()
+      .toLowerCase();
 
-  const urlHasSegment = (url) => {
+  const urlHasSegment = url => {
     try {
-      const segs = new URL(url).pathname.split('/').filter(Boolean)
-      return segs.some((s) => segmentRe.test(s))
+      const segs = new URL(url).pathname.split('/').filter(Boolean);
+      return segs.some(s => segmentRe.test(s));
     } catch {
-      return false
+      return false;
     }
-  }
+  };
 
   // Find (or create) the canonical destination category. Prefer an existing
   // one with a matching title so we don't end up with duplicates.
-  let destCat = scraped.categories.find((c) => categoryRe.test(normTitle(c.title).replace(/\s+/g, ' ')))
+  let destCat = scraped.categories.find(c => categoryRe.test(normTitle(c.title).replace(/\s+/g, ' ')));
 
-  const collected = []
-  const filterPages = (pages) => {
-    const kept = []
+  const collected = [];
+  const filterPages = pages => {
+    const kept = [];
     for (const p of pages || []) {
       if (urlHasSegment(p.url)) {
         // Flatten sub-pages when relocating — these sections are flat lists.
-        collectFlat(p, collected)
-        continue
+        collectFlat(p, collected);
+        continue;
       }
-      if (p.pages && p.pages.length > 0) p.pages = filterPages(p.pages)
-      kept.push(p)
+      if (p.pages && p.pages.length > 0) p.pages = filterPages(p.pages);
+      kept.push(p);
     }
-    return kept
-  }
+    return kept;
+  };
 
   // Never pull pages out of the destination category itself.
   for (const cat of scraped.categories) {
-    if (cat === destCat) continue
-    cat.pages = filterPages(cat.pages)
+    if (cat === destCat) continue;
+    cat.pages = filterPages(cat.pages);
   }
 
-  if (collected.length === 0) return 0
+  if (collected.length === 0) return 0;
 
   if (!destCat) {
-    destCat = { title: defaultTitle, pages: [] }
-    scraped.categories.push(destCat)
+    destCat = { title: defaultTitle, pages: [] };
+    scraped.categories.push(destCat);
   }
   // Dedupe against anything already in the destination category.
-  const seen = new Set(destCat.pages.map((p) => normalizePath(p.url)))
+  const seen = new Set(destCat.pages.map(p => normalizePath(p.url)));
   for (const p of collected) {
-    const key = normalizePath(p.url)
-    if (seen.has(key)) continue
-    seen.add(key)
-    destCat.pages.push(p)
+    const key = normalizePath(p.url);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    destCat.pages.push(p);
   }
 
   // Drop now-empty categories (other than the one we may have just created).
-  scraped.categories = scraped.categories.filter((c) => c === destCat || (c.pages && c.pages.length > 0))
+  scraped.categories = scraped.categories.filter(c => c === destCat || (c.pages && c.pages.length > 0));
 
-  return collected.length
+  return collected.length;
 }
 
 /**
@@ -2630,14 +2735,14 @@ function reclassifyPagesByUrlSegment(scraped, { segmentRe, categoryRe, defaultTi
  * live under a separate API Reference section — this lands them all in
  * `reference/` after staging. Returns the number of pages relocated.
  */
-const API_REFERENCE_URL_SEGMENT_RE = /^(api[-_]?reference|endpoints?)$/i
+const API_REFERENCE_URL_SEGMENT_RE = /^(api[-_]?reference|endpoints?)$/i;
 
 function urlIsApiReference(url) {
   try {
-    const segs = new URL(url).pathname.split('/').filter(Boolean)
-    return segs.some((s) => API_REFERENCE_URL_SEGMENT_RE.test(s))
+    const segs = new URL(url).pathname.split('/').filter(Boolean);
+    return segs.some(s => API_REFERENCE_URL_SEGMENT_RE.test(s));
   } catch {
-    return false
+    return false;
   }
 }
 
@@ -2646,7 +2751,7 @@ function reclassifyReferencePages(scraped) {
     segmentRe: API_REFERENCE_URL_SEGMENT_RE,
     categoryRe: /^(api[ -]?reference|reference|api|endpoints?)$/i,
     defaultTitle: 'API Reference',
-  })
+  });
 }
 
 // Anchored half covers ambiguous bare keywords (release, releases, versioned
@@ -2655,15 +2760,16 @@ function reclassifyReferencePages(scraped) {
 // (changelog, release-notes, whats-new), which we catch as substrings so
 // slugs like `/docs/changelog-javascript-agent` and `/docs/ios-sdk-changelog`
 // get pulled in too.
-const CHANGELOG_URL_SEGMENT_RE = /(?:^(?:releases?|release[-_]?v?\d[\w.-]*)$)|(?:changelog|change[-_]?log|release[-_]?notes?|whats?[-_]?new)/i
-const CHANGELOG_CATEGORY_TITLE_RE = /^(changelog|change ?log|release ?notes?|releases?|what'?s ?new)$/i
+const CHANGELOG_URL_SEGMENT_RE =
+  /(?:^(?:releases?|release[-_]?v?\d[\w.-]*)$)|(?:changelog|change[-_]?log|release[-_]?notes?|whats?[-_]?new)/i;
+const CHANGELOG_CATEGORY_TITLE_RE = /^(changelog|change ?log|release ?notes?|releases?|what'?s ?new)$/i;
 
 function urlIsChangelog(url) {
   try {
-    const segs = new URL(url).pathname.split('/').filter(Boolean)
-    return segs.some((s) => CHANGELOG_URL_SEGMENT_RE.test(s))
+    const segs = new URL(url).pathname.split('/').filter(Boolean);
+    return segs.some(s => CHANGELOG_URL_SEGMENT_RE.test(s));
   } catch {
-    return false
+    return false;
   }
 }
 
@@ -2677,23 +2783,23 @@ function urlIsChangelog(url) {
  * Returns the extracted items in `{ title, url, description? }` shape.
  */
 function extractChangelogFromSections(sections) {
-  const extracted = []
+  const extracted = [];
   for (const section of sections || []) {
-    const kept = []
+    const kept = [];
     for (const item of section.items || []) {
       if (urlIsChangelog(item.url)) {
         extracted.push({
           title: item.text,
           url: item.url,
           ...(item.description ? { description: item.description } : {}),
-        })
+        });
       } else {
-        kept.push(item)
+        kept.push(item);
       }
     }
-    section.items = kept
+    section.items = kept;
   }
-  return extracted
+  return extracted;
 }
 
 /**
@@ -2701,13 +2807,13 @@ function extractChangelogFromSections(sections) {
  * sitemap-only fallback, where there's no llms.txt section structure to mutate.
  */
 function partitionChangelogFromKnownUrls(knownUrls) {
-  const extracted = []
-  const kept = []
+  const extracted = [];
+  const kept = [];
   for (const p of knownUrls || []) {
-    if (urlIsChangelog(p.url)) extracted.push(p)
-    else kept.push(p)
+    if (urlIsChangelog(p.url)) extracted.push(p);
+    else kept.push(p);
   }
-  return { extracted, kept }
+  return { extracted, kept };
 }
 
 /**
@@ -2717,19 +2823,19 @@ function partitionChangelogFromKnownUrls(knownUrls) {
  * one); otherwise creates a fresh one. Dedupe is by normalized URL path.
  */
 function injectChangelogCategory(organized, items) {
-  if (!items || items.length === 0) return
-  organized.categories = organized.categories || []
-  let dest = organized.categories.find((c) => CHANGELOG_CATEGORY_TITLE_RE.test(String(c.title || '').trim()))
+  if (!items || items.length === 0) return;
+  organized.categories = organized.categories || [];
+  let dest = organized.categories.find(c => CHANGELOG_CATEGORY_TITLE_RE.test(String(c.title || '').trim()));
   if (!dest) {
-    dest = { title: 'Changelog', icon: null, pages: [] }
-    organized.categories.push(dest)
+    dest = { title: 'Changelog', icon: null, pages: [] };
+    organized.categories.push(dest);
   }
-  const seen = new Set((dest.pages || []).map((p) => normalizePath(p.url)))
+  const seen = new Set((dest.pages || []).map(p => normalizePath(p.url)));
   for (const item of items) {
-    const key = normalizePath(item.url)
-    if (seen.has(key)) continue
-    seen.add(key)
-    dest.pages.push(item)
+    const key = normalizePath(item.url);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    dest.pages.push(item);
   }
 }
 
@@ -2744,7 +2850,7 @@ function reclassifyChangelogPages(scraped) {
     segmentRe: CHANGELOG_URL_SEGMENT_RE,
     categoryRe: CHANGELOG_CATEGORY_TITLE_RE,
     defaultTitle: 'Changelog',
-  })
+  });
 }
 
 function collectFlat(page, out) {
@@ -2752,27 +2858,27 @@ function collectFlat(page, out) {
     title: page.title,
     url: page.url,
     ...(page.description ? { description: page.description } : {}),
-  })
+  });
   if (page.pages && page.pages.length > 0) {
-    for (const child of page.pages) collectFlat(child, out)
+    for (const child of page.pages) collectFlat(child, out);
   }
 }
 
 function countUrlPagesDeep(pages) {
-  let n = 0
+  let n = 0;
   for (const p of pages || []) {
-    if (p.url) n++
-    if (p.pages && p.pages.length > 0) n += countUrlPagesDeep(p.pages)
+    if (p.url) n++;
+    if (p.pages && p.pages.length > 0) n += countUrlPagesDeep(p.pages);
   }
-  return n
+  return n;
 }
 
 function collectUrlPagesDeep(pages, out = []) {
   for (const p of pages || []) {
-    if (p.url) out.push(p)
-    if (p.pages && p.pages.length > 0) collectUrlPagesDeep(p.pages, out)
+    if (p.url) out.push(p);
+    if (p.pages && p.pages.length > 0) collectUrlPagesDeep(p.pages, out);
   }
-  return out
+  return out;
 }
 
 // urlTrieSegs is imported from ../utils/url-segs.js
@@ -2810,56 +2916,56 @@ function collectUrlPagesDeep(pages, out = []) {
  *   // ]
  */
 function nestByUrlHierarchy(pages, anchorSegs = null) {
-  if (!pages || pages.length === 0) return pages
+  if (!pages || pages.length === 0) return pages;
 
   // Recurse first so subtrees that came in pre-nested (e.g. from the scraper)
   // get re-nested against their parent's URL as anchor.
   for (const p of pages) {
     if (p.pages && p.pages.length > 0) {
-      let nextAnchor = anchorSegs
-      if (p._virtualPathSegs) nextAnchor = p._virtualPathSegs
+      let nextAnchor = anchorSegs;
+      if (p._virtualPathSegs) nextAnchor = p._virtualPathSegs;
       else if (p.url) {
-        const s = urlTrieSegs(p.url)
-        if (s) nextAnchor = s
+        const s = urlTrieSegs(p.url);
+        if (s) nextAnchor = s;
       }
-      p.pages = nestByUrlHierarchy(p.pages, nextAnchor)
+      p.pages = nestByUrlHierarchy(p.pages, nextAnchor);
     }
   }
 
-  const urlEntries = []
-  const groupOnly = []
+  const urlEntries = [];
+  const groupOnly = [];
   for (const p of pages) {
     if (!p.url) {
-      groupOnly.push(p)
-      continue
+      groupOnly.push(p);
+      continue;
     }
-    const segs = urlTrieSegs(p.url)
+    const segs = urlTrieSegs(p.url);
     // Zero-segment URLs (origin-only links like `https://build.example.com/`)
     // have no path to nest by — if we inserted them into the trie they'd land
     // at the root node and the container walk would render them as the
     // top-level entry with every other page nested beneath them. Treat them
     // like group-only pages so they just sit alongside the real tree.
-    if (segs && segs.length > 0) urlEntries.push({ page: p, segs })
-    else groupOnly.push(p)
+    if (segs && segs.length > 0) urlEntries.push({ page: p, segs });
+    else groupOnly.push(p);
   }
 
-  if (urlEntries.length === 0) return pages
-  if (urlEntries.length === 1 && groupOnly.length === 0) return pages
+  if (urlEntries.length === 0) return pages;
+  if (urlEntries.length === 1 && groupOnly.length === 0) return pages;
 
   // Build the URL trie. Each node tracks its own segment, the page at that
   // exact path (if any), insertion-ordered children, and the segment path
   // from root (used as the slug source for empty parents).
-  const root = { segment: '', page: null, children: new Map(), segs: [] }
+  const root = { segment: '', page: null, children: new Map(), segs: [] };
   for (const { page, segs } of urlEntries) {
-    let node = root
+    let node = root;
     for (let i = 0; i < segs.length; i++) {
-      const segLower = segs[i].toLowerCase()
+      const segLower = segs[i].toLowerCase();
       if (!node.children.has(segLower)) {
-        node.children.set(segLower, { segment: segs[i], page: null, children: new Map(), segs: segs.slice(0, i + 1) })
+        node.children.set(segLower, { segment: segs[i], page: null, children: new Map(), segs: segs.slice(0, i + 1) });
       }
-      node = node.children.get(segLower)
+      node = node.children.get(segLower);
     }
-    if (!node.page) node.page = page
+    if (!node.page) node.page = page;
   }
 
   // Find the trie node that represents the "container" for this level.
@@ -2867,59 +2973,59 @@ function nestByUrlHierarchy(pages, anchorSegs = null) {
   //     past it, so intermediate segments below the anchor become empties.
   //   - Without: walk down while there's only one no-page child (the shared
   //     prefix). Stop at the first node that either has a page or branches.
-  let container = root
+  let container = root;
   if (anchorSegs && anchorSegs.length > 0) {
     for (let i = 0; i < anchorSegs.length; i++) {
-      const seg = anchorSegs[i].toLowerCase()
-      if (container.children.has(seg)) container = container.children.get(seg)
-      else break
+      const seg = anchorSegs[i].toLowerCase();
+      if (container.children.has(seg)) container = container.children.get(seg);
+      else break;
     }
   } else {
     while (container.children.size === 1 && !container.page) {
-      container = container.children.values().next().value
+      container = container.children.values().next().value;
     }
   }
 
   function nodeToPage(node) {
-    let outPage
+    let outPage;
     if (node.page) {
-      outPage = node.page
+      outPage = node.page;
     } else {
-      const rawSeg = node.segment
-      const cleanedSeg = stripSegmentExtensions(rawSeg).replace(/^\d+[-_.]/, '') || rawSeg
+      const rawSeg = node.segment;
+      const cleanedSeg = stripSegmentExtensions(rawSeg).replace(/^\d+[-_.]/, '') || rawSeg;
       outPage = {
         title: titleCase(cleanedSeg),
         _emptyParent: true,
         _virtualPathSegs: node.segs,
         pages: [],
-      }
+      };
     }
     if (node.children.size > 0) {
-      const childPages = []
-      for (const c of node.children.values()) childPages.push(nodeToPage(c))
+      const childPages = [];
+      for (const c of node.children.values()) childPages.push(nodeToPage(c));
       // Preserve any pre-existing nested children whose URLs aren't already
       // represented in the trie (group-only containers from the scraper, etc.).
-      const existing = outPage.pages || []
-      const trieUrls = new Set()
-      const collect = (p) => {
-        if (p.url) trieUrls.add(normalizePath(p.url))
-        for (const c of p.pages || []) collect(c)
-      }
-      for (const cp of childPages) collect(cp)
-      const preservedExisting = existing.filter((e) => !e.url || !trieUrls.has(normalizePath(e.url)))
-      outPage.pages = [...childPages, ...preservedExisting]
+      const existing = outPage.pages || [];
+      const trieUrls = new Set();
+      const collect = p => {
+        if (p.url) trieUrls.add(normalizePath(p.url));
+        for (const c of p.pages || []) collect(c);
+      };
+      for (const cp of childPages) collect(cp);
+      const preservedExisting = existing.filter(e => !e.url || !trieUrls.has(normalizePath(e.url)));
+      outPage.pages = [...childPages, ...preservedExisting];
     }
-    return outPage
+    return outPage;
   }
 
-  const trieResult = []
+  const trieResult = [];
   if (container.page) {
-    trieResult.push(nodeToPage(container))
+    trieResult.push(nodeToPage(container));
   } else {
-    for (const c of container.children.values()) trieResult.push(nodeToPage(c))
+    for (const c of container.children.values()) trieResult.push(nodeToPage(c));
   }
 
-  return [...trieResult, ...groupOnly]
+  return [...trieResult, ...groupOnly];
 }
 
 /**
@@ -2930,28 +3036,28 @@ function nestByUrlHierarchy(pages, anchorSegs = null) {
  * orphans that still have no ancestor match.
  */
 function slotOrphansByPath(scraped, knownPages) {
-  const matched = new Set()
-  const pathToCategory = new Map() // normalizedPath → category
+  const matched = new Set();
+  const pathToCategory = new Map(); // normalizedPath → category
   for (const cat of scraped.categories) {
     for (const p of collectUrlPagesDeep(cat.pages)) {
-      const norm = normalizePath(p.url)
-      matched.add(norm)
-      if (!pathToCategory.has(norm)) pathToCategory.set(norm, cat)
+      const norm = normalizePath(p.url);
+      matched.add(norm);
+      if (!pathToCategory.has(norm)) pathToCategory.set(norm, cat);
     }
   }
 
-  const orphans = []
+  const orphans = [];
   for (const p of knownPages) {
-    const norm = normalizePath(p.url)
-    if (matched.has(norm)) continue
+    const norm = normalizePath(p.url);
+    if (matched.has(norm)) continue;
 
-    let bestCat = null
-    let bestLen = -1
+    let bestCat = null;
+    let bestLen = -1;
     for (const [navPath, cat] of pathToCategory) {
-      if (navPath && (norm === navPath || norm.startsWith(navPath + '/'))) {
+      if (navPath && (norm === navPath || norm.startsWith(`${navPath}/`))) {
         if (navPath.length > bestLen) {
-          bestCat = cat
-          bestLen = navPath.length
+          bestCat = cat;
+          bestLen = navPath.length;
         }
       }
     }
@@ -2961,13 +3067,13 @@ function slotOrphansByPath(scraped, knownPages) {
         title: p.title,
         url: p.url,
         ...(p.description ? { description: p.description } : {}),
-      })
-      matched.add(norm)
+      });
+      matched.add(norm);
     } else {
-      orphans.push(p)
+      orphans.push(p);
     }
   }
-  return orphans
+  return orphans;
 }
 
 /**
@@ -2982,27 +3088,27 @@ function slotOrphansByPath(scraped, knownPages) {
  * under landing-page headings.
  */
 function filterDedupePages(pages, seen) {
-  const out = []
+  const out = [];
   for (const p of pages) {
-    const norm = normalizePath(p.url)
-    if (seen.has(norm)) continue
-    seen.add(norm)
-    const childPages = p.pages ? filterDedupePages(p.pages, seen) : []
-    out.push({ ...p, pages: childPages })
+    const norm = normalizePath(p.url);
+    if (seen.has(norm)) continue;
+    seen.add(norm);
+    const childPages = p.pages ? filterDedupePages(p.pages, seen) : [];
+    out.push({ ...p, pages: childPages });
   }
-  return out
+  return out;
 }
 
 function flattenTree(categories) {
-  const out = []
+  const out = [];
   function walk(pages) {
     for (const p of pages || []) {
-      out.push(toBrowsableUrl(p.url))
-      if (p.pages && p.pages.length > 0) walk(p.pages)
+      out.push(toBrowsableUrl(p.url));
+      if (p.pages && p.pages.length > 0) walk(p.pages);
     }
   }
-  for (const c of categories || []) walk(c.pages)
-  return out
+  for (const c of categories || []) walk(c.pages);
+  return out;
 }
 
 /**
@@ -3012,11 +3118,11 @@ function flattenTree(categories) {
  */
 function toBrowsableUrl(url) {
   try {
-    const u = new URL(url)
-    u.pathname = u.pathname.replace(/\.(md|mdx)$/i, '')
-    return u.toString()
+    const u = new URL(url);
+    u.pathname = u.pathname.replace(/\.(md|mdx)$/i, '');
+    return u.toString();
   } catch {
-    return url
+    return url;
   }
 }
 
@@ -3028,11 +3134,11 @@ async function fetchHtmlDirect(url) {
     const res = await fetch(url, {
       redirect: 'follow',
       headers: { 'User-Agent': 'readme-cli-import' },
-    })
-    if (!res.ok) return ''
-    return await res.text()
+    });
+    if (!res.ok) return '';
+    return await res.text();
   } catch {
-    return ''
+    return '';
   }
 }
 
@@ -3048,11 +3154,11 @@ async function fetchSpecBytes(url) {
         'User-Agent': 'readme-cli-import',
         Accept: 'application/json, application/x-yaml, application/yaml, text/yaml, text/plain',
       },
-    })
-    if (!res.ok) return null
-    return Buffer.from(await res.arrayBuffer())
+    });
+    if (!res.ok) return null;
+    return Buffer.from(await res.arrayBuffer());
   } catch {
-    return null
+    return null;
   }
 }
 
@@ -3060,10 +3166,10 @@ async function fetchSpecBytes(url) {
 // the body. Defaults to .json — the runner tolerates a mislabeled extension.
 function sniffSpecExtension(text) {
   try {
-    JSON.parse(text)
-    return '.json'
+    JSON.parse(text);
+    return '.json';
   } catch {
-    return OAS_TOP_LEVEL_KEY_RE.test(String(text).slice(0, 64 * 1024)) ? '.yaml' : '.json'
+    return OAS_TOP_LEVEL_KEY_RE.test(String(text).slice(0, 64 * 1024)) ? '.yaml' : '.json';
   }
 }
 
@@ -3078,40 +3184,40 @@ function sniffSpecExtension(text) {
  * names are handled there. Returns the count of files written.
  */
 async function downloadOasSpecs(oasJsonUrls, stagingDir) {
-  const oasDir = path.join(stagingDir, 'oas')
-  fs.mkdirSync(oasDir, { recursive: true })
-  const usedNames = new Set()
-  let written = 0
+  const oasDir = path.join(stagingDir, 'oas');
+  fs.mkdirSync(oasDir, { recursive: true });
+  const usedNames = new Set();
+  let written = 0;
   for (const item of oasJsonUrls) {
-    const buf = item.body || (await fetchSpecBytes(item.url))
+    const buf = item.body || (await fetchSpecBytes(item.url));
     if (!buf) {
-      styles.info(styles.dim(`  oas: skipped ${item.url} (download failed)`))
-      continue
+      styles.info(styles.dim(`  oas: skipped ${item.url} (download failed)`));
+      continue;
     }
-    const text = buf.toString('utf8')
+    const text = buf.toString('utf8');
     if (/^\s*</.test(text)) {
-      styles.info(styles.dim(`  oas: skipped ${item.url} (looks like HTML)`))
-      continue
+      styles.info(styles.dim(`  oas: skipped ${item.url} (looks like HTML)`));
+      continue;
     }
-    let base
+    let base;
     try {
-      base = path.basename(new URL(item.url).pathname) || 'openapi'
+      base = path.basename(new URL(item.url).pathname) || 'openapi';
     } catch {
-      base = 'openapi'
+      base = 'openapi';
     }
-    base = base.replace(/[^a-zA-Z0-9._-]/g, '-')
-    if (!/\.(json|ya?ml)$/i.test(base)) base += sniffSpecExtension(text)
-    let name = base
-    let n = 2
+    base = base.replace(/[^a-zA-Z0-9._-]/g, '-');
+    if (!/\.(json|ya?ml)$/i.test(base)) base += sniffSpecExtension(text);
+    let name = base;
+    let n = 2;
     while (usedNames.has(name)) {
-      name = base.replace(/\.(json|ya?ml)$/i, `-${n}$&`)
-      n++
+      name = base.replace(/\.(json|ya?ml)$/i, `-${n}$&`);
+      n++;
     }
-    usedNames.add(name)
-    fs.writeFileSync(path.join(oasDir, name), buf)
-    written++
+    usedNames.add(name);
+    fs.writeFileSync(path.join(oasDir, name), buf);
+    written++;
   }
-  return written
+  return written;
 }
 
 /**
@@ -3139,22 +3245,22 @@ function makeFirecrawlFetcher(apiKey) {
           // Block common ad/tracking domains so we don't burn time on them.
           blockAds: true,
         }),
-      })
+      });
       if (!res.ok) {
-        styles.warning(`Firecrawl HTTP ${res.status} for ${url}`)
-        return ''
+        styles.warning(`Firecrawl HTTP ${res.status} for ${url}`);
+        return '';
       }
-      const body = await res.json()
+      const body = await res.json();
       if (!body.success) {
-        styles.warning(`Firecrawl error for ${url}: ${body.error || 'unknown'}`)
-        return ''
+        styles.warning(`Firecrawl error for ${url}: ${body.error || 'unknown'}`);
+        return '';
       }
-      return body.data?.rawHtml || body.data?.html || ''
+      return body.data?.rawHtml || body.data?.html || '';
     } catch (e) {
-      styles.warning(`Firecrawl fetch failed for ${url}: ${e.message}`)
-      return ''
+      styles.warning(`Firecrawl fetch failed for ${url}: ${e.message}`);
+      return '';
     }
-  }
+  };
 }
 
 /**
@@ -3162,14 +3268,14 @@ function makeFirecrawlFetcher(apiKey) {
  * Order of completion doesn't matter — visit() merges into shared state.
  */
 async function visitAllInParallel(urls, visit, concurrency) {
-  let i = 0
+  let i = 0;
   async function worker() {
     while (i < urls.length) {
-      const idx = i++
-      await visit(urls[idx])
+      const idx = i++;
+      await visit(urls[idx]);
     }
   }
-  await Promise.all(Array.from({ length: Math.min(concurrency, urls.length) }, worker))
+  await Promise.all(Array.from({ length: Math.min(concurrency, urls.length) }, worker));
 }
 
 /**
@@ -3179,20 +3285,21 @@ async function visitAllInParallel(urls, visit, concurrency) {
  * follow-up fetches don't help coverage.
  */
 function urlNamespace(url) {
-  const NS_SKIP = /^(v?\d+(\.\d+)*|main|master|latest|stable|next|current|ent|enterprise|en|en-us|en_us|fr|de|es|ja|zh|ko|pt)$/i
+  const NS_SKIP =
+    /^(v?\d+(\.\d+)*|main|master|latest|stable|next|current|ent|enterprise|en|en-us|en_us|fr|de|es|ja|zh|ko|pt)$/i;
   try {
-    const u = new URL(url)
-    const segs = u.pathname.split('/').filter(Boolean)
-    let ns = ''
+    const u = new URL(url);
+    const segs = u.pathname.split('/').filter(Boolean);
+    let ns = '';
     for (const s of segs) {
       if (!NS_SKIP.test(s)) {
-        ns = s.toLowerCase()
-        break
+        ns = s.toLowerCase();
+        break;
       }
     }
-    return `${u.origin}/${ns}`
+    return `${u.origin}/${ns}`;
   } catch {
-    return ''
+    return '';
   }
 }
 
@@ -3212,7 +3319,7 @@ function urlNamespace(url) {
  *     page lives in its own category and we'd just be renaming "Overview".
  */
 function clusterByUrlPath(pages) {
-  if (!pages || pages.length < 3) return null
+  if (!pages || pages.length < 3) return null;
 
   // Pages with no path segments (e.g. an origin-only URL like
   // `https://build.example.com/`) can't participate in segment-based
@@ -3220,62 +3327,62 @@ function clusterByUrlPath(pages) {
   // as a place to land — but if more than 20% of the input is rootless,
   // the source isn't really a hierarchical doc set and clustering won't
   // produce a meaningful tree. Bail in that case so the caller falls back.
-  const noSegPages = []
-  const clusterable = []
-  const parts = []
+  const noSegPages = [];
+  const clusterable = [];
+  const parts = [];
   for (const p of pages) {
-    let segs = []
+    let segs = [];
     try {
-      segs = new URL(p.url).pathname.split('/').filter(Boolean)
-    } catch { }
+      segs = new URL(p.url).pathname.split('/').filter(Boolean);
+    } catch {}
     if (segs.length === 0) {
-      noSegPages.push(p)
+      noSegPages.push(p);
     } else {
-      clusterable.push(p)
-      parts.push(segs)
+      clusterable.push(p);
+      parts.push(segs);
     }
   }
-  if (noSegPages.length / pages.length > 0.2) return null
-  if (clusterable.length < 3) return null
+  if (noSegPages.length / pages.length > 0.2) return null;
+  if (clusterable.length < 3) return null;
 
   // Longest common prefix depth.
-  let commonDepth = 0
+  let commonDepth = 0;
   while (commonDepth < parts[0].length) {
-    const seg = parts[0][commonDepth]
-    if (!parts.every((pp) => pp[commonDepth] === seg)) break
-    commonDepth++
+    const seg = parts[0][commonDepth];
+    if (!parts.every(pp => pp[commonDepth] === seg)) break;
+    commonDepth++;
   }
 
   // The segment right after the common base is the category key.
-  const keyIdx = commonDepth
-  const byKey = new Map()
+  const keyIdx = commonDepth;
+  const byKey = new Map();
   for (let i = 0; i < clusterable.length; i++) {
-    const key = parts[i][keyIdx]
+    const key = parts[i][keyIdx];
     // Skip pages that have no segment at the cluster index (they're AT the
     // common base — those would become their own "index"-like category).
-    if (!key) continue
-    if (!byKey.has(key)) byKey.set(key, [])
-    byKey.get(key).push(clusterable[i])
+    if (!key) continue;
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key).push(clusterable[i]);
   }
 
   // Reject weak clusterings: need at least 2 groups AND at least one group
   // with multiple pages (otherwise every "category" is a single page, which
   // is just Overview renamed).
-  if (byKey.size < 2) return null
-  if (![...byKey.values()].some((arr) => arr.length >= 2)) return null
+  if (byKey.size < 2) return null;
+  if (![...byKey.values()].some(arr => arr.length >= 2)) return null;
 
   // Preserve first-appearance order so the sidebar reflects source order.
-  const firstSeen = new Map()
+  const firstSeen = new Map();
   clusterable.forEach((p, i) => {
-    const key = parts[i][keyIdx]
-    if (key && !firstSeen.has(key)) firstSeen.set(key, i)
-  })
-  const orderedKeys = [...byKey.keys()].sort((a, b) => firstSeen.get(a) - firstSeen.get(b))
+    const key = parts[i][keyIdx];
+    if (key && !firstSeen.has(key)) firstSeen.set(key, i);
+  });
+  const orderedKeys = [...byKey.keys()].sort((a, b) => firstSeen.get(a) - firstSeen.get(b));
 
-  const rawClusters = orderedKeys.map((key) => ({
+  const rawClusters = orderedKeys.map(key => ({
     title: titleCase(key),
     pages: byKey.get(key),
-  }))
+  }));
 
   // Classify each cluster as either a real category or an "Other
   // Documentation" misfit. A real category needs at least 2 pages — a
@@ -3284,31 +3391,31 @@ function clusterByUrlPath(pages) {
   // the motivating example: as the only `/docs/logfire/*` URL it
   // shouldn't get its own top-level "Logfire" folder. Lone pages land in
   // Other Documentation where they sit alongside other low-volume material.
-  const realCategories = []
-  const misfitPages = []
+  const realCategories = [];
+  const misfitPages = [];
   for (const cluster of rawClusters) {
     if (cluster.pages.length >= 2) {
-      realCategories.push(cluster)
-      continue
+      realCategories.push(cluster);
+      continue;
     }
-    misfitPages.push(cluster.pages[0])
+    misfitPages.push(cluster.pages[0]);
   }
 
   // If clustering produced no real categories, it added no value — tell the
   // caller to fall back rather than hand back a lone misfit bucket.
-  if (realCategories.length === 0) return null
+  if (realCategories.length === 0) return null;
 
-  const out = [...realCategories]
+  const out = [...realCategories];
 
   // "Other Documentation" goes last so it never displaces a real category.
   // It absorbs both standalone-page singletons and zero-segment URLs (those
   // can't participate in segment-based clustering at all but the >20% guard
   // above already proved they're a minority).
-  const otherDocs = [...misfitPages, ...noSegPages]
+  const otherDocs = [...misfitPages, ...noSegPages];
   if (otherDocs.length > 0) {
-    out.push({ title: 'Other Documentation', pages: otherDocs })
+    out.push({ title: 'Other Documentation', pages: otherDocs });
   }
-  return out
+  return out;
 }
 
 /**
@@ -3325,50 +3432,50 @@ function clusterByUrlPath(pages) {
  * parent holding the children. Mutates `organized` in place.
  */
 async function injectSectionLandingPages(organized, sourceUrl) {
-  const cats = organized?.categories || []
-  if (cats.length === 0) return
+  const cats = organized?.categories || [];
+  if (cats.length === 0) return;
 
   // Dedup set: every page URL already in the tree, by normalized path.
-  const known = new Set()
+  const known = new Set();
   for (const c of cats) {
-    for (const p of collectUrlPagesDeep(c.pages || [])) known.add(normalizePath(p.url))
+    for (const p of collectUrlPagesDeep(c.pages || [])) known.add(normalizePath(p.url));
   }
 
   // Base path of the import itself — landing candidates must be strictly
   // deeper than this so we never probe `/docs` (the base) as a "section".
-  const baseDepth = (urlTrieSegs(sourceUrl) || []).length
-  const origin = new URL(sourceUrl).origin
+  const baseDepth = (urlTrieSegs(sourceUrl) || []).length;
+  const origin = new URL(sourceUrl).origin;
 
   // Build one landing candidate per eligible category (cheap gate first).
-  const candidates = []
+  const candidates = [];
   for (const cat of cats) {
-    const kids = collectUrlPagesDeep(cat.pages || [])
-    if (kids.length < 2) continue
+    const kids = collectUrlPagesDeep(cat.pages || []);
+    if (kids.length < 2) continue;
 
     // Longest common path prefix across the children — same loop as
     // clusterByUrlPath's common-depth scan, over urlTrieSegs.
-    const parts = kids.map((p) => urlTrieSegs(p.url)).filter(Boolean)
-    if (parts.length < 2) continue
-    let commonDepth = 0
+    const parts = kids.map(p => urlTrieSegs(p.url)).filter(Boolean);
+    if (parts.length < 2) continue;
+    let commonDepth = 0;
     while (commonDepth < parts[0].length) {
-      const seg = parts[0][commonDepth]
-      if (!parts.every((pp) => pp[commonDepth] === seg)) break
-      commonDepth++
+      const seg = parts[0][commonDepth];
+      if (!parts.every(pp => pp[commonDepth] === seg)) break;
+      commonDepth++;
     }
-    const commonSegs = parts[0].slice(0, commonDepth)
+    const commonSegs = parts[0].slice(0, commonDepth);
 
     // Must be strictly deeper than the import base, and not already a page.
-    if (commonSegs.length <= baseDepth) continue
-    const landingUrl = `${origin}/${commonSegs.join('/')}`
-    if (known.has(normalizePath(landingUrl))) continue
+    if (commonSegs.length <= baseDepth) continue;
+    const landingUrl = `${origin}/${commonSegs.join('/')}`;
+    if (known.has(normalizePath(landingUrl))) continue;
 
-    candidates.push({ cat, landingUrl })
+    candidates.push({ cat, landingUrl });
   }
-  if (candidates.length === 0) return
+  if (candidates.length === 0) return;
 
   // Probe surviving candidates in parallel. Accept only a real, in-scope page
   // that doesn't redirect onto an already-known child.
-  const accepted = []
+  const accepted = [];
   await visitAllInParallel(
     candidates,
     async ({ cat, landingUrl }) => {
@@ -3376,54 +3483,54 @@ async function injectSectionLandingPages(organized, sourceUrl) {
         const res = await fetch(landingUrl, {
           redirect: 'follow',
           headers: { 'User-Agent': 'readme-cli-import' },
-        })
-        if (!res.ok) return
-        const candPath = new URL(landingUrl).pathname.toLowerCase()
-        const finalPath = new URL(res.url).pathname.toLowerCase()
-        if (!finalPath.startsWith(candPath)) return
-        if (known.has(normalizePath(res.url))) return
+        });
+        if (!res.ok) return;
+        const candPath = new URL(landingUrl).pathname.toLowerCase();
+        const finalPath = new URL(res.url).pathname.toLowerCase();
+        if (!finalPath.startsWith(candPath)) return;
+        if (known.has(normalizePath(res.url))) return;
 
-        // Check `<meta http-equiv="refresh">` navigates the browser elsewhere. 
-        const html = await res.text()
-        const metaRefresh = parseMetaRefreshTarget(html, res.url)
-        if (metaRefresh && normalizePath(metaRefresh) !== normalizePath(res.url)) return
-        const canonical = parseHtmlCanonical(html, res.url)
-        if (canonical && known.has(normalizePath(canonical))) return
+        // Check `<meta http-equiv="refresh">` navigates the browser elsewhere.
+        const html = await res.text();
+        const metaRefresh = parseMetaRefreshTarget(html, res.url);
+        if (metaRefresh && normalizePath(metaRefresh) !== normalizePath(res.url)) return;
+        const canonical = parseHtmlCanonical(html, res.url);
+        if (canonical && known.has(normalizePath(canonical))) return;
 
-        accepted.push({ cat, landingUrl })
+        accepted.push({ cat, landingUrl });
       } catch {
         // Network error / unparseable — treat as "no landing page".
       }
     },
     LANDING_PROBE_CAP,
-  )
+  );
 
   for (const { cat, landingUrl } of accepted) {
     // Don't set x-from-llms: the page isn't in llmsPaths, so the runner fetches
     // its rendered HTML via the content cascade (there's no .md mirror).
-    cat.pages.unshift({ title: cat.title, url: landingUrl })
-    known.add(normalizePath(landingUrl))
+    cat.pages.unshift({ title: cat.title, url: landingUrl });
+    known.add(normalizePath(landingUrl));
   }
   if (accepted.length > 0) {
-    styles.info(`Imported ${styles.bold(String(accepted.length))} section landing page(s).`)
+    styles.info(`Imported ${styles.bold(String(accepted.length))} section landing page(s).`);
   }
 }
 
 /**
- * Parse a client-side redirect target from an HTML page. Return pages with 
+ * Parse a client-side redirect target from an HTML page. Return pages with
  * `<meta http-equiv="refresh" content="0;url=/target/">` that navigates
  * the browser elsewhere.
  */
 function parseMetaRefreshTarget(html, baseUrl) {
-  if (!html) return null
-  const tag = /<meta[^>]+http-equiv=["']?refresh["']?[^>]*>/i.exec(html)
-  if (!tag) return null
-  const m = /content=["'][^"']*url=([^"'>\s]+)/i.exec(tag[0])
-  if (!m) return null
+  if (!html) return null;
+  const tag = /<meta[^>]+http-equiv=["']?refresh["']?[^>]*>/i.exec(html);
+  if (!tag) return null;
+  const m = /content=["'][^"']*url=([^"'>\s]+)/i.exec(tag[0]);
+  if (!m) return null;
   try {
-    return new URL(decodeEntities(m[1].trim()), baseUrl).toString()
+    return new URL(decodeEntities(m[1].trim()), baseUrl).toString();
   } catch {
-    return null
+    return null;
   }
 }
 
@@ -3432,15 +3539,15 @@ function parseMetaRefreshTarget(html, baseUrl) {
  * resolved absolute against `baseUrl`. Returns null when absent or unparseable.
  */
 function parseHtmlCanonical(html, baseUrl) {
-  if (!html) return null
-  const tag = /<link[^>]+rel=["']?canonical["']?[^>]*>/i.exec(html)
-  if (!tag) return null
-  const m = /href=["']([^"']+)["']/i.exec(tag[0])
-  if (!m) return null
+  if (!html) return null;
+  const tag = /<link[^>]+rel=["']?canonical["']?[^>]*>/i.exec(html);
+  if (!tag) return null;
+  const m = /href=["']([^"']+)["']/i.exec(tag[0]);
+  if (!m) return null;
   try {
-    return new URL(decodeEntities(m[1].trim()), baseUrl).toString()
+    return new URL(decodeEntities(m[1].trim()), baseUrl).toString();
   } catch {
-    return null
+    return null;
   }
 }
 
@@ -3450,18 +3557,18 @@ function parseHtmlCanonical(html, baseUrl) {
  * asset file types, build artifacts, and anchors-on-same-page.
  */
 function isDiscoverableLink(abs, base) {
-  let u
+  let u;
   try {
-    u = new URL(abs)
+    u = new URL(abs);
   } catch {
-    return false
+    return false;
   }
-  if (u.origin !== base.origin) return false
-  const p = u.pathname.toLowerCase()
-  if (!p || p === '/') return false
-  if (/\.(png|jpe?g|gif|svg|webp|ico|css|js|pdf|zip|tar|gz|woff2?|ttf|mp4|mp3)$/i.test(p)) return false
-  if (p.startsWith('/_next/') || p.startsWith('/__/') || p.includes('/static/') || p.includes('/assets/')) return false
-  return true
+  if (u.origin !== base.origin) return false;
+  const p = u.pathname.toLowerCase();
+  if (!p || p === '/') return false;
+  if (/\.(png|jpe?g|gif|svg|webp|ico|css|js|pdf|zip|tar|gz|woff2?|ttf|mp4|mp3)$/i.test(p)) return false;
+  if (p.startsWith('/_next/') || p.startsWith('/__/') || p.includes('/static/') || p.includes('/assets/')) return false;
+  return true;
 }
 
 // Leading-segment auth routes: /auth, /login, /sign-in, /logout, /sso, /oauth…
@@ -3469,12 +3576,13 @@ function isDiscoverableLink(abs, base) {
 // docs. NOT filtered at link-discovery time — on some Stoplight sites the
 // bare landing page only exposes the "Sign in" link, which we still need as a
 // crawl seed to reach the real sidebar. Pruned from the tree post-crawl.
-const AUTH_ROUTE_RE = /^\/(?:auth|login|log-?in|sign-?in|sign-?up|signup|logout|log-?out|sign-?out|signout|register|sso|oauth2?)(?:\/|$)/i
+const AUTH_ROUTE_RE =
+  /^\/(?:auth|login|log-?in|sign-?in|sign-?up|signup|logout|log-?out|sign-?out|signout|register|sso|oauth2?)(?:\/|$)/i;
 function isAuthChromeUrl(url) {
   try {
-    return AUTH_ROUTE_RE.test(new URL(url).pathname)
+    return AUTH_ROUTE_RE.test(new URL(url).pathname);
   } catch {
-    return false
+    return false;
   }
 }
 
@@ -3482,9 +3590,9 @@ function isAuthChromeUrl(url) {
 // inject these into sidebar headings (docs.greenflash.ai prefixes
 // "API Reference" with U+200B), which otherwise defeats downstream
 // title-matching regexes like routeCategory's.
-const INVISIBLE_CHARS = new RegExp('[\\u200B-\\u200F\\u202A-\\u202E\\u2060\\uFEFF]', 'g')
+const INVISIBLE_CHARS = new RegExp('[\\u200B-\\u200F\\u202A-\\u202E\\u2060\\uFEFF]', 'g');
 function stripTags(s) {
-  return decodeEntities(String(s).replace(/<[^>]+>/g, '')).replace(INVISIBLE_CHARS, '')
+  return decodeEntities(String(s).replace(/<[^>]+>/g, '')).replace(INVISIBLE_CHARS, '');
 }
 
 /**
@@ -3495,11 +3603,11 @@ function stripTags(s) {
  * see in practice plus numeric and hex forms.
  */
 function decodeEntities(s) {
-  if (!s || s.indexOf('&') === -1) return s
+  if (!s || s.indexOf('&') === -1) return s;
   return s
     .replace(/&(?:#x([0-9a-f]+)|#(\d+));/gi, (_, hex, dec) => {
-      const code = hex ? parseInt(hex, 16) : parseInt(dec, 10)
-      return Number.isFinite(code) ? String.fromCodePoint(code) : _
+      const code = hex ? parseInt(hex, 16) : parseInt(dec, 10);
+      return Number.isFinite(code) ? String.fromCodePoint(code) : _;
     })
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
@@ -3514,7 +3622,7 @@ function decodeEntities(s) {
     .replace(/&rsquo;/g, '’')
     .replace(/&lsquo;/g, '‘')
     .replace(/&ldquo;/g, '“')
-    .replace(/&rdquo;/g, '”')
+    .replace(/&rdquo;/g, '”');
 }
 
 // normalizePath is imported from ../utils/url-segs.js
@@ -3530,28 +3638,28 @@ async function slotOrphansWithClaude(scraped, orphans, model) {
   const { systemPrompt, userPrompt } = slotOrphansPrompt({
     categories: scraped.categories,
     orphans,
-  })
-  const result = await runJsonQuery({ systemPrompt, userPrompt, model, schema: slotOrphansOutputSchema })
-  const raw = result.assignments
+  });
+  const result = await runJsonQuery({ systemPrompt, userPrompt, model, schema: slotOrphansOutputSchema });
+  const raw = result.assignments;
   if (!Array.isArray(raw)) {
     // If the model didn't cooperate, return all orphans unassigned.
-    return orphans
+    return orphans;
   }
 
-  const leftover = []
+  const leftover = [];
   orphans.forEach((p, i) => {
-    const idx = Number.isInteger(raw[i]) ? raw[i] : -1
+    const idx = Number.isInteger(raw[i]) ? raw[i] : -1;
     if (idx >= 0 && idx < scraped.categories.length) {
       scraped.categories[idx].pages.push({
         title: p.title,
         url: p.url,
         ...(p.description ? { description: p.description } : {}),
-      })
+      });
     } else {
-      leftover.push(p)
+      leftover.push(p);
     }
-  })
-  return leftover
+  });
+  return leftover;
 }
 
 /**
@@ -3561,9 +3669,9 @@ async function slotOrphansWithClaude(scraped, orphans, model) {
 async function iconizeScrapedNav(scraped, _unused, model, siteTitle) {
   const { systemPrompt, userPrompt } = iconizeNavPrompt({
     categories: scraped.categories,
-  })
-  const result = await runJsonQuery({ systemPrompt, userPrompt, model, schema: iconizeNavOutputSchema })
-  const iconArr = Array.isArray(result.icons) ? result.icons : []
+  });
+  const result = await runJsonQuery({ systemPrompt, userPrompt, model, schema: iconizeNavOutputSchema });
+  const iconArr = Array.isArray(result.icons) ? result.icons : [];
   return {
     title: siteTitle || null,
     categories: scraped.categories.map((c, i) => ({
@@ -3571,7 +3679,7 @@ async function iconizeScrapedNav(scraped, _unused, model, siteTitle) {
       icon: iconArr[i] || 'folder',
       pages: c.pages,
     })),
-  }
+  };
 }
 
 /**
@@ -3582,22 +3690,22 @@ async function iconizeScrapedNav(scraped, _unused, model, siteTitle) {
  * another (fine), and we can't tell cheaply, so we don't try.
  */
 function usableSections(sections) {
-  if (!sections) return []
-  return sections.filter((s) => s.title && s.items && s.items.length > 0 && s.items.length <= 200)
+  if (!sections) return [];
+  return sections.filter(s => s.title && s.items && s.items.length > 0 && s.items.length <= 200);
 }
 
 function sectionsLookUsable(sections) {
-  const usable = usableSections(sections)
-  if (usable.length < 3) return false
-  const avg = usable.reduce((n, s) => n + s.items.length, 0) / usable.length
-  return avg >= 5 && avg <= 100
+  const usable = usableSections(sections);
+  if (usable.length < 3) return false;
+  const avg = usable.reduce((n, s) => n + s.items.length, 0) / usable.length;
+  return avg >= 5 && avg <= 100;
 }
 
 async function organizeWithClaude(parsed, model) {
   if (sectionsLookUsable(parsed.sections)) {
-    return organizeFromSections(parsed, model)
+    return organizeFromSections(parsed, model);
   }
-  return organizeFromScratch(parsed, model)
+  return organizeFromScratch(parsed, model);
 }
 
 /**
@@ -3609,118 +3717,122 @@ async function organizeFromSections(parsed, model) {
   // Drop empty/oversized sections (e.g. a 0-item "Instructions for Large
   // Language Model Agents" preamble, or a 500-row site-dump) — heading
   // names are preserved as-is.
-  const sections = usableSections(parsed.sections)
+  const sections = usableSections(parsed.sections);
 
   const { systemPrompt, userPrompt } = organizeFromSectionsPrompt({
     siteTitle: parsed.title,
     sections,
-  })
-  const result = await runJsonQuery({ systemPrompt, userPrompt, model, schema: organizeFromSectionsOutputSchema })
-  const raw = result.sections
+  });
+  const result = await runJsonQuery({ systemPrompt, userPrompt, model, schema: organizeFromSectionsOutputSchema });
+  const raw = result.sections;
   if (!Array.isArray(raw)) {
-    throw new Error('Fast-path expected a JSON array of {title, icon} entries.')
+    throw new TypeError('Fast-path expected a JSON array of {title, icon} entries.');
   }
 
   const categories = sections.map((s, i) => {
-    const meta = raw[i] || {}
+    const meta = raw[i] || {};
     return {
       title: meta.title || s.title,
       icon: meta.icon || 'folder',
-      pages: s.items.map((it) => ({
+      pages: s.items.map(it => ({
         title: it.text,
         url: it.url,
         ...(it.description ? { description: it.description } : {}),
       })),
-    }
-  })
+    };
+  });
 
-  return { title: parsed.title || null, categories }
+  return { title: parsed.title || null, categories };
 }
 
 async function organizeFromScratch(parsed, model) {
-  const items = parsed.sections.flatMap((s) =>
-    s.items.map((i) => ({
+  const items = parsed.sections.flatMap(s =>
+    s.items.map(i => ({
       section: s.title,
       title: i.text,
       url: i.url,
       description: i.description || undefined,
     })),
-  )
+  );
 
   const { systemPrompt, userPrompt } = organizeFromScratchPrompt({
     siteTitle: parsed.title,
     items,
-  })
-  const raw = await runJsonQuery({ systemPrompt, userPrompt, model, schema: organizeFromScratchOutputSchema })
+  });
+  const raw = await runJsonQuery({ systemPrompt, userPrompt, model, schema: organizeFromScratchOutputSchema });
 
   // Rehydrate pages from the id references Claude returned.
-  const expandedCategories = []
-  const usedIds = new Set()
-  const usedUrls = new Set()
+  const expandedCategories = [];
+  const usedIds = new Set();
+  const usedUrls = new Set();
   for (const cat of raw.categories || []) {
-    const pages = []
+    const pages = [];
     for (const id of cat.pageIds || []) {
-      const item = items[id]
-      if (!item) continue // ignore out-of-range ids
-      if (usedIds.has(id)) continue // ignore dupes
-      const normUrl = normalizePath(item.url)
-      if (usedUrls.has(normUrl)) continue // guard against same URL at different input indexes
-      usedIds.add(id)
-      usedUrls.add(normUrl)
+      const item = items[id];
+      if (!item) continue; // ignore out-of-range ids
+      if (usedIds.has(id)) continue; // ignore dupes
+      const normUrl = normalizePath(item.url);
+      if (usedUrls.has(normUrl)) continue; // guard against same URL at different input indexes
+      usedIds.add(id);
+      usedUrls.add(normUrl);
       pages.push({
         title: item.title,
         url: item.url,
         ...(item.description ? { description: item.description } : {}),
-      })
+      });
     }
-    expandedCategories.push({ title: cat.title, icon: cat.icon, pages })
+    expandedCategories.push({ title: cat.title, icon: cat.icon, pages });
   }
 
   // Safety net: if Claude dropped any ids, park them under a leftover category
   // so we never silently lose pages.
-  const missing = items.map((it, idx) => (usedIds.has(idx) ? null : { id: idx, ...it })).filter(Boolean)
+  const missing = items.map((it, idx) => (usedIds.has(idx) ? null : { id: idx, ...it })).filter(Boolean);
   if (missing.length > 0) {
     expandedCategories.push({
       title: 'Uncategorized',
       icon: 'folder',
-      pages: missing.map((it) => ({
+      pages: missing.map(it => ({
         title: it.title,
         url: it.url,
         ...(it.description ? { description: it.description } : {}),
       })),
-    })
-    styles.warning(`Claude missed ${missing.length} page${missing.length === 1 ? '' : 's'} — parked under "Uncategorized".`)
+    });
+    styles.warning(
+      `Claude missed ${missing.length} page${missing.length === 1 ? '' : 's'} — parked under "Uncategorized".`,
+    );
   }
 
-  return { title: raw.title, categories: expandedCategories }
+  return { title: raw.title, categories: expandedCategories };
 }
 
 function claudeResultDetails(message) {
-  const details = []
-  if (message.api_error_status != null) details.push(`API status ${message.api_error_status}`)
-  if (Array.isArray(message.errors)) details.push(...message.errors.filter((error) => typeof error === 'string' && error.trim()))
-  if (typeof message.result === 'string' && message.result.trim()) {
-    const result = message.result.replace(/\s+/g, ' ').trim()
-    details.push(result.length > 1000 ? `${result.slice(0, 1000)}…` : result)
+  const details = [];
+  if (message.api_error_status != null) details.push(`API status ${message.api_error_status}`);
+  if (Array.isArray(message.errors)) {
+    details.push(...message.errors.filter(error => typeof error === 'string' && error.trim()));
   }
-  return details.join('; ')
+  if (typeof message.result === 'string' && message.result.trim()) {
+    const result = message.result.replace(/\s+/g, ' ').trim();
+    details.push(result.length > 1000 ? `${result.slice(0, 1000)}…` : result);
+  }
+  return details.join('; ');
 }
 
 export function getStructuredOutput(message) {
-  const details = claudeResultDetails(message)
+  const details = claudeResultDetails(message);
   if (message.subtype === 'error_max_structured_output_retries') {
     throw new Error(
       'Claude could not produce output matching the schema after retries. ' +
-      `Likely hit the model's output limit — try --model sonnet.${details ? ` ${details}` : ''}`,
-    )
+        `Likely hit the model's output limit — try --model sonnet.${details ? ` ${details}` : ''}`,
+    );
   }
   if (message.subtype && message.subtype !== 'success') {
-    throw new Error(`Claude failed: ${message.subtype}${details ? ` — ${details}` : ''}`)
+    throw new Error(`Claude failed: ${message.subtype}${details ? ` — ${details}` : ''}`);
   }
   if (!message.structured_output || typeof message.structured_output !== 'object') {
-    throw new Error(`Claude returned no structured output${details ? ` — ${details}` : ''}`)
+    throw new Error(`Claude returned no structured output${details ? ` — ${details}` : ''}`);
   }
-  return message.structured_output
+  return message.structured_output;
 }
 
 /**
@@ -3731,20 +3843,20 @@ export function getStructuredOutput(message) {
  * there's no text extraction or JSON.parse on this path.
  */
 async function runJsonQuery({ systemPrompt, userPrompt, model, schema }) {
-  console.log()
-  console.log(styles.dim('─ system prompt ─'))
-  console.log(styles.dim(systemPrompt))
-  console.log(styles.dim('─ user prompt (first 80 lines) ─'))
-  console.log(styles.dim(userPrompt.split('\n').slice(0, 80).join('\n')))
-  const userLineCount = userPrompt.split('\n').length
+  console.log();
+  console.log(styles.dim('─ system prompt ─'));
+  console.log(styles.dim(systemPrompt));
+  console.log(styles.dim('─ user prompt (first 80 lines) ─'));
+  console.log(styles.dim(userPrompt.split('\n').slice(0, 80).join('\n')));
+  const userLineCount = userPrompt.split('\n').length;
   if (userLineCount > 80) {
-    console.log(styles.dim(`… (${userLineCount - 80} more lines)`))
+    console.log(styles.dim(`… (${userLineCount - 80} more lines)`));
   }
-  console.log(styles.dim('─'.repeat(40)))
-  console.log()
+  console.log(styles.dim('─'.repeat(40)));
+  console.log();
 
-  const heartbeat = setInterval(() => process.stdout.write(styles.dim('.')), 1000)
-  let structured
+  const heartbeat = setInterval(() => process.stdout.write(styles.dim('.')), 1000);
+  let structured;
   try {
     for await (const message of query({
       prompt: userPrompt,
@@ -3757,19 +3869,19 @@ async function runJsonQuery({ systemPrompt, userPrompt, model, schema }) {
       },
     })) {
       if (message.type === 'result') {
-        structured = getStructuredOutput(message)
-        break
+        structured = getStructuredOutput(message);
+        break;
       }
     }
   } finally {
-    clearInterval(heartbeat)
-    process.stdout.write('\n')
+    clearInterval(heartbeat);
+    process.stdout.write('\n');
   }
 
   if (!structured || typeof structured !== 'object') {
-    throw new Error('Claude returned no structured output')
+    throw new Error('Claude returned no structured output');
   }
-  return structured
+  return structured;
 }
 
 /**
@@ -3794,14 +3906,14 @@ async function runJsonQuery({ systemPrompt, userPrompt, model, schema }) {
 // extractOasSpecUrlsFromParsed (candidate OpenAPI specs we download into oas/
 // and upload separately) and removed from the parsed tree before this drop
 // runs, so spec-shaped items never reach here — `.yaml` below is a backstop.
-const ASSET_EXT_RE = /\.(ya?ml|xml|toml)$/i
-const LLMS_TXT_RE = /(?:^|\/)llms[^/]*\.txt$/i
+const ASSET_EXT_RE = /\.(ya?ml|xml|toml)$/i;
+const LLMS_TXT_RE = /(?:^|\/)llms[^/]*\.txt$/i;
 function isAssetOrMetaUrl(url) {
   try {
-    const pn = new URL(url).pathname
-    return ASSET_EXT_RE.test(pn) || LLMS_TXT_RE.test(pn)
+    const pn = new URL(url).pathname;
+    return ASSET_EXT_RE.test(pn) || LLMS_TXT_RE.test(pn);
   } catch {
-    return false
+    return false;
   }
 }
 
@@ -3811,9 +3923,9 @@ function isAssetOrMetaUrl(url) {
 // runner validates each as OpenAPI and uploads the valid ones.
 function isOasSpecUrl(url) {
   try {
-    return /\.(json|ya?ml)$/i.test(new URL(url).pathname)
+    return /\.(json|ya?ml)$/i.test(new URL(url).pathname);
   } catch {
-    return false
+    return false;
   }
 }
 
@@ -3821,7 +3933,7 @@ function isOasSpecUrl(url) {
 // non-docs hostname. We deliberately keep the set tiny — over-matching
 // here (e.g. including `api`, `learn`) would over-filter sites whose
 // "docs" subtree lives at the apex.
-const DOCS_LIKE_ROOT_SEGMENTS = new Set(['docs', 'doc', 'documentation', 'document'])
+const DOCS_LIKE_ROOT_SEGMENTS = new Set(['docs', 'doc', 'documentation', 'document']);
 
 /**
  * Narrow a merged llms.txt result to a docs subtree when a root-level
@@ -3856,60 +3968,60 @@ const DOCS_LIKE_ROOT_SEGMENTS = new Set(['docs', 'doc', 'documentation', 'docume
  * met.
  */
 function narrowToDocsSubtreeIfNeeded(llms, sourceUrl, hits) {
-  if (!llms || llms.sourceFiles.length < 2) return null
-  if (sourceUrl.hostname.toLowerCase().includes('docs')) return null
-  const rootHit = hits.some((h) => h.path === '/' || h.path === '')
-  if (!rootHit) return null
+  if (!llms || llms.sourceFiles.length < 2) return null;
+  if (sourceUrl.hostname.toLowerCase().includes('docs')) return null;
+  const rootHit = hits.some(h => h.path === '/' || h.path === '');
+  if (!rootHit) return null;
 
   // Identify docs-shaped first segments of root that actually appear in
   // the merged URLs. Walking just the first path segment matches the
   // user's spec ("we only look at immediate children in this case").
-  const firstSegs = new Set()
+  const firstSegs = new Set();
   for (const section of llms.parsed.sections) {
     for (const item of section.items) {
       try {
-        const seg = new URL(item.url).pathname.split('/').filter(Boolean)[0]
-        if (seg) firstSegs.add(seg.toLowerCase())
+        const seg = new URL(item.url).pathname.split('/').filter(Boolean)[0];
+        if (seg) firstSegs.add(seg.toLowerCase());
       } catch {
         // ignore unparseable URLs
       }
     }
   }
-  let docsSegment = null
+  let docsSegment = null;
   for (const seg of firstSegs) {
     if (DOCS_LIKE_ROOT_SEGMENTS.has(seg)) {
-      docsSegment = seg
-      break
+      docsSegment = seg;
+      break;
     }
   }
-  if (!docsSegment) return null
+  if (!docsSegment) return null;
 
-  const prefix = '/' + docsSegment
-  let kept = 0
-  let dropped = 0
-  const keptSections = []
+  const prefix = `/${docsSegment}`;
+  let kept = 0;
+  let dropped = 0;
+  const keptSections = [];
   for (const section of llms.parsed.sections) {
-    const items = []
+    const items = [];
     for (const item of section.items) {
       try {
-        const pn = new URL(item.url).pathname.toLowerCase()
-        if (pn === prefix || pn.startsWith(prefix + '/')) {
-          items.push(item)
-          kept++
+        const pn = new URL(item.url).pathname.toLowerCase();
+        if (pn === prefix || pn.startsWith(`${prefix}/`)) {
+          items.push(item);
+          kept++;
         } else {
-          dropped++
+          dropped++;
         }
       } catch {
-        dropped++
+        dropped++;
       }
     }
     if (items.length > 0) {
-      section.items = items
-      keptSections.push(section)
+      section.items = items;
+      keptSections.push(section);
     }
   }
-  llms.parsed.sections = keptSections
-  return { segment: docsSegment, kept, dropped }
+  llms.parsed.sections = keptSections;
+  return { segment: docsSegment, kept, dropped };
 }
 
 /**
@@ -3922,24 +4034,24 @@ function narrowToDocsSubtreeIfNeeded(llms, sourceUrl, hits) {
  * staged `oas/` dir.
  */
 function extractOasSpecUrlsFromParsed(parsed) {
-  const captured = []
-  const keptSections = []
+  const captured = [];
+  const keptSections = [];
   for (const section of parsed.sections) {
-    const keptItems = []
+    const keptItems = [];
     for (const item of section.items) {
       if (isOasSpecUrl(item.url)) {
-        captured.push({ url: item.url, text: item.text || null, source: 'llms' })
-        continue
+        captured.push({ url: item.url, text: item.text || null, source: 'llms' });
+        continue;
       }
-      keptItems.push(item)
+      keptItems.push(item);
     }
     if (keptItems.length > 0) {
-      section.items = keptItems
-      keptSections.push(section)
+      section.items = keptItems;
+      keptSections.push(section);
     }
   }
-  parsed.sections = keptSections
-  return captured
+  parsed.sections = keptSections;
+  return captured;
 }
 
 /**
@@ -3948,26 +4060,25 @@ function extractOasSpecUrlsFromParsed(parsed) {
  * items dropped.
  */
 function dropAssetItemsFromParsed(parsed) {
-  let dropped = 0
-  const keptSections = []
+  let dropped = 0;
+  const keptSections = [];
   for (const section of parsed.sections) {
-    const keptItems = []
+    const keptItems = [];
     for (const item of section.items) {
       if (isAssetOrMetaUrl(item.url)) {
-        dropped++
-        continue
+        dropped++;
+        continue;
       }
-      keptItems.push(item)
+      keptItems.push(item);
     }
     if (keptItems.length > 0) {
-      section.items = keptItems
-      keptSections.push(section)
+      section.items = keptItems;
+      keptSections.push(section);
     }
   }
-  parsed.sections = keptSections
-  return dropped
+  parsed.sections = keptSections;
+  return dropped;
 }
-
 
 /**
  * Build the ordered list of well-known docs locations to probe. For each route
@@ -3976,21 +4087,21 @@ function dropAssetItemsFromParsed(parsed) {
  * `${url.href}llms.txt` is well-formed.
  */
 function buildWellKnownDocRoutes(sourceUrl) {
-  const out = []
-  const seen = new Set()
+  const out = [];
+  const seen = new Set();
   const add = (kind, href) => {
-    if (seen.has(href)) return
-    seen.add(href)
-    out.push({ kind, url: new URL(href) })
-  }
+    if (seen.has(href)) return;
+    seen.add(href);
+    out.push({ kind, url: new URL(href) });
+  };
 
-  const apexHost = sourceUrl.hostname.replace(/^www\./i, '')
+  const apexHost = sourceUrl.hostname.replace(/^www\./i, '');
   for (const route of WELL_KNOWN_DOC_ROUTES) {
-    const subHost = `${route}.${apexHost}`
-    if (subHost !== sourceUrl.hostname) add('subdomain', `${sourceUrl.protocol}//${subHost}/`)
-    if (!SUBDOMAIN_ONLY_DOC_ROUTES.has(route)) add('path', `${sourceUrl.origin}/${route}/`)
+    const subHost = `${route}.${apexHost}`;
+    if (subHost !== sourceUrl.hostname) add('subdomain', `${sourceUrl.protocol}//${subHost}/`);
+    if (!SUBDOMAIN_ONLY_DOC_ROUTES.has(route)) add('path', `${sourceUrl.origin}/${route}/`);
   }
-  return out
+  return out;
 }
 
 // Content gate for spec candidates — many sites 200 with an HTML shell for
@@ -3998,37 +4109,37 @@ function buildWellKnownDocRoutes(sourceUrl) {
 // top-level `openapi`/`swagger` version string, or matches the YAML form of
 // that key. (Pattern mirrors ai-cli-runner/app/lib/oas-sniff.ts — copied,
 // never imported.)
-const OAS_TOP_LEVEL_KEY_RE = /^\s*['"]?(openapi|swagger)['"]?\s*:/m
+const OAS_TOP_LEVEL_KEY_RE = /^\s*['"]?(openapi|swagger)['"]?\s*:/m;
 function sniffOasContent(text) {
-  const body = String(text)
-  if (/^\s*</.test(body)) return false
+  const body = String(text);
+  if (/^\s*</.test(body)) return false;
   try {
-    const obj = JSON.parse(body)
-    if (!obj || typeof obj !== 'object') return false
-    return typeof obj.openapi === 'string' || typeof obj.swagger === 'string'
+    const obj = JSON.parse(body);
+    if (!obj || typeof obj !== 'object') return false;
+    return typeof obj.openapi === 'string' || typeof obj.swagger === 'string';
   } catch {
-    return OAS_TOP_LEVEL_KEY_RE.test(body.slice(0, 64 * 1024))
+    return OAS_TOP_LEVEL_KEY_RE.test(body.slice(0, 64 * 1024));
   }
 }
 
 function buildWellKnownOasProbeUrls(sourceUrl, docsBase, preAdoptionOrigin) {
-  const urls = []
-  const seen = new Set()
-  const add = (href) => {
-    if (seen.has(href)) return
-    seen.add(href)
-    urls.push(href)
-  }
-  const origins = [sourceUrl.origin]
-  if (preAdoptionOrigin && preAdoptionOrigin !== sourceUrl.origin) origins.push(preAdoptionOrigin)
+  const urls = [];
+  const seen = new Set();
+  const add = href => {
+    if (seen.has(href)) return;
+    seen.add(href);
+    urls.push(href);
+  };
+  const origins = [sourceUrl.origin];
+  if (preAdoptionOrigin && preAdoptionOrigin !== sourceUrl.origin) origins.push(preAdoptionOrigin);
   for (const origin of origins) {
-    for (const p of WELL_KNOWN_OAS_PATHS) add(`${origin}/${p}`)
+    for (const p of WELL_KNOWN_OAS_PATHS) add(`${origin}/${p}`);
   }
   if (docsBase && docsBase.kind === 'path') {
-    const base = docsBase.url.href.replace(/\/+$/, '')
-    for (const p of ['openapi.json', 'openapi.yaml', 'swagger.json']) add(`${base}/${p}`)
+    const base = docsBase.url.href.replace(/\/+$/, '');
+    for (const p of ['openapi.json', 'openapi.yaml', 'swagger.json']) add(`${base}/${p}`);
   }
-  return urls
+  return urls;
 }
 
 /**
@@ -4039,30 +4150,30 @@ function buildWellKnownOasProbeUrls(sourceUrl, docsBase, preAdoptionOrigin) {
  * never re-downloads them.
  */
 async function probeWellKnownOasPaths(sourceUrl, docsBase, preAdoptionOrigin) {
-  const probeUrls = buildWellKnownOasProbeUrls(sourceUrl, docsBase, preAdoptionOrigin)
-  const allowedOrigins = new Set([sourceUrl.origin])
-  if (preAdoptionOrigin) allowedOrigins.add(preAdoptionOrigin)
+  const probeUrls = buildWellKnownOasProbeUrls(sourceUrl, docsBase, preAdoptionOrigin);
+  const allowedOrigins = new Set([sourceUrl.origin]);
+  if (preAdoptionOrigin) allowedOrigins.add(preAdoptionOrigin);
   const hits = await Promise.all(
-    probeUrls.map(async (url) => {
+    probeUrls.map(async url => {
       try {
-        const res = await fetch(url, { redirect: 'follow', headers: { 'User-Agent': 'readme-cli-import' } })
-        if (!res.ok) return null
-        let finalOrigin
+        const res = await fetch(url, { redirect: 'follow', headers: { 'User-Agent': 'readme-cli-import' } });
+        if (!res.ok) return null;
+        let finalOrigin;
         try {
-          finalOrigin = new URL(res.url || url).origin
+          finalOrigin = new URL(res.url || url).origin;
         } catch {
-          return null
+          return null;
         }
-        if (!allowedOrigins.has(finalOrigin)) return null
-        const body = Buffer.from(await res.arrayBuffer())
-        if (!sniffOasContent(body.toString('utf8'))) return null
-        return { url, text: null, source: 'probe', body }
+        if (!allowedOrigins.has(finalOrigin)) return null;
+        const body = Buffer.from(await res.arrayBuffer());
+        if (!sniffOasContent(body.toString('utf8'))) return null;
+        return { url, text: null, source: 'probe', body };
       } catch {
-        return null
+        return null;
       }
     }),
-  )
-  return hits.filter(Boolean)
+  );
+  return hits.filter(Boolean);
 }
 
 /**
@@ -4072,16 +4183,16 @@ async function probeWellKnownOasPaths(sourceUrl, docsBase, preAdoptionOrigin) {
  */
 async function resolveRedirectedSourceUrl(sourceUrl) {
   try {
-    const res = await fetch(sourceUrl.href, { redirect: 'follow', headers: { 'User-Agent': 'readme-cli-import' } })
-    if (!res.ok || !res.url) return null
-    const final = new URL(res.url)
-    final.search = ''
-    final.hash = ''
-    const norm = (u) => u.origin + u.pathname.replace(/\/+$/, '')
-    if (norm(final) === norm(sourceUrl)) return null
-    return final
+    const res = await fetch(sourceUrl.href, { redirect: 'follow', headers: { 'User-Agent': 'readme-cli-import' } });
+    if (!res.ok || !res.url) return null;
+    const final = new URL(res.url);
+    final.search = '';
+    final.hash = '';
+    const norm = u => u.origin + u.pathname.replace(/\/+$/, '');
+    if (norm(final) === norm(sourceUrl)) return null;
+    return final;
   } catch {
-    return null
+    return null;
   }
 }
 
@@ -4091,50 +4202,54 @@ async function resolveRedirectedSourceUrl(sourceUrl) {
  * llms.txt always beats one that merely resolves. Returns `{ url, kind, hasLlms }`.
  */
 async function resolveDocsBaseUrl(sourceUrl) {
-  if (sourceUrl.pathname && sourceUrl.pathname !== '/') return null
-  if (WELL_KNOWN_DOC_ROUTES.includes(sourceUrl.hostname.split('.')[0].toLowerCase())) return null
+  if (sourceUrl.pathname && sourceUrl.pathname !== '/') return null;
+  if (WELL_KNOWN_DOC_ROUTES.includes(sourceUrl.hostname.split('.')[0].toLowerCase())) return null;
 
-  const candidates = buildWellKnownDocRoutes(sourceUrl)
-  if (candidates.length === 0) return null
+  const candidates = buildWellKnownDocRoutes(sourceUrl);
+  if (candidates.length === 0) return null;
 
-  styles.info(`Probing ${styles.bold(String(candidates.length))} well-known docs routes from ${styles.bold(sourceUrl.toString())}...`)
+  styles.info(
+    `Probing ${styles.bold(String(candidates.length))} well-known docs routes from ${styles.bold(sourceUrl.toString())}...`,
+  );
 
-  const llmsHits = await Promise.all(candidates.map(async (c) => ({ c, res: await fetchLlmsTxt(`${c.url.href}llms.txt`) })))
+  const llmsHits = await Promise.all(
+    candidates.map(async c => ({ c, res: await fetchLlmsTxt(`${c.url.href}llms.txt`) })),
+  );
   for (const { c, res } of llmsHits) {
-    const url = `${c.url.href}llms.txt`
+    const url = `${c.url.href}llms.txt`;
     if (res.ok && res.usable && (res.stats?.linkItems ?? 0) > 0) {
       if (inCandidateScope(c, res.finalUrl)) {
-        styles.info(styles.dim(`  ${url} → valid llms.txt (${res.stats.linkItems} links)`))
-        return { url: c.url, kind: c.kind, hasLlms: true }
+        styles.info(styles.dim(`  ${url} → valid llms.txt (${res.stats.linkItems} links)`));
+        return { url: c.url, kind: c.kind, hasLlms: true };
       }
-      styles.info(styles.dim(`  ${url} → llms.txt redirects to ${new URL(res.finalUrl).host} (alias) — skipping`))
+      styles.info(styles.dim(`  ${url} → llms.txt redirects to ${new URL(res.finalUrl).host} (alias) — skipping`));
     } else if (res.ok) {
-      styles.info(styles.dim(`  ${url} → no usable llms.txt`))
+      styles.info(styles.dim(`  ${url} → no usable llms.txt`));
     } else {
-      styles.info(styles.dim(`  ${url} → ${res.status ? `HTTP ${res.status}` : res.error || 'no llms.txt'}`))
+      styles.info(styles.dim(`  ${url} → ${res.status ? `HTTP ${res.status}` : res.error || 'no llms.txt'}`));
     }
   }
 
-  const soft404Title = candidates.some((c) => c.kind === 'path') ? await fetchSoft404Title(sourceUrl.origin) : null
+  const soft404Title = candidates.some(c => c.kind === 'path') ? await fetchSoft404Title(sourceUrl.origin) : null;
   const existence = await Promise.all(
     llmsHits.map(async ({ c, res }) => {
-      if (res.error && c.kind === 'subdomain') return { c, exists: false }
-      return { c, ...(await docsRouteResolves(c, soft404Title)) }
+      if (res.error && c.kind === 'subdomain') return { c, exists: false };
+      return { c, ...(await docsRouteResolves(c, soft404Title)) };
     }),
-  )
+  );
   for (const { c, exists, soft404 } of existence) {
     if (soft404) {
-      styles.info(styles.dim(`  ${c.url.href} → indistinguishable from a nonexistent path (SPA catch-all) — skipping`))
-      continue
+      styles.info(styles.dim(`  ${c.url.href} → indistinguishable from a nonexistent path (SPA catch-all) — skipping`));
+      continue;
     }
     if (exists) {
-      styles.info(styles.dim(`  ${c.url.href} → resolves (no llms.txt)`))
-      return { url: c.url, kind: c.kind, hasLlms: false }
+      styles.info(styles.dim(`  ${c.url.href} → resolves (no llms.txt)`));
+      return { url: c.url, kind: c.kind, hasLlms: false };
     }
   }
 
-  styles.info(styles.dim(`  no well-known docs route matched — keeping ${sourceUrl.toString()}`))
-  return null
+  styles.info(styles.dim(`  no well-known docs route matched — keeping ${sourceUrl.toString()}`));
+  return null;
 }
 
 /**
@@ -4144,24 +4259,24 @@ async function resolveDocsBaseUrl(sourceUrl) {
  * route is just an alias to somewhere else (usually the marketing apex).
  */
 function inCandidateScope(candidate, finalUrl) {
-  let final
+  let final;
   try {
-    final = new URL(finalUrl || candidate.url.href)
+    final = new URL(finalUrl || candidate.url.href);
   } catch {
-    return false
+    return false;
   }
-  if (candidate.kind === 'subdomain') return final.hostname === candidate.url.hostname
-  const strip = (p) => p.toLowerCase().replace(/\/+$/, '')
-  const finalPath = strip(final.pathname)
-  const candidatePath = strip(candidate.url.pathname)
-  return finalPath === candidatePath || finalPath.startsWith(`${candidatePath}/`)
+  if (candidate.kind === 'subdomain') return final.hostname === candidate.url.hostname;
+  const strip = p => p.toLowerCase().replace(/\/+$/, '');
+  const finalPath = strip(final.pathname);
+  const candidatePath = strip(candidate.url.pathname);
+  return finalPath === candidatePath || finalPath.startsWith(`${candidatePath}/`);
 }
 
 function extractHtmlTitle(html) {
-  const match = /<title[^>]*>([^<]*)<\/title>/i.exec(html)
-  if (!match) return null
-  const title = match[1].replace(/\s+/g, ' ').trim().toLowerCase()
-  return title || null
+  const match = /<title[^>]*>([^<]*)<\/title>/i.exec(html);
+  if (!match) return null;
+  const title = match[1].replace(/\s+/g, ' ').trim().toLowerCase();
+  return title || null;
 }
 
 /**
@@ -4171,13 +4286,13 @@ function extractHtmlTitle(html) {
  * properly (no baseline needed) or on any fetch failure.
  */
 async function fetchSoft404Title(origin) {
-  const probeUrl = `${origin}/readme-cli-nonexistent-${Math.random().toString(36).slice(2)}`
+  const probeUrl = `${origin}/readme-cli-nonexistent-${Math.random().toString(36).slice(2)}`;
   try {
-    const res = await fetch(probeUrl, { redirect: 'follow', headers: { 'User-Agent': 'readme-cli-import' } })
-    if (!res.ok) return null
-    return extractHtmlTitle(await res.text())
+    const res = await fetch(probeUrl, { redirect: 'follow', headers: { 'User-Agent': 'readme-cli-import' } });
+    if (!res.ok) return null;
+    return extractHtmlTitle(await res.text());
   } catch {
-    return null
+    return null;
   }
 }
 
@@ -4190,47 +4305,47 @@ async function fetchSoft404Title(origin) {
  */
 async function docsRouteResolves(candidate, soft404Title) {
   try {
-    const res = await fetch(candidate.url.href, { redirect: 'follow', headers: { 'User-Agent': 'readme-cli-import' } })
-    if (!res.ok || !inCandidateScope(candidate, res.url)) return { exists: false }
+    const res = await fetch(candidate.url.href, { redirect: 'follow', headers: { 'User-Agent': 'readme-cli-import' } });
+    if (!res.ok || !inCandidateScope(candidate, res.url)) return { exists: false };
     if (candidate.kind === 'path' && soft404Title) {
-      const title = extractHtmlTitle(await res.text())
-      if (title === soft404Title) return { exists: false, soft404: true }
+      const title = extractHtmlTitle(await res.text());
+      if (title === soft404Title) return { exists: false, soft404: true };
     }
-    return { exists: true }
+    return { exists: true };
   } catch {
-    return { exists: false }
+    return { exists: false };
   }
 }
 
 // Hard cap on total probes during BFS discovery — protects against
 // pathological sites where every URL returns a "200 + a few link rows"
 // response and the frontier would otherwise blow up.
-const LLMS_PROBE_CAP = 30
+const LLMS_PROBE_CAP = 30;
 // Per-node cap on child segments to expand. Root-level llms.txt files can
 // list hundreds of URLs; without this a single root hit could schedule
 // dozens of unrelated probes (`/blog`, `/pricing`, …).
-const LLMS_CHILDREN_PER_NODE = 12
+const LLMS_CHILDREN_PER_NODE = 12;
 // Budget for the explicit-link phase of discovery (phase 2 in discoverLlmsTxt).
 // Separate from LLMS_PROBE_CAP so following authored `llms.txt` links — a
 // strong, deliberate signal, e.g. docs.snowflake.com's root index listing ~40
 // per-section files — isn't starved by the speculative slug-walk's budget.
-const EXPLICIT_LLMS_PROBE_CAP = 200
+const EXPLICIT_LLMS_PROBE_CAP = 200;
 
 // Matches ONLY the canonical index filename, not sibling dumps like
 // `llms-full.txt` (concatenated page content, not a link index) — those would
 // add no link rows and just waste a fetch.
-const LLMS_INDEX_RE = /\/llms\.txt$/i
+const LLMS_INDEX_RE = /\/llms\.txt$/i;
 
 /**
  * Convert a path like `/docs/quickstart` into its llms.txt URL.
  */
 function pathToLlmsUrl(origin, path) {
-  if (!path || path === '/') return `${origin}/llms.txt`
-  return `${origin}${path}/llms.txt`
+  if (!path || path === '/') return `${origin}/llms.txt`;
+  return `${origin}${path}/llms.txt`;
 }
 
 function llmsParseOptionsForUrl(llmsUrl) {
-  return { rootRelativeResolution: llmsPathFromUrl(llmsUrl) === '/' ? 'origin' : 'llms-dir' }
+  return { rootRelativeResolution: llmsPathFromUrl(llmsUrl) === '/' ? 'origin' : 'llms-dir' };
 }
 
 /**
@@ -4240,8 +4355,8 @@ function llmsParseOptionsForUrl(llmsUrl) {
  * narrowToDocsSubtreeIfNeeded reads it.
  */
 function llmsPathFromUrl(llmsUrl) {
-  const pn = new URL(llmsUrl).pathname.replace(/\/llms\.txt$/i, '')
-  return pn || '/'
+  const pn = new URL(llmsUrl).pathname.replace(/\/llms\.txt$/i, '');
+  return pn || '/';
 }
 
 /**
@@ -4252,18 +4367,18 @@ function llmsPathFromUrl(llmsUrl) {
  * the slug-walk's path math assumes one origin. Returns deduped URL strings.
  */
 function extractNestedLlmsUrls(parsed, originScope) {
-  const out = new Set()
+  const out = new Set();
   for (const section of parsed.sections) {
     for (const item of section.items) {
       try {
-        const u = new URL(item.url)
-        if (u.origin === originScope && LLMS_INDEX_RE.test(u.pathname)) out.add(u.toString())
+        const u = new URL(item.url);
+        if (u.origin === originScope && LLMS_INDEX_RE.test(u.pathname)) out.add(u.toString());
       } catch {
         // ignore unparseable URLs
       }
     }
   }
-  return [...out]
+  return [...out];
 }
 
 /**
@@ -4274,34 +4389,34 @@ function extractNestedLlmsUrls(parsed, originScope) {
  * a `/docs/llms.txt` listing `/blog/foo`) are ignored.
  */
 function expandLlmsFrontier(currentPath, parsed) {
-  const next = []
-  const prefix = currentPath === '/' || currentPath === '' ? '/' : currentPath + '/'
+  const next = [];
+  const prefix = currentPath === '/' || currentPath === '' ? '/' : `${currentPath}/`;
 
   if (currentPath && currentPath !== '/') {
-    const parent = currentPath.replace(/\/[^/]+$/, '') || '/'
-    next.push(parent)
+    const parent = currentPath.replace(/\/[^/]+$/, '') || '/';
+    next.push(parent);
   }
 
-  const childSegs = new Set()
+  const childSegs = new Set();
   for (const section of parsed.sections) {
     for (const item of section.items) {
       try {
-        const u = new URL(item.url)
-        const pn = u.pathname.toLowerCase()
-        if (!pn.startsWith(prefix.toLowerCase())) continue
-        const rest = pn.slice(prefix.length).split('/').filter(Boolean)
-        if (rest.length > 0) childSegs.add(rest[0])
+        const u = new URL(item.url);
+        const pn = u.pathname.toLowerCase();
+        if (!pn.startsWith(prefix.toLowerCase())) continue;
+        const rest = pn.slice(prefix.length).split('/').filter(Boolean);
+        if (rest.length > 0) childSegs.add(rest[0]);
       } catch {
         // ignore unparseable URLs
       }
-      if (childSegs.size >= LLMS_CHILDREN_PER_NODE) break
+      if (childSegs.size >= LLMS_CHILDREN_PER_NODE) break;
     }
-    if (childSegs.size >= LLMS_CHILDREN_PER_NODE) break
+    if (childSegs.size >= LLMS_CHILDREN_PER_NODE) break;
   }
   for (const seg of childSegs) {
-    next.push(currentPath === '/' || !currentPath ? `/${seg}` : `${currentPath}/${seg}`)
+    next.push(currentPath === '/' || !currentPath ? `/${seg}` : `${currentPath}/${seg}`);
   }
-  return next
+  return next;
 }
 
 /**
@@ -4314,59 +4429,59 @@ function expandLlmsFrontier(currentPath, parsed) {
  * where `hits` includes both valid (usable: true) and invalid hits.
  */
 async function discoverLlmsTxt(sourceUrl) {
-  const tried = new Set()
-  const hits = []
-  const misses = []
-  const skipped = []
+  const tried = new Set();
+  const hits = [];
+  const misses = [];
+  const skipped = [];
 
-  const startSegs = sourceUrl.pathname.split('/').filter(Boolean)
-  const initial = []
+  const startSegs = sourceUrl.pathname.split('/').filter(Boolean);
+  const initial = [];
   for (let i = startSegs.length; i >= 0; i--) {
-    initial.push('/' + startSegs.slice(0, i).join('/'))
+    initial.push(`/${startSegs.slice(0, i).join('/')}`);
   }
 
-  let frontier = initial
+  let frontier = initial;
   while (frontier.length > 0 && tried.size < LLMS_PROBE_CAP) {
-    const ring = []
+    const ring = [];
     for (const p of frontier) {
-      const norm = p === '' ? '/' : p
-      if (tried.has(norm)) continue
-      tried.add(norm)
-      ring.push(norm)
-      if (tried.size >= LLMS_PROBE_CAP) break
+      const norm = p === '' ? '/' : p;
+      if (tried.has(norm)) continue;
+      tried.add(norm);
+      ring.push(norm);
+      if (tried.size >= LLMS_PROBE_CAP) break;
     }
-    if (ring.length === 0) break
+    if (ring.length === 0) break;
 
     const results = await Promise.all(
-      ring.map(async (path) => {
-        const llmsUrl = pathToLlmsUrl(sourceUrl.origin, path)
-        const res = await fetchLlmsTxt(llmsUrl, llmsParseOptionsForUrl(llmsUrl))
-        return { path, llmsUrl, res }
+      ring.map(async path => {
+        const llmsUrl = pathToLlmsUrl(sourceUrl.origin, path);
+        const res = await fetchLlmsTxt(llmsUrl, llmsParseOptionsForUrl(llmsUrl));
+        return { path, llmsUrl, res };
       }),
-    )
+    );
 
-    const next = []
+    const next = [];
     for (const { path, llmsUrl, res } of results) {
       if (!res.ok) {
-        misses.push({ url: llmsUrl, status: res.status, error: res.error })
-        continue
+        misses.push({ url: llmsUrl, status: res.status, error: res.error });
+        continue;
       }
       // Treat as a "hit" only if there's at least one link row — that's the
       // minimum signal that this is an llms.txt-shaped file (and not just a
       // 200 response serving the site's HTML or a stray text file). Hits
       // expand the frontier regardless of whether they pass usability.
-      const linkItems = res.stats?.linkItems ?? 0
+      const linkItems = res.stats?.linkItems ?? 0;
       if (linkItems === 0) {
-        misses.push({ url: llmsUrl, status: 'no link items' })
-        continue
+        misses.push({ url: llmsUrl, status: 'no link items' });
+        continue;
       }
-      hits.push({ ...res, llmsUrl, path })
-      if (!res.usable) skipped.push({ url: llmsUrl, reason: res.reason })
+      hits.push({ ...res, llmsUrl, path });
+      if (!res.usable) skipped.push({ url: llmsUrl, reason: res.reason });
       for (const np of expandLlmsFrontier(path, res.parsed)) {
-        if (!tried.has(np)) next.push(np)
+        if (!tried.has(np)) next.push(np);
       }
     }
-    frontier = next
+    frontier = next;
   }
 
   // Phase 2 — follow EXPLICIT llms.txt links authored inside the files phase 1
@@ -4376,49 +4491,51 @@ async function discoverLlmsTxt(sourceUrl) {
   // in turn until none remain. Dedupes against every URL phase 1 touched
   // (hits + misses) and against itself; phase 1's `tried` set is keyed by path,
   // so we track full llms.txt URLs separately here and leave phase 1 untouched.
-  const triedUrls = new Set([...hits.map((h) => h.llmsUrl), ...misses.map((m) => m.url)])
-  let explicitFrontier = []
+  const triedUrls = new Set([...hits.map(h => h.llmsUrl), ...misses.map(m => m.url)]);
+  let explicitFrontier = [];
   for (const hit of hits) {
     for (const u of extractNestedLlmsUrls(hit.parsed, sourceUrl.origin)) {
-      if (!triedUrls.has(u)) explicitFrontier.push(u)
+      if (!triedUrls.has(u)) explicitFrontier.push(u);
     }
   }
 
-  let explicitProbes = 0
+  let explicitProbes = 0;
   while (explicitFrontier.length > 0 && explicitProbes < EXPLICIT_LLMS_PROBE_CAP) {
-    const ring = []
+    const ring = [];
     for (const u of explicitFrontier) {
-      if (triedUrls.has(u)) continue
-      triedUrls.add(u)
-      ring.push(u)
-      explicitProbes++
-      if (explicitProbes >= EXPLICIT_LLMS_PROBE_CAP) break
+      if (triedUrls.has(u)) continue;
+      triedUrls.add(u);
+      ring.push(u);
+      explicitProbes++;
+      if (explicitProbes >= EXPLICIT_LLMS_PROBE_CAP) break;
     }
-    if (ring.length === 0) break
+    if (ring.length === 0) break;
 
-    const results = await Promise.all(ring.map(async (llmsUrl) => ({ llmsUrl, res: await fetchLlmsTxt(llmsUrl, llmsParseOptionsForUrl(llmsUrl)) })))
+    const results = await Promise.all(
+      ring.map(async llmsUrl => ({ llmsUrl, res: await fetchLlmsTxt(llmsUrl, llmsParseOptionsForUrl(llmsUrl)) })),
+    );
 
-    const next = []
+    const next = [];
     for (const { llmsUrl, res } of results) {
       if (!res.ok) {
-        misses.push({ url: llmsUrl, status: res.status, error: res.error })
-        continue
+        misses.push({ url: llmsUrl, status: res.status, error: res.error });
+        continue;
       }
-      const linkItems = res.stats?.linkItems ?? 0
+      const linkItems = res.stats?.linkItems ?? 0;
       if (linkItems === 0) {
-        misses.push({ url: llmsUrl, status: 'no link items' })
-        continue
+        misses.push({ url: llmsUrl, status: 'no link items' });
+        continue;
       }
-      hits.push({ ...res, llmsUrl, path: llmsPathFromUrl(llmsUrl) })
-      if (!res.usable) skipped.push({ url: llmsUrl, reason: res.reason })
+      hits.push({ ...res, llmsUrl, path: llmsPathFromUrl(llmsUrl) });
+      if (!res.usable) skipped.push({ url: llmsUrl, reason: res.reason });
       for (const nested of extractNestedLlmsUrls(res.parsed, sourceUrl.origin)) {
-        if (!triedUrls.has(nested)) next.push(nested)
+        if (!triedUrls.has(nested)) next.push(nested);
       }
     }
-    explicitFrontier = next
+    explicitFrontier = next;
   }
 
-  return { hits, misses, skipped }
+  return { hits, misses, skipped };
 }
 
 /**
@@ -4429,33 +4546,33 @@ async function discoverLlmsTxt(sourceUrl) {
  * any URL under that subtree. Returns null when there are no valid hits.
  */
 function mergeValidHits(hits) {
-  const valid = hits.filter((h) => h.usable)
-  if (valid.length === 0) return null
+  const valid = hits.filter(h => h.usable);
+  if (valid.length === 0) return null;
 
-  const deepestFirst = [...valid].sort((a, b) => b.path.length - a.path.length)
-  const shallowestFirst = [...valid].sort((a, b) => a.path.length - b.path.length)
+  const deepestFirst = [...valid].sort((a, b) => b.path.length - a.path.length);
+  const shallowestFirst = [...valid].sort((a, b) => a.path.length - b.path.length);
 
-  const claimed = new Map()
-  const sections = []
+  const claimed = new Map();
+  const sections = [];
   for (const hit of deepestFirst) {
     for (const section of hit.parsed.sections) {
-      const items = []
+      const items = [];
       for (const item of section.items) {
-        const key = llmsPageDedupeKey(item.url)
-        const existing = claimed.get(key)
+        const key = llmsPageDedupeKey(item.url);
+        const existing = claimed.get(key);
         if (existing) {
-          if (compareCanonicalUrlPreference(item.url, existing.url) < 0) existing.url = item.url
-          continue
+          if (compareCanonicalUrlPreference(item.url, existing.url) < 0) existing.url = item.url;
+          continue;
         }
-        claimed.set(key, item)
-        items.push(item)
+        claimed.set(key, item);
+        items.push(item);
       }
-      if (items.length > 0) sections.push({ title: section.title, items })
+      if (items.length > 0) sections.push({ title: section.title, items });
     }
   }
 
   // Prefer the root-most file's H1 title — usually the canonical site name.
-  const title = shallowestFirst.find((h) => h.parsed.title)?.parsed.title || null
+  const title = shallowestFirst.find(h => h.parsed.title)?.parsed.title || null;
 
   const stats = valid.reduce(
     (acc, h) => ({
@@ -4465,8 +4582,8 @@ function mergeValidHits(hits) {
       linkItems: acc.linkItems + (h.stats?.linkItems || 0),
     }),
     { conforming: 0, nonConforming: 0, total: 0, linkItems: 0 },
-  )
-  stats.ratio = stats.total === 0 ? 0 : stats.conforming / stats.total
+  );
+  stats.ratio = stats.total === 0 ? 0 : stats.conforming / stats.total;
 
   return {
     parsed: { title, sections },
@@ -4474,8 +4591,8 @@ function mergeValidHits(hits) {
     reason: null,
     stats,
     llmsUrl: shallowestFirst[0].llmsUrl,
-    sourceFiles: shallowestFirst.map((h) => h.llmsUrl),
-  }
+    sourceFiles: shallowestFirst.map(h => h.llmsUrl),
+  };
 }
 
 /**
@@ -4486,11 +4603,15 @@ async function fetchLlmsTxt(llmsUrl, options = {}) {
     const res = await fetch(llmsUrl, {
       redirect: 'follow',
       headers: { 'User-Agent': 'readme-cli-import' },
-    })
-    if (!res.ok) return { ok: false, status: res.status }
-    const text = await res.text()
-    const finalUrl = res.url || String(llmsUrl)
-    const analysis = analyzeLlmsTxt(text, finalUrl, finalUrl === String(llmsUrl) ? options : llmsParseOptionsForUrl(finalUrl))
+    });
+    if (!res.ok) return { ok: false, status: res.status };
+    const text = await res.text();
+    const finalUrl = res.url || String(llmsUrl);
+    const analysis = analyzeLlmsTxt(
+      text,
+      finalUrl,
+      finalUrl === String(llmsUrl) ? options : llmsParseOptionsForUrl(finalUrl),
+    );
     return {
       ok: true,
       status: res.status,
@@ -4499,9 +4620,9 @@ async function fetchLlmsTxt(llmsUrl, options = {}) {
       usable: analysis.usable,
       reason: analysis.reason,
       stats: analysis.stats,
-    }
+    };
   } catch (e) {
-    return { ok: false, error: e.message }
+    return { ok: false, error: e.message };
   }
 }
 
@@ -4526,7 +4647,7 @@ const WELL_KNOWN_DOC_SEGMENTS = new Set([
   'tutorial',
   'developers',
   'developer',
-])
+]);
 
 /**
  * Decide which path prefix to use when filtering sitemap URLs to "the docs
@@ -4536,13 +4657,13 @@ const WELL_KNOWN_DOC_SEGMENTS = new Set([
  * in that case we accept any URL on the same origin (no path filter).
  */
 function deriveSitemapScope(sourceUrl) {
-  const segs = sourceUrl.pathname.split('/').filter(Boolean)
+  const segs = sourceUrl.pathname.split('/').filter(Boolean);
   for (let i = segs.length - 1; i >= 0; i--) {
     if (WELL_KNOWN_DOC_SEGMENTS.has(segs[i].toLowerCase())) {
-      return '/' + segs.slice(0, i + 1).join('/') + '/'
+      return `/${segs.slice(0, i + 1).join('/')}/`;
     }
   }
-  return null
+  return null;
 }
 
 /**
@@ -4550,21 +4671,21 @@ function deriveSitemapScope(sourceUrl) {
  * appending `/sitemap.xml` at each level, ending at origin root.
  */
 function buildSitemapCandidates(sourceUrl) {
-  const out = []
-  const seen = new Set()
-  const add = (url) => {
+  const out = [];
+  const seen = new Set();
+  const add = url => {
     if (!seen.has(url)) {
-      seen.add(url)
-      out.push(url)
+      seen.add(url);
+      out.push(url);
     }
-  }
-  const origin = sourceUrl.origin
-  const segs = sourceUrl.pathname.split('/').filter(Boolean)
+  };
+  const origin = sourceUrl.origin;
+  const segs = sourceUrl.pathname.split('/').filter(Boolean);
   for (let i = segs.length; i >= 0; i--) {
-    const prefix = segs.slice(0, i).join('/')
-    add(`${origin}${prefix ? '/' + prefix : ''}/sitemap.xml`)
+    const prefix = segs.slice(0, i).join('/');
+    add(`${origin}${prefix ? `/${prefix}` : ''}/sitemap.xml`);
   }
-  return out
+  return out;
 }
 
 /**
@@ -4581,27 +4702,27 @@ async function fetchSitemap(sitemapUrl, scopePrefix, depth = 0) {
     const res = await fetch(sitemapUrl, {
       redirect: 'follow',
       headers: { 'User-Agent': 'readme-cli-import' },
-    })
-    if (!res.ok) return { ok: false, status: res.status }
-    const text = await res.text()
-    const parsed = parseSitemapXml(text)
-    if (!parsed) return { ok: false, error: 'not a sitemap' }
+    });
+    if (!res.ok) return { ok: false, status: res.status };
+    const text = await res.text();
+    const parsed = parseSitemapXml(text);
+    if (!parsed) return { ok: false, error: 'not a sitemap' };
 
     if (parsed.kind === 'urlset') {
-      const urls = parsed.locs.filter((u) => urlInScope(u, sitemapUrl, scopePrefix))
-      return { ok: true, urls }
+      const urls = parsed.locs.filter(u => urlInScope(u, sitemapUrl, scopePrefix));
+      return { ok: true, urls };
     }
 
-    if (depth >= 1) return { ok: true, urls: [] }
-    const children = parsed.locs.slice(0, 10)
-    const all = []
+    if (depth >= 1) return { ok: true, urls: [] };
+    const children = parsed.locs.slice(0, 10);
+    const all = [];
     for (const childUrl of children) {
-      const child = await fetchSitemap(childUrl, scopePrefix, depth + 1)
-      if (child.ok) all.push(...child.urls)
+      const child = await fetchSitemap(childUrl, scopePrefix, depth + 1);
+      if (child.ok) all.push(...child.urls);
     }
-    return { ok: true, urls: all }
+    return { ok: true, urls: all };
   } catch (e) {
-    return { ok: false, error: e.message }
+    return { ok: false, error: e.message };
   }
 }
 
@@ -4612,17 +4733,17 @@ async function fetchSitemap(sitemapUrl, scopePrefix, depth = 0) {
  * doesn't look like a sitemap (e.g. server returned a 200 HTML 404 page).
  */
 function parseSitemapXml(body) {
-  const isIndex = /<sitemapindex[\s>]/i.test(body)
-  const isUrlset = /<urlset[\s>]/i.test(body)
-  if (!isIndex && !isUrlset) return null
-  const locs = []
-  const re = /<loc>\s*([^<]+?)\s*<\/loc>/gi
-  let m
+  const isIndex = /<sitemapindex[\s>]/i.test(body);
+  const isUrlset = /<urlset[\s>]/i.test(body);
+  if (!isIndex && !isUrlset) return null;
+  const locs = [];
+  const re = /<loc>\s*([^<]+?)\s*<\/loc>/gi;
+  let m;
   while ((m = re.exec(body)) !== null) {
-    const url = decodeXmlEntities(m[1].trim())
-    if (url) locs.push(url)
+    const url = decodeXmlEntities(m[1].trim());
+    if (url) locs.push(url);
   }
-  return { kind: isIndex ? 'sitemapindex' : 'urlset', locs }
+  return { kind: isIndex ? 'sitemapindex' : 'urlset', locs };
 }
 
 function decodeXmlEntities(s) {
@@ -4631,25 +4752,25 @@ function decodeXmlEntities(s) {
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
+    .replace(/&apos;/g, "'");
 }
 
 function urlInScope(urlStr, sitemapUrl, scopePrefix) {
-  let u
+  let u;
   try {
-    u = new URL(urlStr)
+    u = new URL(urlStr);
   } catch {
-    return false
+    return false;
   }
-  let sm
+  let sm;
   try {
-    sm = new URL(sitemapUrl)
+    sm = new URL(sitemapUrl);
   } catch {
-    return false
+    return false;
   }
-  if (u.origin !== sm.origin) return false
-  if (scopePrefix && !u.pathname.startsWith(scopePrefix)) return false
-  return true
+  if (u.origin !== sm.origin) return false;
+  if (scopePrefix && !u.pathname.startsWith(scopePrefix)) return false;
+  return true;
 }
 
 /**
@@ -4660,33 +4781,33 @@ function urlInScope(urlStr, sitemapUrl, scopePrefix) {
  * (.json/.yaml/.yml) go to `oasSink` instead of becoming pages.
  */
 function sitemapUrlsToKnownUrls(urls, oasSink) {
-  const out = []
-  const seen = new Set()
+  const out = [];
+  const seen = new Set();
   for (const url of urls) {
-    let pathname
+    let pathname;
     try {
-      pathname = new URL(url).pathname
+      pathname = new URL(url).pathname;
     } catch {
-      continue
+      continue;
     }
-    const norm = normalizePath(url)
-    if (seen.has(norm)) continue
-    seen.add(norm)
+    const norm = normalizePath(url);
+    if (seen.has(norm)) continue;
+    seen.add(norm);
     if (/\.(json|ya?ml)$/i.test(pathname)) {
-      if (oasSink) oasSink.push({ url, text: null, source: 'sitemap' })
-      continue
+      if (oasSink) oasSink.push({ url, text: null, source: 'sitemap' });
+      continue;
     }
-    const segs = pathname.split('/').filter(Boolean)
-    const last = segs[segs.length - 1] || ''
-    const slug = last.replace(/\.[a-z0-9]+$/i, '')
-    if (!slug) continue
+    const segs = pathname.split('/').filter(Boolean);
+    const last = segs[segs.length - 1] || '';
+    const slug = last.replace(/\.[a-z0-9]+$/i, '');
+    if (!slug) continue;
     out.push({
       title: titleCase(slug),
       url,
       description: null,
-    })
+    });
   }
-  return out
+  return out;
 }
 
 /**
@@ -4694,13 +4815,13 @@ function sitemapUrlsToKnownUrls(urls, oasSink) {
  * with no leading bullet character, to show them as children of the parent.
  */
 function printPagesTree(pages, indentLevel) {
-  const indent = '  '.repeat(indentLevel)
+  const indent = '  '.repeat(indentLevel);
   for (const page of pages) {
-    const desc = page.description ? ` ${styles.dim('— ' + page.description)}` : ''
-    const url = page.url ? ` ${styles.dim(page.url)}` : ''
-    console.log(`${indent}${styles.dim('·')} ${page.title}${url}${desc}`)
+    const desc = page.description ? ` ${styles.dim(`— ${page.description}`)}` : '';
+    const url = page.url ? ` ${styles.dim(page.url)}` : '';
+    console.log(`${indent}${styles.dim('·')} ${page.title}${url}${desc}`);
     if (page.pages && page.pages.length > 0) {
-      printPagesTree(page.pages, indentLevel + 1)
+      printPagesTree(page.pages, indentLevel + 1);
     }
   }
 }
@@ -4715,43 +4836,46 @@ function printPagesTree(pages, indentLevel) {
  * TODO: Remove after fixing on the Gitto/ReadMe side.
  */
 function collapseRedundantLayers(container) {
-  for (const child of container.pages || []) collapseRedundantLayers(child)
+  for (const child of container.pages || []) collapseRedundantLayers(child);
   while ((container.pages || []).length === 1) {
-    const only = container.pages[0]
-    if (only.url) break // real page (gets x-import), just has children
-    if (!only.pages || only.pages.length === 0) break // nothing to lift up
-    container.pages = only.pages
+    const only = container.pages[0];
+    if (only.url) break; // real page (gets x-import), just has children
+    if (!only.pages || only.pages.length === 0) break; // nothing to lift up
+    container.pages = only.pages;
   }
 }
 
 // Some sites serve regular guides under an /api/docs/* path (e.g. /api/docs/guides/*,
-// /api/docs/pricing). Treat a URL as real docs when it has both `api` and `docs` segments 
+// /api/docs/pricing). Treat a URL as real docs when it has both `api` and `docs` segments
 // and the segment right after `docs` is not itself a reference/api slug.
 function isDocsUnderApiPath(url) {
   try {
-    const segs = new URL(url).pathname.split('/').filter(Boolean).map((s) => s.toLowerCase())
-    const docsIdx = segs.findIndex((s) => s === 'docs' || s === 'doc')
-    if (!segs.includes('api') || docsIdx === -1) return false
-    const afterDocs = segs[docsIdx + 1]
-    return !afterDocs || !/^(api|api[-_]?reference|reference)$/.test(afterDocs)
+    const segs = new URL(url).pathname
+      .split('/')
+      .filter(Boolean)
+      .map(s => s.toLowerCase());
+    const docsIdx = segs.findIndex(s => s === 'docs' || s === 'doc');
+    if (!segs.includes('api') || docsIdx === -1) return false;
+    const afterDocs = segs[docsIdx + 1];
+    return !afterDocs || !/^(api|api[-_]?reference|reference)$/.test(afterDocs);
   } catch {
-    return false
+    return false;
   }
 }
 
 // Prune a page tree, keeping only URL pages whose url passes `predicate` plus
 // empty-parent nodes that still have surviving descendants. Nesting preserved.
 function filterUrlPagesTree(pages, predicate) {
-  const out = []
+  const out = [];
   for (const p of pages || []) {
-    const keptKids = filterUrlPagesTree(p.pages, predicate)
+    const keptKids = filterUrlPagesTree(p.pages, predicate);
     if (p.url) {
-      if (predicate(p.url)) out.push({ ...p, pages: keptKids })
+      if (predicate(p.url)) out.push({ ...p, pages: keptKids });
     } else if (keptKids.length > 0) {
-      out.push({ ...p, pages: keptKids })
+      out.push({ ...p, pages: keptKids });
     }
   }
-  return out
+  return out;
 }
 
 /**
@@ -4762,46 +4886,46 @@ function filterUrlPagesTree(pages, predicate) {
  * Writes _order.yaml per directory so sidebar order matches input order.
  */
 function stageOrganized(organized, stagingDir, opts = {}) {
-  const pickIcon = makeIconPicker()
-  const byDir = new Map()
-  const subDirsByTopDir = new Map()
-  const counts = { fileCount: 0, skippedApiRef: 0 }
-  const skipApiReference = !!opts.skipApiReference
-  const llmsPaths = opts.llmsPaths || new Set()
+  const pickIcon = makeIconPicker();
+  const byDir = new Map();
+  const subDirsByTopDir = new Map();
+  const counts = { fileCount: 0, skippedApiRef: 0 };
+  const skipApiReference = !!opts.skipApiReference;
+  const llmsPaths = opts.llmsPaths || new Set();
 
-  const eligibleCategories = []
+  const eligibleCategories = [];
   for (const cat of organized.categories || []) {
     if (skipApiReference && routeCategory(cat.title).topDir === 'reference') {
       // A reference-routed cluster can mix genuine OAS pages (/api/reference/*)
       // with real guides served under /api/docs/*. Rescue the docs subtree —
       // retitled so it routes to docs/ instead of the dropped reference/
-      const rescuedPages = filterUrlPagesTree(cat.pages || [], isDocsUnderApiPath)
-      const totalDeep = collectUrlPagesDeep(cat.pages || []).length
-      const rescuedDeep = collectUrlPagesDeep(rescuedPages).length
+      const rescuedPages = filterUrlPagesTree(cat.pages || [], isDocsUnderApiPath);
+      const totalDeep = collectUrlPagesDeep(cat.pages || []).length;
+      const rescuedDeep = collectUrlPagesDeep(rescuedPages).length;
       if (rescuedDeep > 0) {
-        eligibleCategories.push({ ...cat, title: 'API Docs', pages: rescuedPages })
+        eligibleCategories.push({ ...cat, title: 'API Docs', pages: rescuedPages });
       }
-      counts.skippedApiRef += totalDeep - rescuedDeep
-      continue
+      counts.skippedApiRef += totalDeep - rescuedDeep;
+      continue;
     }
-    eligibleCategories.push(cat)
+    eligibleCategories.push(cat);
   }
 
   // TODO: Remove after readme/gitto handles better
-  for (const cat of eligibleCategories) collapseRedundantLayers(cat)
+  for (const cat of eligibleCategories) collapseRedundantLayers(cat);
 
   // Slug names must be unique
-  const slugFor = opts.slugFor || ensureUniqueSlugs(eligibleCategories)
-  disambiguateChangelogSiblingSlugs(eligibleCategories, slugFor)
+  const slugFor = opts.slugFor || ensureUniqueSlugs(eligibleCategories);
+  disambiguateChangelogSiblingSlugs(eligibleCategories, slugFor);
 
-  const labelFor = (p) => {
-    if (p.url) return p.url
-    if (p._emptyParent && p._virtualPathSegs) return `(empty) /${p._virtualPathSegs.join('/')}`
-    return '(group-only)'
-  }
-  const urlWidth = Math.max(...[...slugFor.keys()].map((p) => labelFor(p).length))
+  const labelFor = p => {
+    if (p.url) return p.url;
+    if (p._emptyParent && p._virtualPathSegs) return `(empty) /${p._virtualPathSegs.join('/')}`;
+    return '(group-only)';
+  };
+  const urlWidth = Math.max(...[...slugFor.keys()].map(p => labelFor(p).length));
   for (const [page, slug] of slugFor) {
-    console.log(`${labelFor(page).padEnd(urlWidth)} → ${slug}`)
+    console.log(`${labelFor(page).padEnd(urlWidth)} → ${slug}`);
   }
 
   /**
@@ -4814,57 +4938,57 @@ function stageOrganized(organized, stagingDir, opts = {}) {
    * folder a contentless placeholder parent and the sibling a stray page.
    */
   function writePage(page, dir, topDir, isSubPage = false) {
-    const slug = slugFor.get(page)
+    const slug = slugFor.get(page);
 
     // Group-only nodes (e.g. a resource sub-group within API Reference) have
     // no backing page on the source site — they're pure sidebar containers.
     // Skip the stub write but still recurse so their children land in the
     // right subdirectory.
-    const isEmptyParent = !!page._emptyParent
-    const isGroupOnly = !page.url && !isEmptyParent
-    const children = page.pages || []
-    const hasChildren = children.length > 0
+    const isEmptyParent = !!page._emptyParent;
+    const isGroupOnly = !page.url && !isEmptyParent;
+    const children = page.pages || [];
+    const hasChildren = children.length > 0;
 
     if (!isGroupOnly) {
       // Parents-with-children store their content INSIDE the folder as
       // `index.md`; leaf pages stay as `<slug>.md`.
-      const relFilePath = hasChildren ? `${dir}/${slug}/index.md` : `${dir}/${slug}.md`
-      let frontmatter
+      const relFilePath = hasChildren ? `${dir}/${slug}/index.md` : `${dir}/${slug}.md`;
+      let frontmatter;
       if (isEmptyParent) {
         // Synthetic parent page: covers a missing URL segment so descendants
         // nest at the right depth. No source URL to import. Reuse the same
         // pickIcon heuristic leaf pages use so the parent gets a topical
         // icon — the sidebar already renders an expand chevron, so a
         // hardcoded `fa-folder` would just look like a placeholder.
-        frontmatter = { title: page.title, icon: formatIconClass(pickIcon(slug, page.title)) }
+        frontmatter = { title: page.title, icon: formatIconClass(pickIcon(slug, page.title)) };
       } else {
         // Sub-pages don't get icons per design decision.
-        frontmatter = buildFrontmatter(topDir, page, slug, pickIcon, { skipIcon: isSubPage })
+        frontmatter = buildFrontmatter(topDir, page, slug, pickIcon, { skipIcon: isSubPage });
         // x-import points at the source URL for this stub. The content-import
         // step reads it to fetch the page body. x-prefixed custom field is the
         // git-format convention for metadata the schema doesn't know about.
-        frontmatter['x-import'] = toBrowsableUrl(page.url)
+        frontmatter['x-import'] = toBrowsableUrl(page.url);
         // Pages sourced from llms.txt serve raw markdown at `<url>.md`; flag them
         // so the runner knows it can append `.md` when fetching the body.
-        if (llmsPaths.has(normalizePath(page.url))) frontmatter['x-from-llms'] = 'true'
+        if (llmsPaths.has(normalizePath(page.url))) frontmatter['x-from-llms'] = 'true';
         // hide pages that need import
-        frontmatter.hidden = 'true'
+        frontmatter.hidden = 'true';
       }
 
-      const absPath = path.join(stagingDir, relFilePath)
-      fs.mkdirSync(path.dirname(absPath), { recursive: true })
-      fs.writeFileSync(absPath, toFrontmatter(frontmatter))
-      counts.fileCount++
+      const absPath = path.join(stagingDir, relFilePath);
+      fs.mkdirSync(path.dirname(absPath), { recursive: true });
+      fs.writeFileSync(absPath, toFrontmatter(frontmatter));
+      counts.fileCount++;
 
       // The sidebar entry is `slug` for both leaves (`<slug>.md`) and parents
       // (the `<slug>/` folder) — `index` is never listed, it's implicit.
-      if (!byDir.has(dir)) byDir.set(dir, [])
-      byDir.get(dir).push(slug)
+      if (!byDir.has(dir)) byDir.set(dir, []);
+      byDir.get(dir).push(slug);
     }
 
     if (hasChildren) {
-      const subDir = `${dir}/${slug}`
-      for (const child of children) writePage(child, subDir, topDir, true)
+      const subDir = `${dir}/${slug}`;
+      for (const child of children) writePage(child, subDir, topDir, true);
     }
   }
 
@@ -4876,87 +5000,87 @@ function stageOrganized(organized, stagingDir, opts = {}) {
   // (and thus slug) is globally unique, and back it with an `index.md` so it's a
   // real titled parent. Top-level categories are matched by title, not slug, so
   // their folders are left untouched.
-  const usedContainerSlugs = new Set(slugFor.values())
-  const segRename = new Map() // original path prefix -> unique folder name
-  const nestedContainers = new Map() // renamed dir (rel to stagingDir) -> display title
-  const uniqueContainerName = (base) => {
-    let name = base || 'section'
+  const usedContainerSlugs = new Set(slugFor.values());
+  const segRename = new Map(); // original path prefix -> unique folder name
+  const nestedContainers = new Map(); // renamed dir (rel to stagingDir) -> display title
+  const uniqueContainerName = base => {
+    let name = base || 'section';
     if (usedContainerSlugs.has(name)) {
-      let n = 2
-      while (usedContainerSlugs.has(`${name}-${n}`)) n++
-      name = `${name}-${n}`
+      let n = 2;
+      while (usedContainerSlugs.has(`${name}-${n}`)) n++;
+      name = `${name}-${n}`;
     }
-    usedContainerSlugs.add(name)
-    return name
-  }
+    usedContainerSlugs.add(name);
+    return name;
+  };
   const namespaceSubDir = (topDir, subDir) => {
-    const segs = subDir.split('/').filter(Boolean)
-    const out = []
+    const segs = subDir.split('/').filter(Boolean);
+    const out = [];
     for (let i = 0; i < segs.length; i++) {
       if (i === 0) {
-        out.push(segs[0])
-        continue
+        out.push(segs[0]);
+        continue;
       }
-      const origPrefix = segs.slice(0, i + 1).join('/')
-      let name = segRename.get(origPrefix)
+      const origPrefix = segs.slice(0, i + 1).join('/');
+      let name = segRename.get(origPrefix);
       if (!name) {
-        name = uniqueContainerName(kebabCase(segs.slice(0, i + 1).join('-')))
-        segRename.set(origPrefix, name)
-        nestedContainers.set(`${topDir}/${[...out, name].join('/')}`, segs[i])
+        name = uniqueContainerName(kebabCase(segs.slice(0, i + 1).join('-')));
+        segRename.set(origPrefix, name);
+        nestedContainers.set(`${topDir}/${[...out, name].join('/')}`, segs[i]);
       }
-      out.push(name)
+      out.push(name);
     }
-    return out.join('/')
-  }
+    return out.join('/');
+  };
 
   for (const cat of eligibleCategories) {
-    const { topDir, subDir } = routeCategory(cat.title)
-    const routedSubDir = subDir ? namespaceSubDir(topDir, subDir) : subDir
-    const dir = routedSubDir ? `${topDir}/${routedSubDir}` : topDir
+    const { topDir, subDir } = routeCategory(cat.title);
+    const routedSubDir = subDir ? namespaceSubDir(topDir, subDir) : subDir;
+    const dir = routedSubDir ? `${topDir}/${routedSubDir}` : topDir;
     if (routedSubDir) {
-      if (!subDirsByTopDir.has(topDir)) subDirsByTopDir.set(topDir, [])
-      if (!subDirsByTopDir.get(topDir).includes(routedSubDir)) subDirsByTopDir.get(topDir).push(routedSubDir)
+      if (!subDirsByTopDir.has(topDir)) subDirsByTopDir.set(topDir, []);
+      if (!subDirsByTopDir.get(topDir).includes(routedSubDir)) subDirsByTopDir.get(topDir).push(routedSubDir);
     }
 
-    for (const page of cat.pages || []) writePage(page, dir, topDir, false)
+    for (const page of cat.pages || []) writePage(page, dir, topDir, false);
   }
 
   // Back each namespaced nested-category folder with a titled parent page so
   // gitto renders it named instead of as an empty placeholder. No x-import —
   // these are pure nav containers, so the body stays empty and format skips them.
   for (const [relDir, title] of nestedContainers) {
-    const idxPath = path.join(stagingDir, relDir, 'index.md')
-    if (fs.existsSync(idxPath)) continue
-    fs.mkdirSync(path.dirname(idxPath), { recursive: true })
-    const fm = { title, icon: formatIconClass(pickIcon(path.basename(relDir), title)) }
-    fs.writeFileSync(idxPath, toFrontmatter(fm))
-    counts.fileCount++
+    const idxPath = path.join(stagingDir, relDir, 'index.md');
+    if (fs.existsSync(idxPath)) continue;
+    fs.mkdirSync(path.dirname(idxPath), { recursive: true });
+    const fm = { title, icon: formatIconClass(pickIcon(path.basename(relDir), title)) };
+    fs.writeFileSync(idxPath, toFrontmatter(fm));
+    counts.fileCount++;
   }
 
   // Per-directory _order.yaml preserves input order in the sidebar.
   for (const [dir, slugs] of byDir) {
-    const orderPath = path.join(stagingDir, dir, '_order.yaml')
-    const body = slugs.map((s) => `- ${yamlSafeSlug(s)}`).join('\n') + '\n'
-    fs.writeFileSync(orderPath, body)
+    const orderPath = path.join(stagingDir, dir, '_order.yaml');
+    const body = `${slugs.map(s => `- ${yamlSafeSlug(s)}`).join('\n')}\n`;
+    fs.writeFileSync(orderPath, body);
   }
 
   // Top-level _order.yaml (e.g. docs/_order.yaml) lists category subfolders.
   for (const [topDir, subs] of subDirsByTopDir) {
-    const orderPath = path.join(stagingDir, topDir, '_order.yaml')
-    const body = subs.map((s) => `- ${yamlSafeSlug(s)}`).join('\n') + '\n'
-    fs.writeFileSync(orderPath, body)
+    const orderPath = path.join(stagingDir, topDir, '_order.yaml');
+    const body = `${subs.map(s => `- ${yamlSafeSlug(s)}`).join('\n')}\n`;
+    fs.writeFileSync(orderPath, body);
   }
 
-  return { fileCount: counts.fileCount, dirCount: byDir.size, skippedApiRef: counts.skippedApiRef }
+  return { fileCount: counts.fileCount, dirCount: byDir.size, skippedApiRef: counts.skippedApiRef };
 }
 
 function countPagesDeep(pages) {
-  let n = 0
+  let n = 0;
   for (const p of pages || []) {
-    if (p.url) n++
-    if (p.pages && p.pages.length) n += countPagesDeep(p.pages)
+    if (p.url) n++;
+    if (p.pages && p.pages.length) n += countPagesDeep(p.pages);
   }
-  return n
+  return n;
 }
 
 /**
@@ -4969,22 +5093,22 @@ function countPagesDeep(pages) {
  * @returns {void}
  */
 function disambiguateChangelogSiblingSlugs(categories, slugFor) {
-  const changelogPages = []
+  const changelogPages = [];
   for (const category of categories) {
-    const route = routeCategory(category.title)
-    if (route.topDir !== 'docs' || route.subDir !== 'Changelog') continue
-    changelogPages.push(...(category.pages || []))
+    const route = routeCategory(category.title);
+    if (route.topDir !== 'docs' || route.subDir !== 'Changelog') continue;
+    changelogPages.push(...(category.pages || []));
   }
 
-  const planSiblings = (pages) => {
-    const plannedPages = pages.filter((page) => slugFor.has(page))
+  const planSiblings = pages => {
+    const plannedPages = pages.filter(page => slugFor.has(page));
     const plannedSlugs = allocateChangelogFilenames(
-      plannedPages.map((page) => ({ ancestors: [], slug: slugFor.get(page) })),
-    )
-    for (const [index, page] of plannedPages.entries()) slugFor.set(page, plannedSlugs[index])
-    for (const page of pages) planSiblings(page.pages || [])
-  }
-  planSiblings(changelogPages)
+      plannedPages.map(page => ({ ancestors: [], slug: slugFor.get(page) })),
+    );
+    for (const [index, page] of plannedPages.entries()) slugFor.set(page, plannedSlugs[index]);
+    for (const page of pages) planSiblings(page.pages || []);
+  };
+  planSiblings(changelogPages);
 }
 
 /**
@@ -4994,28 +5118,28 @@ function disambiguateChangelogSiblingSlugs(categories, slugFor) {
  * @returns {string[]} Filenames in the same order as `pages`, without extensions.
  */
 function allocateChangelogFilenames(pages) {
-  const baseSlugs = pages.map((page) => [...page.ancestors, page.slug].join('-'))
-  const baseNames = baseSlugs.map((slug) => slug.toLowerCase())
-  const counts = new Map()
-  for (const name of baseNames) counts.set(name, (counts.get(name) || 0) + 1)
+  const baseSlugs = pages.map(page => [...page.ancestors, page.slug].join('-'));
+  const baseNames = baseSlugs.map(slug => slug.toLowerCase());
+  const counts = new Map();
+  for (const name of baseNames) counts.set(name, (counts.get(name) || 0) + 1);
 
-  const reserved = new Set(baseNames)
-  const allocated = new Set()
+  const reserved = new Set(baseNames);
+  const allocated = new Set();
   return baseSlugs.map((baseSlug, index) => {
-    const baseName = baseNames[index]
+    const baseName = baseNames[index];
     if (counts.get(baseName) === 1 || !allocated.has(baseName)) {
-      allocated.add(baseName)
-      return baseSlug
+      allocated.add(baseName);
+      return baseSlug;
     }
 
     for (let suffix = 2; ; suffix++) {
-      const filename = `${baseSlug}-${suffix}`
-      const name = filename.toLowerCase()
-      if (reserved.has(name) || allocated.has(name)) continue
-      allocated.add(name)
-      return filename
+      const filename = `${baseSlug}-${suffix}`;
+      const name = filename.toLowerCase();
+      if (reserved.has(name) || allocated.has(name)) continue;
+      allocated.add(name);
+      return filename;
     }
-  })
+  });
 }
 
 /**
@@ -5024,55 +5148,62 @@ function allocateChangelogFilenames(pages) {
  * command-line nor programmatic callers can produce the legacy layout.
  */
 function finalizeChangelogs(stagingDir) {
-  const srcDir = path.join(stagingDir, 'docs', 'Changelog')
-  if (!fs.existsSync(srcDir) || !fs.statSync(srcDir).isDirectory()) return 0
+  const srcDir = path.join(stagingDir, 'docs', 'Changelog');
+  if (!fs.existsSync(srcDir) || !fs.statSync(srcDir).isDirectory()) return 0;
 
-  const dstDir = path.join(stagingDir, 'changelogs')
-  fs.renameSync(srcDir, dstDir)
+  const dstDir = path.join(stagingDir, 'changelogs');
+  fs.renameSync(srcDir, dstDir);
 
-  const pages = []
+  const pages = [];
   const walk = (dir, ancestors) => {
-    const entries = fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+    const entries = fs
+      .readdirSync(dir, { withFileTypes: true })
+      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     for (const entry of entries) {
-      const full = path.join(dir, entry.name)
+      const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        walk(full, [...ancestors, entry.name])
-        continue
+        walk(full, [...ancestors, entry.name]);
+        continue;
       }
-      if (!entry.name.endsWith('.md')) continue
-      const parsed = parseFrontmatter(fs.readFileSync(full, 'utf-8'))
-      if (!parsed.data?.['x-import']) continue
+      if (!entry.name.endsWith('.md')) continue;
+      const parsed = parseFrontmatter(fs.readFileSync(full, 'utf-8'));
+      if (!parsed.data?.['x-import']) continue;
       if (entry.name === 'index.md' && ancestors.length > 0) {
-        pages.push({ ancestors: ancestors.slice(0, -1), slug: ancestors.at(-1), content: parsed.content, data: parsed.data })
-        continue
+        pages.push({
+          ancestors: ancestors.slice(0, -1),
+          slug: ancestors.at(-1),
+          content: parsed.content,
+          data: parsed.data,
+        });
+        continue;
       }
-      pages.push({ ancestors, slug: entry.name.replace(/\.md$/, ''), content: parsed.content, data: parsed.data })
+      pages.push({ ancestors, slug: entry.name.replace(/\.md$/, ''), content: parsed.content, data: parsed.data });
     }
-  }
-  walk(dstDir, [])
+  };
+  walk(dstDir, []);
 
-  fs.rmSync(dstDir, { recursive: true, force: true })
-  fs.mkdirSync(dstDir, { recursive: true })
+  fs.rmSync(dstDir, { recursive: true, force: true });
+  fs.mkdirSync(dstDir, { recursive: true });
 
   for (const [index, filename] of allocateChangelogFilenames(pages).entries()) {
-    const page = pages[index]
-    const frontmatter = { ...page.data }
-    delete frontmatter.icon
-    fs.writeFileSync(path.join(dstDir, `${filename}.md`), toFrontmatter(frontmatter, page.content))
+    const page = pages[index];
+    const frontmatter = { ...page.data };
+    delete frontmatter.icon;
+    fs.writeFileSync(path.join(dstDir, `${filename}.md`), toFrontmatter(frontmatter, page.content));
   }
 
-  const docsOrderPath = path.join(stagingDir, 'docs', '_order.yaml')
+  const docsOrderPath = path.join(stagingDir, 'docs', '_order.yaml');
   if (fs.existsSync(docsOrderPath)) {
-    const entries = yamlRequire().load(fs.readFileSync(docsOrderPath, 'utf-8'))
-    const filtered = Array.isArray(entries) ? entries.filter((entry) => entry !== 'Changelog') : []
+    const entries = yamlRequire().load(fs.readFileSync(docsOrderPath, 'utf-8'));
+    const filtered = Array.isArray(entries) ? entries.filter(entry => entry !== 'Changelog') : [];
     if (filtered.length > 0) {
-      fs.writeFileSync(docsOrderPath, filtered.map((entry) => `- ${yamlSafeSlug(entry)}`).join('\n') + '\n')
+      fs.writeFileSync(docsOrderPath, `${filtered.map(entry => `- ${yamlSafeSlug(entry)}`).join('\n')}\n`);
     } else {
-      fs.rmSync(docsOrderPath)
+      fs.rmSync(docsOrderPath);
     }
   }
 
-  return pages.length
+  return pages.length;
 }
 
 /**
@@ -5080,44 +5211,46 @@ function finalizeChangelogs(stagingDir) {
  * category subdir. docs/ is the only top dir that takes a subfolder.
  */
 function routeCategory(title) {
-  const t = (title || '').trim()
-  if (/^(api[ -]?reference|reference|api|endpoints?)$/i.test(t)) return { topDir: 'reference', subDir: null }
+  const t = (title || '').trim();
+  if (/^(api[ -]?reference|reference|api|endpoints?)$/i.test(t)) return { topDir: 'reference', subDir: null };
   // Changelog categories initially share a staging folder before they are
   // finalized as canonical top-level changelogs/ output.
-  if (/^(changelog|change[ -]?log|release[ -]?notes?|releases?|what'?s[ -]?new)$/i.test(t)) return { topDir: 'docs', subDir: 'Changelog' }
-  if (/^(recipes?|cookbook|tutorials?|how[ -]?tos?)$/i.test(t)) return { topDir: 'recipes', subDir: null }
-  if (/^(custom[ -]?pages?|landing( page)?s?)$/i.test(t)) return { topDir: 'custom_pages', subDir: null }
-  if (/^(custom[ -]?blocks?|snippets?|reusable( content)?)$/i.test(t)) return { topDir: 'custom_blocks', subDir: null }
-  return { topDir: 'docs', subDir: t || 'Documentation' }
+  if (/^(changelog|change[ -]?log|release[ -]?notes?|releases?|what'?s[ -]?new)$/i.test(t)) {
+    return { topDir: 'docs', subDir: 'Changelog' };
+  }
+  if (/^(recipes?|cookbook|tutorials?|how[ -]?tos?)$/i.test(t)) return { topDir: 'recipes', subDir: null };
+  if (/^(custom[ -]?pages?|landing( page)?s?)$/i.test(t)) return { topDir: 'custom_pages', subDir: null };
+  if (/^(custom[ -]?blocks?|snippets?|reusable( content)?)$/i.test(t)) return { topDir: 'custom_blocks', subDir: null };
+  return { topDir: 'docs', subDir: t || 'Documentation' };
 }
 
 function buildFrontmatter(topDir, page, slug, pickIcon, opts = {}) {
-  const fm = {}
-  const title = (page.title || titleCase(slug)).trim()
+  const fm = {};
+  const title = (page.title || titleCase(slug)).trim();
 
   if (topDir === 'custom_blocks') {
-    fm.name = title
+    fm.name = title;
   } else {
-    fm.title = title
+    fm.title = title;
   }
 
   if (page.description && page.description.trim()) {
-    fm.excerpt = page.description.trim()
+    fm.excerpt = page.description.trim();
   }
 
   // Sub-pages skip icons by design — the parent carries the nav icon, and
   // children render without one.
-  if (opts.skipIcon) return fm
+  if (opts.skipIcon) return fm;
 
   // Recipes use `recipe.icon` instead of a top-level `icon` (per git-format schema).
-  const icon = pickIcon(slug, title)
+  const icon = pickIcon(slug, title);
   if (topDir === 'recipes') {
-    fm.recipe = { color: '#018ef5', icon: icon || 'book-open' }
+    fm.recipe = { color: '#018ef5', icon: icon || 'book-open' };
   } else if (topDir === 'docs' || topDir === 'reference') {
-    fm.icon = formatIconClass(icon)
+    fm.icon = formatIconClass(icon);
   }
 
-  return fm
+  return fm;
 }
 
 /**
@@ -5151,107 +5284,105 @@ function buildFrontmatter(topDir, page, slug, pickIcon, opts = {}) {
  * // }
  */
 export function ensureUniqueSlugs(categories) {
-  const entries = []
-  const segmentsFor = (p) => {
+  const entries = [];
+  const segmentsFor = p => {
     if (p._virtualPathSegs && p._virtualPathSegs.length > 0) {
-      return p._virtualPathSegs
-        .map((s) => stripSegmentExtensions(s).replace(/^\d+[-_.]/, ''))
-        .filter(Boolean)
+      return p._virtualPathSegs.map(s => stripSegmentExtensions(s).replace(/^\d+[-_.]/, '')).filter(Boolean);
     }
-    return extractUrlPathSegments(p.url)
-  }
-  const normalizedSegmentsFor = (p) => {
-    const semanticSegments = segmentsFor(p).filter((seg) => !isGenericDocsSegment(seg))
-    return semanticSegments.length > 0 ? semanticSegments : ['introduction']
-  }
+    return extractUrlPathSegments(p.url);
+  };
+  const normalizedSegmentsFor = p => {
+    const semanticSegments = segmentsFor(p).filter(seg => !isGenericDocsSegment(seg));
+    return semanticSegments.length > 0 ? semanticSegments : ['introduction'];
+  };
   const expansionSegmentsFor = (p, categorySeg) => {
-    const pageSegments = normalizedSegmentsFor(p)
-    if (!categorySeg || isGenericDocsSegment(categorySeg)) return pageSegments
-    return [categorySeg, ...pageSegments]
-  }
+    const pageSegments = normalizedSegmentsFor(p);
+    if (!categorySeg || isGenericDocsSegment(categorySeg)) return pageSegments;
+    return [categorySeg, ...pageSegments];
+  };
   const walk = (pages, categorySeg) => {
     for (const p of pages || []) {
-      const segments = expansionSegmentsFor(p, categorySeg)
+      const segments = expansionSegmentsFor(p, categorySeg);
       // Synthetic/empty-parent nodes have no content. Never let one win a bare
       // single-segment slug (e.g. a placeholder `…/vercel-flags/cli` claiming
       // `cli`), or it squats the slug a real overview page wants and ReadMe
       // redirects the content-less parent to its first child. Floor their slug
       // at 2 trailing segments so they namespace to `vercel-flags-cli` instead.
-      entries.push({ page: p, segments, fallback: p.title, depth: p._emptyParent ? 2 : 1 })
-      if (p.pages) walk(p.pages, categorySeg)
+      entries.push({ page: p, segments, fallback: p.title, depth: p._emptyParent ? 2 : 1 });
+      if (p.pages) walk(p.pages, categorySeg);
     }
-  }
+  };
   const genericCategoriesFirst = [...(categories || [])].sort((a, b) => {
-    const aGeneric = isGenericDocsSegment(a?.title || '')
-    const bGeneric = isGenericDocsSegment(b?.title || '')
-    return Number(bGeneric) - Number(aGeneric)
-  })
+    const aGeneric = isGenericDocsSegment(a?.title || '');
+    const bGeneric = isGenericDocsSegment(b?.title || '');
+    return Number(bGeneric) - Number(aGeneric);
+  });
   for (const c of genericCategoriesFirst) {
-    const rawTitle = (c?.title || '').trim()
-    const categorySeg = rawTitle ? kebabCase(rawTitle) : ''
-    walk(c.pages, categorySeg)
+    const rawTitle = (c?.title || '').trim();
+    const categorySeg = rawTitle ? kebabCase(rawTitle) : '';
+    walk(c.pages, categorySeg);
   }
 
-  const slugFor = (e) => {
-    if (e.segments.length === 0) return kebabCase(e.fallback || 'page') || 'page'
-    const start = Math.max(0, e.segments.length - e.depth)
-    return kebabCase(e.segments.slice(start).join('-')) || 'page'
-  }
+  const slugFor = e => {
+    if (e.segments.length === 0) return kebabCase(e.fallback || 'page') || 'page';
+    const start = Math.max(0, e.segments.length - e.depth);
+    return kebabCase(e.segments.slice(start).join('-')) || 'page';
+  };
 
   // Iteratively grow any colliding group by one segment until stable. Each
   // pass only grows pages that still have headroom (depth < segments.length);
   // a page stuck at full depth stays put while its peers keep expanding.
   while (true) {
-    const groups = new Map()
+    const groups = new Map();
     for (const e of entries) {
-      const s = slugFor(e)
-      if (!groups.has(s)) groups.set(s, [])
-      groups.get(s).push(e)
+      const s = slugFor(e);
+      if (!groups.has(s)) groups.set(s, []);
+      groups.get(s).push(e);
     }
-    let grew = false
+    let grew = false;
     for (const group of groups.values()) {
-      if (group.length < 2) continue
+      if (group.length < 2) continue;
       for (const e of group) {
         if (e.depth < e.segments.length) {
-          e.depth++
-          grew = true
+          e.depth++;
+          grew = true;
         }
       }
     }
-    if (!grew) break
+    if (!grew) break;
   }
 
-  const describe = (x) => `"${x.page.title || '(untitled)'}"${x.page.url ? ` <${x.page.url}>` : ' (group-only)'}`
-  const used = new Set()
-  const result = new Map()
+  const describe = x => `"${x.page.title || '(untitled)'}"${x.page.url ? ` <${x.page.url}>` : ' (group-only)'}`;
+  const used = new Set();
+  const result = new Map();
   for (const e of entries) {
-    const base = slugFor(e)
-    let slug = base
+    const base = slugFor(e);
+    let slug = base;
     if (used.has(slug)) {
-      let n = 2
-      while (used.has(`${slug}-${n}`)) n++
-      slug = `${base}-${n}`
+      let n = 2;
+      while (used.has(`${slug}-${n}`)) n++;
+      slug = `${base}-${n}`;
       styles.error(
         `Slug collision after segment expansion: ${base} — falling back to ${slug} for ${describe(e)}. ` +
-        `Pages were deduped by path before organize and category title is already part of the slug, ` +
-        `so this indicates the organize step produced duplicates within a single category.`,
-      )
+          `Pages were deduped by path before organize and category title is already part of the slug, ` +
+          `so this indicates the organize step produced duplicates within a single category.`,
+      );
     }
-    used.add(slug)
-    result.set(e.page, slug)
+    used.add(slug);
+    result.set(e.page, slug);
   }
-  return result
+  return result;
 }
 
-const GENERIC_DOCS_SEGMENTS = new Set(['doc', 'docs', 'documentation', 'documentations'])
+const GENERIC_DOCS_SEGMENTS = new Set(['doc', 'docs', 'documentation', 'documentations']);
 function isGenericDocsSegment(segment) {
-  return GENERIC_DOCS_SEGMENTS.has(kebabCase(segment))
+  return GENERIC_DOCS_SEGMENTS.has(kebabCase(segment));
 }
 
 // Values YAML interprets as non-strings need quoting when used as _order entries.
-const YAML_UNSAFE = /^(?:\d+\.?\d*|true|false|yes|no|on|off|null|~)$/i
+const YAML_UNSAFE = /^(?:\d+\.?\d*|true|false|yes|no|on|off|null|~)$/i;
 function yamlSafeSlug(slug) {
-  return YAML_UNSAFE.test(slug) ? `"${slug}"` : slug
+  return YAML_UNSAFE.test(slug) ? `"${slug}"` : slug;
 }
 
 function kebabCase(s) {
@@ -5261,16 +5392,22 @@ function kebabCase(s) {
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-+|-+$/g, '') || 'page'
-  )
+  );
 }
 
 // Keyword → FontAwesome icon. Ported from v1 (most-specific entries first).
 // Each rule maps to an ordered list of candidates; the first unused-in-this-dir
 // icon wins so sibling pages don't all share the same icon.
 const ICON_RULES = [
-  [/\b(getting[- ]?started|quick[- ]?start|intro|introduction|welcome|overview|start)\b/, ['rocket', 'door-open', 'flag', 'star']],
+  [
+    /\b(getting[- ]?started|quick[- ]?start|intro|introduction|welcome|overview|start)\b/,
+    ['rocket', 'door-open', 'flag', 'star'],
+  ],
   [/\b(api[- ]?keys?|token|secrets?|credentials?|scopes?)\b/, ['key', 'key-skeleton', 'fingerprint']],
-  [/\b(auth|authn|authentication|sign[- ]?in|login|oauth|sso|identity|saml|oidc)\b/, ['lock', 'shield-halved', 'id-badge']],
+  [
+    /\b(auth|authn|authentication|sign[- ]?in|login|oauth|sso|identity|saml|oidc)\b/,
+    ['lock', 'shield-halved', 'id-badge'],
+  ],
   [/\b(permissions?|roles?|access|authz|authorization|rbac|acl)\b/, ['user-lock', 'user-shield', 'user-tag']],
   [/\b(users?|accounts?|profiles?|members?|people)\b/, ['user', 'user-gear', 'id-card', 'circle-user']],
   [/\b(groups?|org(anizations?)?|teams?|workspaces?)\b/, ['users', 'people-group', 'user-group']],
@@ -5290,51 +5427,57 @@ const ICON_RULES = [
   [/\b(imports?|ingest|ingestion)\b/, ['file-import', 'inbox-in']],
   [/\b(graphql)\b/, ['diagram-project', 'sitemap']],
   [/\b(sandbox|test(ing)?|staging|preview)\b/, ['flask', 'vial', 'eye']],
-  [/\b(analytics|metrics|usage|stats|dashboard|reports?|monitoring|observability)\b/, ['chart-line', 'chart-pie', 'chart-bar']],
+  [
+    /\b(analytics|metrics|usage|stats|dashboard|reports?|monitoring|observability)\b/,
+    ['chart-line', 'chart-pie', 'chart-bar'],
+  ],
   [/\b(integrations?|plugins?|extensions?|connectors?)\b/, ['plug', 'puzzle-piece']],
   [/\b(tutorials?|how[- ]?to|guides?|recipes?|walkthroughs?)\b/, ['book-open', 'book-open-reader', 'graduation-cap']],
   [/\b(reference|endpoints?|api|apis|operations?)\b/, ['code', 'brackets-curly', 'file-code']],
-  [/\b(configuration|config|settings?|preferences|admin|administration)\b/, ['sliders', 'gear', 'wrench', 'screwdriver-wrench']],
+  [
+    /\b(configuration|config|settings?|preferences|admin|administration)\b/,
+    ['sliders', 'gear', 'wrench', 'screwdriver-wrench'],
+  ],
   [/\b(faq|questions?|answers?|help|support)\b/, ['circle-question', 'circle-info', 'life-ring']],
   [/\b(migration|migrations?|upgrade|upgrades?|migrate)\b/, ['arrow-up-right', 'stairs']],
   [/\b(logs?|logging|audit|audits?|history)\b/, ['file-lines', 'clock-rotate-left', 'scroll']],
   [/\b(data|datasets?|database|db|tables?|schemas?)\b/, ['database', 'table', 'server']],
   [/\b(ai|ml|machine[- ]?learning|llm|models?)\b/, ['robot', 'brain', 'microchip']],
   [/\b(globe|language|locale|i18n|internationalization|translations?)\b/, ['globe', 'language', 'earth-americas']],
-]
+];
 
-const DEFAULT_ICON_POOL = ['file-lines', 'file', 'bookmark', 'note-sticky', 'circle', 'square', 'diamond']
+const DEFAULT_ICON_POOL = ['file-lines', 'file', 'bookmark', 'note-sticky', 'circle', 'square', 'diamond'];
 
 // ReadMe's hub sidebar renders `<i class="{icon}">` with no normalization, so
 // a bare "rocket" matches no CSS. Prefix short names with `fa-solid fa-` so
 // readme.com's FontAwesome 6 Pro stylesheet picks them up. Leaves values that
 // already include a space or a `fa-` prefix untouched.
 function formatIconClass(icon) {
-  if (!icon) return icon
-  if (icon.includes(' ') || icon.startsWith('fa-')) return icon
-  return `fa-solid fa-${icon}`
+  if (!icon) return icon;
+  if (icon.includes(' ') || icon.startsWith('fa-')) return icon;
+  return `fa-solid fa-${icon}`;
 }
 
 function makeIconPicker() {
-  const used = new Set()
+  const used = new Set();
   // Every icon we could ever return, deduped so the round-robin fallback
   // spreads evenly. Order puts rule icons first (semantically meaningful)
   // then defaults — this order is also the cycle order once the pool is
   // exhausted.
-  const allIcons = Array.from(new Set([...ICON_RULES.flatMap(([, icons]) => icons), ...DEFAULT_ICON_POOL]))
-  let cycleIndex = 0
+  const allIcons = Array.from(new Set([...ICON_RULES.flatMap(([, icons]) => icons), ...DEFAULT_ICON_POOL]));
+  let cycleIndex = 0;
 
   return function pickIcon(slug, title) {
-    const haystack = `${slug || ''} ${title || ''}`.toLowerCase()
+    const haystack = `${slug || ''} ${title || ''}`.toLowerCase();
 
     // First pass: find a semantically-matching rule whose candidates aren't
     // all already taken globally.
     for (const [re, icons] of ICON_RULES) {
-      if (!re.test(haystack)) continue
+      if (!re.test(haystack)) continue;
       for (const icon of icons) {
         if (!used.has(icon)) {
-          used.add(icon)
-          return icon
+          used.add(icon);
+          return icon;
         }
       }
     }
@@ -5343,17 +5486,17 @@ function makeIconPicker() {
     // first globally-unused icon from the full pool.
     for (const icon of allIcons) {
       if (!used.has(icon)) {
-        used.add(icon)
-        return icon
+        used.add(icon);
+        return icon;
       }
     }
 
     // Pool exhausted — spread reuse evenly via round-robin rather than
     // piling every remaining page onto one icon.
-    const icon = allIcons[cycleIndex % allIcons.length]
-    cycleIndex++
-    return icon
-  }
+    const icon = allIcons[cycleIndex % allIcons.length];
+    cycleIndex++;
+    return icon;
+  };
 }
 
 export const __test__ = {
@@ -5387,14 +5530,14 @@ export const __test__ = {
   extractChangelogFromSections,
   decodeEntities,
   stripTags,
-}
+};
 
 function formatDuration(ms) {
-  const safe = Math.max(0, ms)
+  const safe = Math.max(0, ms);
   // Show ms under a second so sub-second work doesn't misleadingly read as "0m 0s".
-  if (safe < 1000) return `${Math.round(safe)}ms`
-  const totalSeconds = Math.round(safe / 1000)
-  const minutes = Math.floor(totalSeconds / 60)
-  const seconds = totalSeconds % 60
-  return `${minutes}m ${seconds}s`
+  if (safe < 1000) return `${Math.round(safe)}ms`;
+  const totalSeconds = Math.round(safe / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}m ${seconds}s`;
 }

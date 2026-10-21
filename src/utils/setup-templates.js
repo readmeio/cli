@@ -313,11 +313,17 @@ tasks:
 
 export function templateFor(platform, opts = {}) {
   switch (platform) {
-    case 'github':    return githubWorkflow(opts);
-    case 'gitlab':    return gitlabWorkflow();
-    case 'bitbucket': return bitbucketWorkflow();
-    case 'circleci':  return circleciWorkflow();
-    case 'rwx':       return rwxWorkflow();
-    default: throw new Error(`Unknown platform: ${platform}`);
+    case 'github':
+      return githubWorkflow(opts);
+    case 'gitlab':
+      return gitlabWorkflow();
+    case 'bitbucket':
+      return bitbucketWorkflow();
+    case 'circleci':
+      return circleciWorkflow();
+    case 'rwx':
+      return rwxWorkflow();
+    default:
+      throw new Error(`Unknown platform: ${platform}`);
   }
 }

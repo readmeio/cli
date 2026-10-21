@@ -1,6 +1,6 @@
-import { createLogUpdate } from 'log-update';
-import cliSpinners from 'cli-spinners';
 import chalk from 'chalk';
+import cliSpinners from 'cli-spinners';
+import { createLogUpdate } from 'log-update';
 
 /**
  * Multi-row spinner. Renders `rows` labeled lines, repainted in unison at the
@@ -42,7 +42,7 @@ export class MultiSpinner {
     if (this.isTTY && this.update) {
       this.update.persist(text);
     } else {
-      this.stream.write(text + '\n');
+      this.stream.write(`${text}\n`);
     }
   }
 
@@ -61,10 +61,8 @@ export class MultiSpinner {
   _render() {
     if (!this.update) return;
     const glyph = this.spinner.frames[this.frame % this.spinner.frames.length];
-    const colorize = chalk[this.color] ?? ((s) => s);
-    const out = this.lines
-      .map((text) => (text ? `${colorize(glyph)} ${text}` : ''))
-      .join('\n');
+    const colorize = chalk[this.color] ?? (s => s);
+    const out = this.lines.map(text => (text ? `${colorize(glyph)} ${text}` : '')).join('\n');
     this.update(out);
     this.frame++;
   }

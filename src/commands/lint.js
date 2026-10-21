@@ -1,20 +1,20 @@
-import { collectFiles, runValidators } from '../utils/lint.js'
-import { createHumanReporter, createJsonReporter, createGithubReporter } from '../utils/reporter.js'
-import { printHeader, isAgenticCli } from '../utils/eyes.js'
-import * as styles from '../utils/styles.js'
-import { writeGithubActionsOutputs } from '../utils/gha-output.js'
-import pkg from '../../package.json' with { type: 'json' }
+import pkg from '../../package.json' with { type: 'json' };
+import { printHeader, isAgenticCli } from '../utils/eyes.js';
+import { writeGithubActionsOutputs } from '../utils/gha-output.js';
+import { collectFiles, runValidators } from '../utils/lint.js';
+import { createHumanReporter, createJsonReporter, createGithubReporter } from '../utils/reporter.js';
+import * as styles from '../utils/styles.js';
 
-export const command = 'lint'
-export const order = 1
-export const aliases = ['validate']
-export const category = 'Linting'
-export const description = 'Lint and validate your ReadMe docs'
+export const command = 'lint';
+export const order = 1;
+export const aliases = ['validate'];
+export const category = 'Linting';
+export const description = 'Lint and validate your ReadMe docs';
 
 export function args(cmd) {
-  cmd.option('--json', 'Output results as JSON (for CI and automation)')
-  cmd.option('--github', 'Output a GitHub PR comment body as markdown')
-  cmd.option('--fix', 'Automatically fix issues where possible')
+  cmd.option('--json', 'Output results as JSON (for CI and automation)');
+  cmd.option('--github', 'Output a GitHub PR comment body as markdown');
+  cmd.option('--fix', 'Automatically fix issues where possible');
 }
 
 /**
@@ -31,37 +31,41 @@ export function args(cmd) {
  * @returns {Promise<{ gitRoot: string, files: string[], results: object[], hasErrors: boolean }>}
  */
 export async function lint({ cwd, fix = false, nonInteractive = false, onFile, onBeforeCrossFile } = {}) {
-  const gitRoot = cwd || process.cwd()
-  const files = collectFiles(gitRoot)
-  const results = await runValidators(files, gitRoot, { onFile, onBeforeCrossFile, fix, nonInteractive })
-  const hasErrors = results.some((r) => r.severity !== 'warning')
-  return { gitRoot, files, results, hasErrors }
+  const gitRoot = cwd || process.cwd();
+  const files = collectFiles(gitRoot);
+  const results = await runValidators(files, gitRoot, { onFile, onBeforeCrossFile, fix, nonInteractive });
+  const hasErrors = results.some(r => r.severity !== 'warning');
+  return { gitRoot, files, results, hasErrors };
 }
 
 export async function run(options, _cmd, ctx) {
-  const { gitRoot } = ctx
+  const { gitRoot } = ctx;
 
   if (!options.json && !options.github && !isAgenticCli()) {
-    printHeader({ version: pkg.version, binName: styles.binName(), indent: '  ' })
-    console.log()
+    printHeader({ version: pkg.version, binName: styles.binName(), indent: '  ' });
+    console.log();
   }
 
-  const reporter = options.github ? createGithubReporter() : options.json ? createJsonReporter() : createHumanReporter()
+  const reporter = options.github
+    ? createGithubReporter()
+    : options.json
+      ? createJsonReporter()
+      : createHumanReporter();
 
   const { files, results, hasErrors } = await lint({
     cwd: gitRoot,
     fix: options.fix,
-    onFile: (f) => reporter.onFile(f),
+    onFile: f => reporter.onFile(f),
     onBeforeCrossFile: () => reporter.pause(),
-  })
+  });
 
-  reporter.finish(files.length, results, files, { fix: options.fix, gitRoot })
+  reporter.finish(files.length, results, files, { fix: options.fix, gitRoot });
 
-  writeGithubActionsOutputs({ 'has-errors': String(hasErrors), results })
+  writeGithubActionsOutputs({ 'has-errors': String(hasErrors), results });
 
   if (hasErrors) {
     // Wait for stdout to flush (important when piped to a file), then exit
-    await new Promise((resolve) => process.stdout.write('', resolve))
-    process.exit(1)
+    await new Promise(resolve => process.stdout.write('', resolve));
+    process.exit(1);
   }
 }

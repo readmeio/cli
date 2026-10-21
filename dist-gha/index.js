@@ -47251,7 +47251,15 @@ const palettes = {
   red: { name: 'Red', body: '#EF4444', page: '#FFF5F5', pupil: '#7F1D1D', lid: '#FCA5A5' },
   teal: { name: 'Teal', body: '#14B8A6', page: '#F0FFFE', pupil: '#134E4A', lid: '#5EEAD4' },
   yellow: { name: 'Yellow', body: '#EAB308', page: '#FEFCE8', pupil: '#713F12', lid: '#FDE047' },
-  owl: { name: 'Owl', body: '#8B5A2B', page: '#FFF8EE', pupil: '#2A1000', lid: '#C4923A', nose: '#FFD700', hidden: true },
+  owl: {
+    name: 'Owl',
+    body: '#8B5A2B',
+    page: '#FFF8EE',
+    pupil: '#2A1000',
+    lid: '#C4923A',
+    nose: '#FFD700',
+    hidden: true,
+  },
 };
 
 let currentPalette = palettes.blue;
@@ -47356,7 +47364,21 @@ function rebuildExpressions() {
 
 const animations = {
   blink: {
-    frames: ['right', 'right', 'right', 'right', 'right', 'right', 'half-blink', 'squint', 'closed', 'closed', 'squint', 'half-blink', 'right'],
+    frames: [
+      'right',
+      'right',
+      'right',
+      'right',
+      'right',
+      'right',
+      'half-blink',
+      'squint',
+      'closed',
+      'closed',
+      'squint',
+      'half-blink',
+      'right',
+    ],
     durations: [1500, 100, 100, 100, 100, 100, 50, 50, 50, 80, 50, 50, 100],
   },
 
@@ -47366,85 +47388,154 @@ const animations = {
   },
 
   lookaround: {
-    frames: ['right', 'right', 'left', 'left', 'left', 'right', 'right', 'up-right', 'up-right', 'right', 'right', 'up-left', 'up-left', 'left', 'left', 'right'],
+    frames: [
+      'right',
+      'right',
+      'left',
+      'left',
+      'left',
+      'right',
+      'right',
+      'up-right',
+      'up-right',
+      'right',
+      'right',
+      'up-left',
+      'up-left',
+      'left',
+      'left',
+      'right',
+    ],
     durations: [600, 200, 120, 400, 200, 120, 400, 120, 400, 120, 200, 120, 400, 120, 200, 400],
   },
 
   'lookaround-blink': {
     frames: [
-      'right', 'right', 'right',
-      'left', 'left', 'left',
-      'half-blink', 'squint', 'closed', 'closed', 'squint', 'half-blink',
-      'left', 'right', 'right',
-      'up-right', 'up-right', 'right',
-      'right', 'right',
-      'up-left', 'up-left', 'left', 'left',
-      'half-blink', 'squint', 'closed', 'closed', 'squint', 'half-blink',
-      'right', 'right',
+      'right',
+      'right',
+      'right',
+      'left',
+      'left',
+      'left',
+      'half-blink',
+      'squint',
+      'closed',
+      'closed',
+      'squint',
+      'half-blink',
+      'left',
+      'right',
+      'right',
+      'up-right',
+      'up-right',
+      'right',
+      'right',
+      'right',
+      'up-left',
+      'up-left',
+      'left',
+      'left',
+      'half-blink',
+      'squint',
+      'closed',
+      'closed',
+      'squint',
+      'half-blink',
+      'right',
+      'right',
     ],
     durations: [
-      800, 200, 200,
-      120, 400, 200,
-      50, 50, 50, 80, 50, 50,
-      200, 120, 400,
-      120, 500, 120,
-      200, 200,
-      120, 500, 120, 200,
-      50, 50, 50, 80, 50, 50,
-      120, 600,
+      800, 200, 200, 120, 400, 200, 50, 50, 50, 80, 50, 50, 200, 120, 400, 120, 500, 120, 200, 200, 120, 500, 120, 200,
+      50, 50, 50, 80, 50, 50, 120, 600,
     ],
   },
 
   all: {
     frames: [
       // idle, look around
-      'right', 'right', 'right',
-      'left', 'left', 'left',
-      'right', 'right',
+      'right',
+      'right',
+      'right',
+      'left',
+      'left',
+      'left',
+      'right',
+      'right',
       // blink
-      'half-blink', 'squint', 'closed', 'closed', 'squint', 'half-blink',
+      'half-blink',
+      'squint',
+      'closed',
+      'closed',
+      'squint',
+      'half-blink',
       // look up + bounce
-      'right', 'right',
-      'up-right', 'up-right', 'right',
-      'right:up', 'right:up', 'right', 'right:up', 'right:up', 'right',
+      'right',
+      'right',
+      'up-right',
+      'up-right',
+      'right',
+      'right:up',
+      'right:up',
+      'right',
+      'right:up',
+      'right:up',
+      'right',
       // look the other way
-      'right', 'left', 'left',
-      'up-left', 'up-left', 'left',
+      'right',
+      'left',
+      'left',
+      'up-left',
+      'up-left',
+      'left',
       // blink
-      'half-blink', 'squint', 'closed', 'closed', 'squint', 'half-blink',
+      'half-blink',
+      'squint',
+      'closed',
+      'closed',
+      'squint',
+      'half-blink',
       // bounce
-      'left', 'left:up', 'left:up', 'left', 'left:up', 'left:up', 'left',
+      'left',
+      'left:up',
+      'left:up',
+      'left',
+      'left:up',
+      'left:up',
+      'left',
       // settle back + bounce
-      'right', 'right', 'right',
-      'right:up', 'right:up', 'right',
+      'right',
+      'right',
+      'right',
+      'right:up',
+      'right:up',
+      'right',
       // blink
-      'half-blink', 'squint', 'closed', 'closed', 'squint', 'half-blink',
-      'right', 'right',
+      'half-blink',
+      'squint',
+      'closed',
+      'closed',
+      'squint',
+      'half-blink',
+      'right',
+      'right',
     ],
     durations: [
       // idle, look around
-      800, 200, 200,
-      120, 400, 200,
-      120, 400,
+      800, 200, 200, 120, 400, 200, 120, 400,
       // blink
       50, 50, 50, 80, 50, 50,
       // look up + bounce
-      200, 200,
-      120, 500, 120,
-      150, 150, 150, 150, 150, 200,
+      200, 200, 120, 500, 120, 150, 150, 150, 150, 150, 200,
       // look the other way
-      300, 120, 400,
-      120, 500, 120,
+      300, 120, 400, 120, 500, 120,
       // blink
       50, 50, 50, 80, 50, 50,
       // bounce
       200, 150, 150, 150, 150, 150, 200,
       // settle back + bounce
-      120, 200, 300,
-      150, 150, 200,
+      120, 200, 300, 150, 150, 200,
       // blink
-      50, 50, 50, 80, 50, 50,
-      200, 800,
+      50, 50, 50, 80, 50, 50, 200, 800,
     ],
   },
 };
@@ -47485,7 +47576,7 @@ function header(opts = {}) {
   const icon = eyes(expression);
   const gap = '  ';
 
-  const title = chalk__WEBPACK_IMPORTED_MODULE_0__/* ["default"] */ .Ay.bold.hex(currentPalette.body)('The ReadMe CLI') + (version ? ' ' + chalk__WEBPACK_IMPORTED_MODULE_0__/* ["default"] */ .Ay.dim(`v${version}`) : '');
+  const title = chalk__WEBPACK_IMPORTED_MODULE_0__/* ["default"] */ .Ay.bold.hex(currentPalette.body)('The ReadMe CLI') + (version ? ` ${chalk__WEBPACK_IMPORTED_MODULE_0__/* ["default"] */ .Ay.dim(`v${version}`)}` : '');
   const bin = binName ? chalk__WEBPACK_IMPORTED_MODULE_0__/* ["default"] */ .Ay.white(binName) : '';
   const greetLine = greeting ? chalk__WEBPACK_IMPORTED_MODULE_0__/* ["default"] */ .Ay.dim(greeting) : '';
 
@@ -47528,7 +47619,8 @@ function animate(name, opts = {}) {
   const headerLines = [];
   if (version || bin) {
     const gap = '  ';
-    headerLines[0] = gap + chalk.bold.hex(currentPalette.body)('The ReadMe CLI') + (version ? ' ' + chalk.dim(`v${version}`) : '');
+    headerLines[0] =
+      gap + chalk.bold.hex(currentPalette.body)('The ReadMe CLI') + (version ? ` ${chalk.dim(`v${version}`)}` : '');
     headerLines[1] = gap + (bin ? chalk.white(bin) : '');
     if (subtitle) headerLines[2] = gap + subtitle;
   }
@@ -47572,7 +47664,7 @@ function animate(name, opts = {}) {
       firstDraw = false;
 
       for (const line of lines) {
-        process.stdout.write(indent + line + '\n');
+        process.stdout.write(`${indent + line}\n`);
       }
 
       const duration = anim.durations[i % anim.durations.length];
@@ -47836,8 +47928,48 @@ __nccwpck_require__.d(recipes_namespaceObject, {
   validate: () => (recipes_validate)
 });
 
+;// CONCATENATED MODULE: ./package.json
+const package_namespaceObject = {"rE":"0.1.0"};
+// EXTERNAL MODULE: ./src/utils/eyes.js
+var utils_eyes = __nccwpck_require__(9636);
+;// CONCATENATED MODULE: external "node:crypto"
+const external_node_crypto_namespaceObject = __WEBPACK_EXTERNAL_createRequire(import.meta.url)("node:crypto");
 ;// CONCATENATED MODULE: external "node:fs"
 const external_node_fs_namespaceObject = __WEBPACK_EXTERNAL_createRequire(import.meta.url)("node:fs");
+;// CONCATENATED MODULE: ./src/utils/gha-output.js
+
+
+
+/**
+ * Writes each field as a GitHub Actions step output, so a workflow can read
+ * e.g. `steps.sync.outputs.skipped-count` instead of scraping printed text.
+ * A no-op anywhere else (a plain local CLI run, or CI systems other than
+ * GitHub Actions), detected the same way GitHub's own `@actions/core`
+ * toolkit does: the `GITHUB_ACTIONS` env var GitHub sets on every runner,
+ * plus the `GITHUB_OUTPUT` file path it provides for the current step.
+ *
+ * @param {Record<string, string | object | Array<unknown>>} fields  Values are
+ *   written as-is if already a string, JSON-stringified otherwise.
+ */
+function writeGithubActionsOutputs(fields) {
+  if (process.env.GITHUB_ACTIONS !== 'true') return;
+  const outputPath = process.env.GITHUB_OUTPUT;
+  if (!outputPath) return;
+
+  const lines = Object.entries(fields).map(([name, value]) => {
+    const text = typeof value === 'string' ? value : JSON.stringify(value);
+    // A random delimiter, rather than a fixed one like "EOF", matters here:
+    // `value` can echo back content from a customer's own docs/OAS files
+    // (an error message quoting their spec, say), and a guessable delimiter
+    // could let that content prematurely close the heredoc and inject extra
+    // key=value pairs into the outputs file.
+    const delimiter = `ghadelimiter_${(0,external_node_crypto_namespaceObject.randomUUID)()}`;
+    return `${name}<<${delimiter}\n${text}\n${delimiter}`;
+  });
+
+  external_node_fs_namespaceObject.appendFileSync(outputPath, `${lines.join('\n')}\n`);
+}
+
 ;// CONCATENATED MODULE: external "node:path"
 const external_node_path_namespaceObject = __WEBPACK_EXTERNAL_createRequire(import.meta.url)("node:path");
 ;// CONCATENATED MODULE: external "@readme/markdown"
@@ -51658,7 +51790,7 @@ function sortFrontmatterObj(obj, customOrder = []) {
   const sortedObj = {};
 
   // Helper function to check if a value is an object
-  const isObject = (value) => value && typeof value === 'object' && !Array.isArray(value);
+  const isObject = value => value && typeof value === 'object' && !Array.isArray(value);
 
   // Add keys in the custom order first
   customOrder.forEach(key => {
@@ -51837,42 +51969,44 @@ function toFrontmatter(data, body = '') {
 
 
 
+
+
 const { mdxishTags } = markdown_namespaceObject["default"];
 
-const components_name = "components";
+const components_name = 'components';
 
 // Built-in components provided by @readme/markdown.
 const BUILTIN_COMPONENTS = new Set([
   // Documented in ReadMe user docs
-  "Accordion",
-  "Tabs",
-  "Tab",
-  "Cards",
-  "Card",
-  "Columns",
-  "Column",
-  "Image",
+  'Accordion',
+  'Tabs',
+  'Tab',
+  'Cards',
+  'Card',
+  'Columns',
+  'Column',
+  'Image',
   // Available from @readme/markdown
-  "Anchor",
-  "Callout",
-  "Code",
-  "CodeTabs",
-  "Embed",
-  "Glossary",
-  "Heading",
-  "HTMLBlock",
-  "Table",
-  "TableOfContents",
-  "Recipe",
-  "MCPIntro",
-  "PostmanRunButton",
-  "TailwindRoot",
-  "TailwindStyle",
-  "TutorialTile",
+  'Anchor',
+  'Callout',
+  'Code',
+  'CodeTabs',
+  'Embed',
+  'Glossary',
+  'Heading',
+  'HTMLBlock',
+  'Table',
+  'TableOfContents',
+  'Recipe',
+  'MCPIntro',
+  'PostmanRunButton',
+  'TailwindRoot',
+  'TailwindStyle',
+  'TutorialTile',
 ]);
 
 // Directories that can contain MDXish content with component references.
-const CONTENT_DIRS = new Set(["docs", "reference", "custom_pages", "recipes"]);
+const CONTENT_DIRS = new Set(['docs', 'reference', 'custom_pages', 'recipes']);
 
 /**
  * Extract component tag names from MDXish content.
@@ -51911,19 +52045,19 @@ function extractExportedNames(body) {
  * .md files: uses the filename slug (e.g., Greeting.md → <Greeting />).
  */
 function collectCustomBlockNames(gitRoot) {
-  const blocksDir = external_node_path_namespaceObject.join(gitRoot, "custom_blocks");
+  const blocksDir = external_node_path_namespaceObject.join(gitRoot, 'custom_blocks');
   if (!external_node_fs_namespaceObject.existsSync(blocksDir)) return new Set();
 
   const names = new Set();
   const entries = external_node_fs_namespaceObject.readdirSync(blocksDir);
 
   for (const entry of entries) {
-    if (!entry.endsWith(".md") && !entry.endsWith(".mdx")) continue;
+    if (!entry.endsWith('.md') && !entry.endsWith('.mdx')) continue;
 
     try {
-      const content = external_node_fs_namespaceObject.readFileSync(external_node_path_namespaceObject.join(blocksDir, entry), "utf-8");
+      const content = external_node_fs_namespaceObject.readFileSync(external_node_path_namespaceObject.join(blocksDir, entry), 'utf-8');
 
-      if (entry.endsWith(".mdx")) {
+      if (entry.endsWith('.mdx')) {
         // .mdx: component names come from exports.
         const { content: body } = parseFrontmatter(content);
         for (const n of extractExportedNames(body)) {
@@ -51931,13 +52065,13 @@ function collectCustomBlockNames(gitRoot) {
         }
       } else {
         // .md snippet: component name is the PascalCase filename.
-        const slug = entry.replace(/\.md$/, "");
+        const slug = entry.replace(/\.md$/, '');
         names.add(slug);
         // Also register the PascalCase form so references resolve.
         const pascalCase = slug
           .split(/[-_]/)
-          .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-          .join("");
+          .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+          .join('');
         names.add(pascalCase);
       }
     } catch {
@@ -51954,11 +52088,11 @@ function collectCustomBlockNames(gitRoot) {
  * - .md: filename must be capitalized (used as component name via <Name />)
  */
 function validate({ content, relativePath }) {
-  if (!relativePath.startsWith("custom_blocks/")) return null;
+  if (!relativePath.startsWith('custom_blocks/')) return null;
 
   const filename = external_node_path_namespaceObject.basename(relativePath);
-  const isMdx = relativePath.endsWith(".mdx");
-  const isMd = relativePath.endsWith(".md");
+  const isMdx = relativePath.endsWith('.mdx');
+  const isMd = relativePath.endsWith('.md');
 
   if (!isMdx && !isMd) return null;
 
@@ -51969,16 +52103,16 @@ function validate({ content, relativePath }) {
   // digits are fine (<Helm_v4_error /> is valid); hyphens and a lowercase initial
   // are not.
   if (isMd) {
-    const slug = filename.replace(/\.md$/, "");
+    const slug = filename.replace(/\.md$/, '');
     if (!/^[A-Z][A-Za-z0-9_$]*$/.test(slug)) {
       const suggestion = slug
         .split(/[-_]/)
-        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-        .join("");
+        .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+        .join('');
       results.push({
         file: relativePath,
         rule: components_name,
-        severity: "warning",
+        severity: 'warning',
         message: `Bad filename: "${slug}" can't be used as a component tag — rename to "${suggestion}.md" so it can be used as <${suggestion} />`,
       });
     }
@@ -52011,7 +52145,7 @@ function validate({ content, relativePath }) {
     results.push({
       file: relativePath,
       rule: components_name,
-      severity: "warning",
+      severity: 'warning',
       message: `Missing example: no usage example found for "${componentName}"`,
     });
   }
@@ -52028,14 +52162,14 @@ function validateAll(files, gitRoot) {
   const available = new Set([...BUILTIN_COMPONENTS, ...customBlocks]);
 
   for (const relPath of files) {
-    const dir = relPath.split("/")[0];
+    const dir = relPath.split('/')[0];
     if (!CONTENT_DIRS.has(dir)) continue;
-    if (!relPath.endsWith(".md")) continue;
+    if (!relPath.endsWith('.md')) continue;
 
     const filePath = external_node_path_namespaceObject.join(gitRoot, relPath);
     let content;
     try {
-      content = external_node_fs_namespaceObject.readFileSync(filePath, "utf-8");
+      content = external_node_fs_namespaceObject.readFileSync(filePath, 'utf-8');
     } catch {
       continue;
     }
@@ -52062,6 +52196,7 @@ function validateAll(files, gitRoot) {
 
 
 
+
 const content_name = 'content';
 
 function content_validate({ filePath, content, relativePath }) {
@@ -52081,7 +52216,7 @@ function content_validate({ filePath, content, relativePath }) {
         file: relativePath,
         rule: content_name,
         severity: 'warning',
-        message: 'Redirect page has body content: pages with a link URL won\'t display their content',
+        message: "Redirect page has body content: pages with a link URL won't display their content",
       };
     }
     return null;
@@ -52090,7 +52225,7 @@ function content_validate({ filePath, content, relativePath }) {
     // index.md files that act as parent pages (have child .md siblings) can be empty.
     if (external_node_path_namespaceObject.basename(filePath) === 'index.md') {
       const siblings = external_node_fs_namespaceObject.readdirSync(external_node_path_namespaceObject.dirname(filePath));
-      if (siblings.some((f) => f.endsWith('.md') && f !== 'index.md')) {
+      if (siblings.some(f => f.endsWith('.md') && f !== 'index.md')) {
         return null;
       }
     }
@@ -52128,6 +52263,7 @@ function slugForEntry(relPath) {
 
 
 
+
 const duplicates_name = 'duplicates';
 
 // Only docs and reference require unique slugs.
@@ -52153,12 +52289,15 @@ function duplicates_validateAll(files) {
 
     // TODO: figure out why ReadMeConfig causes duplicate slugs and handle properly.
     // For now, skip any duplicate set that involves a ReadMeConfig path.
-    if (paths.some((p) => p.includes('ReadMeConfig/'))) continue;
+    if (paths.some(p => p.includes('ReadMeConfig/'))) continue;
 
     const slug = key.slice(key.indexOf(':') + 1);
     const others = paths.slice(1);
     for (const relPath of others) {
-      const otherLocations = paths.filter((p) => p !== relPath).map((p) => external_node_path_namespaceObject.dirname(p)).join(', ');
+      const otherLocations = paths
+        .filter(p => p !== relPath)
+        .map(p => external_node_path_namespaceObject.dirname(p))
+        .join(', ');
       results.push({
         file: relPath,
         rule: duplicates_name,
@@ -52182,6 +52321,8 @@ var ajv = __nccwpck_require__(2463);
 
 
 
+
+
 const frontmatter_require = (0,external_node_module_namespaceObject.createRequire)(import.meta.url);
 
 const frontmatter_name = 'frontmatter';
@@ -52190,7 +52331,7 @@ function getNestedValue(obj, instancePath) {
   const keys = instancePath.split('/').filter(Boolean);
   let current = obj;
   for (const key of keys) {
-    if (current == null || typeof current !== 'object') return undefined;
+    if (current == null || typeof current !== 'object') return;
     current = current[key];
   }
   return current;
@@ -52205,9 +52346,7 @@ function levenshtein(a, b) {
   for (let j = 0; j <= n; j++) dp[0][j] = j;
   for (let i = 1; i <= m; i++) {
     for (let j = 1; j <= n; j++) {
-      dp[i][j] = a[i - 1] === b[j - 1]
-        ? dp[i - 1][j - 1]
-        : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+      dp[i][j] = a[i - 1] === b[j - 1] ? dp[i - 1][j - 1] : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
     }
   }
   return dp[m][n];
@@ -52302,7 +52441,7 @@ function frontmatter_validate({ content, filePath, relativePath, fix }) {
 
         if (err.keyword === 'not' && err.schema?.properties) {
           const target = err.instancePath ? getNestedValue(data, err.instancePath) : data;
-          if (!target || !Object.keys(err.schema.properties).some((k) => k in target)) continue;
+          if (!target || !Object.keys(err.schema.properties).some(k => k in target)) continue;
         }
 
         let msg;
@@ -52345,9 +52484,9 @@ function frontmatter_validate({ content, filePath, relativePath, fix }) {
 
   // Step 4: Detect typos by comparing unknown properties against known ones.
   const missingRequired = results.filter(
-    (r) => r.severity === 'error' && r.message.includes('must have required property'),
+    r => r.severity === 'error' && r.message.includes('must have required property'),
   );
-  const unknowns = results.filter((r) => r._key);
+  const unknowns = results.filter(r => r._key);
 
   const consumed = new Set();
 
@@ -52399,8 +52538,8 @@ function frontmatter_validate({ content, filePath, relativePath, fix }) {
 
   // Step 5: Apply fixes — rename unknown (non-typo) properties to x- prefixed.
   if (fix && filePath) {
-    const typoKeys = new Set([...consumed].map((r) => r._key));
-    const keysToFix = unknownKeys.filter((key) => !typoKeys.has(key) && !suggestedTypos.has(key));
+    const typoKeys = new Set([...consumed].map(r => r._key));
+    const keysToFix = unknownKeys.filter(key => !typoKeys.has(key) && !suggestedTypos.has(key));
 
     if (keysToFix.length > 0) {
       let fileContent = external_node_fs_namespaceObject.readFileSync(filePath, 'utf-8');
@@ -52429,11 +52568,12 @@ function frontmatter_validate({ content, filePath, relativePath, fix }) {
   }
 
   // Remove consumed warnings (they've been merged into the error).
-  const final = results.filter((r) => !consumed.has(r));
+  const final = results.filter(r => !consumed.has(r));
   return final.length > 0 ? final : null;
 }
 
 ;// CONCATENATED MODULE: ./src/validators/links.js
+
 
 
 
@@ -52551,6 +52691,7 @@ var source = __nccwpck_require__(6797);
 
 
 
+
 /** Returns the CLI name depending on how it was invoked (e.g. "readme", "readme_", or "npx @readme/cli"). */
 function binName() {
   const base = external_node_path_namespaceObject.basename(process.argv[1] || 'readme');
@@ -52598,43 +52739,9 @@ function warning(message) {
   console.log(`${warn('⚠')} ${message}`);
 }
 
-;// CONCATENATED MODULE: external "node:crypto"
-const external_node_crypto_namespaceObject = __WEBPACK_EXTERNAL_createRequire(import.meta.url)("node:crypto");
-;// CONCATENATED MODULE: ./src/utils/gha-output.js
-
-
-
-/**
- * Writes each field as a GitHub Actions step output, so a workflow can read
- * e.g. `steps.sync.outputs.skipped-count` instead of scraping printed text.
- * A no-op anywhere else (a plain local CLI run, or CI systems other than
- * GitHub Actions), detected the same way GitHub's own `@actions/core`
- * toolkit does: the `GITHUB_ACTIONS` env var GitHub sets on every runner,
- * plus the `GITHUB_OUTPUT` file path it provides for the current step.
- *
- * @param {Record<string, string | object | Array<unknown>>} fields  Values are
- *   written as-is if already a string, JSON-stringified otherwise.
- */
-function writeGithubActionsOutputs(fields) {
-  if (process.env.GITHUB_ACTIONS !== 'true') return;
-  const outputPath = process.env.GITHUB_OUTPUT;
-  if (!outputPath) return;
-
-  const lines = Object.entries(fields).map(([name, value]) => {
-    const text = typeof value === 'string' ? value : JSON.stringify(value);
-    // A random delimiter, rather than a fixed one like "EOF", matters here:
-    // `value` can echo back content from a customer's own docs/OAS files
-    // (an error message quoting their spec, say), and a guessable delimiter
-    // could let that content prematurely close the heredoc and inject extra
-    // key=value pairs into the outputs file.
-    const delimiter = `ghadelimiter_${(0,external_node_crypto_namespaceObject.randomUUID)()}`;
-    return `${name}<<${delimiter}\n${text}\n${delimiter}`;
-  });
-
-  external_node_fs_namespaceObject.appendFileSync(outputPath, `${lines.join('\n')}\n`);
-}
-
 ;// CONCATENATED MODULE: ./src/commands/oas-sync.js
+
+
 
 
 
@@ -52667,9 +52774,7 @@ function findOasFiles(refDir) {
 
     try {
       const raw = external_node_fs_namespaceObject.readFileSync(filePath, 'utf-8');
-      const parsed = entry.endsWith('.json')
-        ? JSON.parse(raw)
-        : load(raw, { schema: OAS_YAML_SCHEMA });
+      const parsed = entry.endsWith('.json') ? JSON.parse(raw) : load(raw, { schema: OAS_YAML_SCHEMA });
 
       if (parsed && (parsed.openapi || parsed.swagger)) {
         oasFiles.push({ filename: entry, spec: parsed });
@@ -52778,7 +52883,7 @@ function resolveXInternal(operation, spec) {
  * `webhook POST newPet`) for lint to warn about.
  */
 function findIgnoredInternalExtensions(spec) {
-  const hasInternal = (obj) => {
+  const hasInternal = obj => {
     const xReadme = obj?.['x-readme'];
     return !!xReadme && typeof xReadme === 'object' && 'internal' in xReadme;
   };
@@ -52786,7 +52891,10 @@ function findIgnoredInternalExtensions(spec) {
   const locations = [];
   if (hasInternal(spec)) locations.push('root');
 
-  for (const [entries, isWebhook] of [[spec?.paths, false], [spec?.webhooks, true]]) {
+  for (const [entries, isWebhook] of [
+    [spec?.paths, false],
+    [spec?.webhooks, true],
+  ]) {
     for (const [name, rawItem] of Object.entries(entries || {})) {
       for (const [method, operation] of Object.entries(resolveLocalPathItemRef(rawItem, spec) || {})) {
         if (!HTTP_METHODS.has(method) || !hasInternal(operation)) continue;
@@ -52838,7 +52946,7 @@ function extractOperations(spec) {
           summary: operation.summary || null,
           description: operation.description || null,
           // The platform groups by the first *non-empty* tag.
-          tag: (Array.isArray(operation.tags) && operation.tags.find((t) => t)) || null,
+          tag: (Array.isArray(operation.tags) && operation.tags.find(t => t)) || null,
           path: pathStr,
           isWebhook,
           xInternal: resolveXInternal(operation, spec),
@@ -52894,13 +53002,18 @@ function yamlSafeSlug(slug) {
 function parseOrderYaml(content) {
   return content
     .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith('- '))
-    .map((line) => line.slice(2).trim().replace(/^["'](.+)["']$/, '$1'));
+    .map(line => line.trim())
+    .filter(line => line.startsWith('- '))
+    .map(line =>
+      line
+        .slice(2)
+        .trim()
+        .replace(/^["'](.+)["']$/, '$1'),
+    );
 }
 
 function writeOrderYaml(filePath, slugs) {
-  const content = slugs.map((s) => `- ${yamlSafeSlug(s)}`).join('\n') + '\n';
+  const content = `${slugs.map(s => `- ${yamlSafeSlug(s)}`).join('\n')}\n`;
   external_node_fs_namespaceObject.mkdirSync(external_node_path_namespaceObject.dirname(filePath), { recursive: true });
   external_node_fs_namespaceObject.writeFileSync(filePath, content);
 }
@@ -52921,7 +53034,7 @@ function addToOrder(orderPath, slug) {
 function removeFromOrder(orderPath, slug) {
   if (!external_node_fs_namespaceObject.existsSync(orderPath)) return;
   const content = external_node_fs_namespaceObject.readFileSync(orderPath, 'utf-8');
-  const slugs = parseOrderYaml(content).filter((s) => s !== slug);
+  const slugs = parseOrderYaml(content).filter(s => s !== slug);
   if (slugs.length > 0) {
     writeOrderYaml(orderPath, slugs);
   } else {
@@ -52941,9 +53054,7 @@ function safeSegment(value, fallback) {
 
 function isWithin(baseDir, target) {
   const rel = external_node_path_namespaceObject.relative(baseDir, target);
-  return (
-    rel !== '' && rel !== '..' && !rel.startsWith(`..${external_node_path_namespaceObject.sep}`) && !external_node_path_namespaceObject.isAbsolute(rel)
-  );
+  return rel !== '' && rel !== '..' && !rel.startsWith(`..${external_node_path_namespaceObject.sep}`) && !external_node_path_namespaceObject.isAbsolute(rel);
 }
 
 function buildPageContent({ oasFilename, operationId, isWebhook, hidden = false }) {
@@ -53127,9 +53238,7 @@ function updateFrontmatter(filePath, mutate) {
   if (frontmatterWriteError(parsed)) return false;
   const data = structuredClone(parsed.data);
   mutate(data);
-  const next = parsed.content.trim()
-    ? toFrontmatter(data, parsed.content)
-    : toFrontmatter(data);
+  const next = parsed.content.trim() ? toFrontmatter(data, parsed.content) : toFrontmatter(data);
   if (next === content || JSON.stringify(data) === JSON.stringify(parsed.data)) return false;
   external_node_fs_namespaceObject.writeFileSync(filePath, next);
   return true;
@@ -53153,7 +53262,7 @@ function applyOASOrder(currentOrder, orderedSlugs) {
   const order = [...new Set(currentOrder)];
   if (!order.length) return desired;
 
-  const slots = order.map((s, i) => (desiredSet.has(s) ? i : -1)).filter((i) => i > -1);
+  const slots = order.map((s, i) => (desiredSet.has(s) ? i : -1)).filter(i => i > -1);
   if (!slots.length) return [...order, ...desired];
 
   const remaining = [...desired];
@@ -53190,12 +53299,14 @@ function isGeneratedTagIndex(indexPath, specDescriptions) {
   const { data, content, error } = parseFrontmatter(external_node_fs_namespaceObject.readFileSync(indexPath, 'utf-8'));
   if (error || content.trim()) return false;
   if (typeof data.title !== 'string' || !('hidden' in data)) return false;
-  if (Object.keys(data).some((k) => !['title', 'hidden', 'excerpt'].includes(k))) return false;
+  if (Object.keys(data).some(k => !['title', 'hidden', 'excerpt'].includes(k))) return false;
   if ('excerpt' in data && !specDescriptions.has(data.excerpt)) return false;
 
   const dirSlug = slugifyFolder(external_node_path_namespaceObject.basename(external_node_path_namespaceObject.dirname(indexPath)));
   const titleSlug = slugifyFolder(data.title);
-  return dirSlug === titleSlug || new RegExp(`^${titleSlug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-\\d+$`).test(dirSlug);
+  return (
+    dirSlug === titleSlug || new RegExp(`^${titleSlug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-\\d+$`).test(dirSlug)
+  );
 }
 
 /**
@@ -53212,12 +53323,12 @@ function cleanupTagFolder(dir, { refDir, specDescriptions, takenSlugs, changes }
   } catch {
     return;
   }
-  const others = entries.filter((e) => !INDEX_FILES.includes(e) && e !== '_order.yaml');
+  const others = entries.filter(e => !INDEX_FILES.includes(e) && e !== '_order.yaml');
   if (others.length) return;
 
   const parentDir = external_node_path_namespaceObject.dirname(dir);
   const slug = external_node_path_namespaceObject.basename(dir);
-  const indexFile = entries.find((e) => INDEX_FILES.includes(e));
+  const indexFile = entries.find(e => INDEX_FILES.includes(e));
 
   if (!indexFile || isGeneratedTagIndex(external_node_path_namespaceObject.join(dir, indexFile), specDescriptions)) {
     external_node_fs_namespaceObject.rmSync(dir, { recursive: true, force: true });
@@ -53245,10 +53356,7 @@ function cleanupTagFolder(dir, { refDir, specDescriptions, takenSlugs, changes }
  */
 function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
   const specOps = extractOperations(spec);
-  const infoTitle = safeSegment(
-    spec.info?.title || external_node_path_namespaceObject.basename(oasFilename, external_node_path_namespaceObject.extname(oasFilename)),
-    'api',
-  );
+  const infoTitle = safeSegment(spec.info?.title || external_node_path_namespaceObject.basename(oasFilename, external_node_path_namespaceObject.extname(oasFilename)), 'api');
 
   // Hyphen vs. space in a group's folder name is not a meaningful difference
   // — "shipping-labels" and "shipping labels" are the same folder to a
@@ -53259,16 +53367,11 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
   const apiDir = external_node_path_namespaceObject.join(refDir, infoTitle);
   const foldersBySlug = existingFoldersBySlug(apiDir);
 
-  const existingPages = collectExistingPages(refDir).filter(
-    (p) => p.data.api.file === oasFilename,
-  );
+  const existingPages = collectExistingPages(refDir).filter(p => p.data.api.file === oasFilename);
 
   const pagesByOpId = new Map();
   for (const page of existingPages) {
-    pagesByOpId.set(
-      operationKey({ operationId: page.data.api.operationId, isWebhook: !!page.data.api.webhook }),
-      page,
-    );
+    pagesByOpId.set(operationKey({ operationId: page.data.api.operationId, isWebhook: !!page.data.api.webhook }), page);
   }
 
   const changes = { added: [], deleted: [], moved: [], updated: [], skipped: [] };
@@ -53281,9 +53384,7 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
   // Tag descriptions from the spec's top-level `tags` array, used for the
   // per-tag category landing page (index.md).
   const tagDescriptions = new Map(
-    (Array.isArray(spec.tags) ? spec.tags : [])
-      .filter((t) => t && t.name)
-      .map((t) => [t.name, t.description || null]),
+    (Array.isArray(spec.tags) ? spec.tags : []).filter(t => t && t.name).map(t => [t.name, t.description || null]),
   );
   // Every description the spec supplies, regardless of which tag: what an
   // emptied tag folder's excerpt is checked against (see `isGeneratedTagIndex`).
@@ -53334,11 +53435,11 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
   // listed in `tags`) keeps its natural encounter order, appended after every
   // declared tag.
   const declaredOrder = (Array.isArray(spec.tags) ? spec.tags : [])
-    .filter((t) => t && t.name)
-    .map((t) => slugifyFolder(safeSegment(t.name, 'Other')) || 'other');
+    .filter(t => t && t.name)
+    .map(t => slugifyFolder(safeSegment(t.name, 'Other')) || 'other');
   const orderedFolders = [
-    ...declaredOrder.filter((folder) => groupsByFolder.has(folder)),
-    ...[...groupsByFolder.keys()].filter((folder) => !declaredOrder.includes(folder)),
+    ...declaredOrder.filter(folder => groupsByFolder.has(folder)),
+    ...[...groupsByFolder.keys()].filter(folder => !declaredOrder.includes(folder)),
   ];
 
   const groupDirs = new Map();
@@ -53365,7 +53466,7 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
       // With `apply-tag-changes`, the spec owns the category page's title and
       // excerpt too (a tag with no description clears the excerpt). Its body
       // and any other frontmatter are the user's and are kept.
-      const updated = updateFrontmatter(indexPath, (data) => {
+      const updated = updateFrontmatter(indexPath, data => {
         data.title = title;
         if (description) data.excerpt = description;
         else delete data.excerpt;
@@ -53421,7 +53522,7 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
     // its own `hidden` — removing the extension never unhides a page.
     if (op.xInternal.present) {
       const hidden = Boolean(op.xInternal.value);
-      const updated = updateFrontmatter(filePath, (data) => {
+      const updated = updateFrontmatter(filePath, data => {
         data.hidden = hidden;
       });
       if (updated) changes.updated.push(external_node_path_namespaceObject.relative(refDir, filePath));
@@ -53481,9 +53582,9 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
     const indexPath = external_node_path_namespaceObject.join(dir, 'index.md');
     if (!external_node_fs_namespaceObject.existsSync(indexPath)) continue;
     const isNew = createdIndexes.has(indexPath);
-    const allHidden = children.every((x) => x.present && (isNew ? Boolean(x.value) : x.value === true));
+    const allHidden = children.every(x => x.present && (isNew ? Boolean(x.value) : x.value === true));
     if (!allHidden) continue;
-    const updated = updateFrontmatter(indexPath, (data) => {
+    const updated = updateFrontmatter(indexPath, data => {
       data.hidden = true;
     });
     if (updated && !isNew) changes.updated.push(external_node_path_namespaceObject.relative(refDir, indexPath));
@@ -53545,7 +53646,7 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
  *   Returns null if there's no reference/ dir or no specs.
  */
 function syncOas(input) {
-  const gitRoot = typeof input === 'string' ? input : (input?.cwd || process.cwd());
+  const gitRoot = typeof input === 'string' ? input : input?.cwd || process.cwd();
   const refDir = external_node_path_namespaceObject.join(gitRoot, 'reference');
   if (!external_node_fs_namespaceObject.existsSync(refDir)) return null;
 
@@ -53597,7 +53698,9 @@ function printSyncResults(results) {
 
     const dot = hasChanges ? warn('●') : success('●');
     console.log();
-    console.log(`  ${dot} ${bold(title)} ${dim(`(${filename} · ${opCount} ${opCount === 1 ? 'endpoint' : 'endpoints'})`)}`);
+    console.log(
+      `  ${dot} ${bold(title)} ${dim(`(${filename} · ${opCount} ${opCount === 1 ? 'endpoint' : 'endpoints'})`)}`,
+    );
 
     if (!hasChanges) {
       continue;
@@ -53616,9 +53719,7 @@ function printSyncResults(results) {
       console.log(`    ${warn('~')} Updated ${file}`);
     }
     for (const { path: file, operationId } of changes.skipped) {
-      console.log(
-        `    ${warn('!')} Skipped ${file} for "${operationId}" (destination already exists)`,
-      );
+      console.log(`    ${warn('!')} Skipped ${file} for "${operationId}" (destination already exists)`);
       skipped.push({ filename, path: file, operationId });
     }
 
@@ -53666,8 +53767,7 @@ async function run(_options, _cmd, ctx) {
     return;
   }
 
-  const { totalAdded, totalDeleted, totalMoved, totalUpdated, totalSkipped, skipped } =
-    printSyncResults(results);
+  const { totalAdded, totalDeleted, totalMoved, totalUpdated, totalSkipped, skipped } = printSyncResults(results);
 
   console.log();
   const total = totalAdded + totalDeleted + totalMoved + totalUpdated;
@@ -53684,7 +53784,9 @@ async function run(_options, _cmd, ctx) {
   // to whoever wraps this command in CI to notice and fail on it themselves.
   if (totalSkipped > 0) {
     const syncedNote = total > 0 ? ` (${totalAdded} added, ${totalDeleted} deleted${extraNote})` : '';
-    error(`${totalSkipped} ${totalSkipped === 1 ? 'page' : 'pages'} skipped${syncedNote} — see above for which, and why.`);
+    error(
+      `${totalSkipped} ${totalSkipped === 1 ? 'page' : 'pages'} skipped${syncedNote} — see above for which, and why.`,
+    );
   } else if (total === 0) {
     ok('Reference pages are already in sync.');
   } else {
@@ -53707,6 +53809,7 @@ async function run(_options, _cmd, ctx) {
 }
 
 ;// CONCATENATED MODULE: ./src/validators/oas-reference.js
+
 
 
 
@@ -53739,7 +53842,7 @@ function oas_reference_validateAll(files, gitRoot, { fix } = {}) {
   }
 
   // Collect all reference pages with api frontmatter.
-  const refPages = files.filter((f) => f.startsWith('reference/') && f.endsWith('.md'));
+  const refPages = files.filter(f => f.startsWith('reference/') && f.endsWith('.md'));
 
   for (const relPath of refPages) {
     const filePath = external_node_path_namespaceObject.join(gitRoot, relPath);
@@ -53781,11 +53884,9 @@ function oas_reference_validateAll(files, gitRoot, { fix } = {}) {
   // Check for missing pages: operations in the spec with no corresponding page.
   const existingPages = collectExistingPages(refDir);
   for (const [oasFilename, { ops }] of oasMap) {
-    const pagesForOas = existingPages.filter((p) => p.data.api.file === oasFilename);
+    const pagesForOas = existingPages.filter(p => p.data.api.file === oasFilename);
     const coveredOps = new Set(
-      pagesForOas.map((p) =>
-        operationKey({ operationId: p.data.api.operationId, isWebhook: !!p.data.api.webhook }),
-      ),
+      pagesForOas.map(p => operationKey({ operationId: p.data.api.operationId, isWebhook: !!p.data.api.webhook })),
     );
 
     for (const op of ops.values()) {
@@ -53805,7 +53906,7 @@ function oas_reference_validateAll(files, gitRoot, { fix } = {}) {
   // is actually fixable. The sync adds, deletes, moves, hides and reorders
   // reference files, which is far too much to do on the strength of an
   // unfixable warning (`x-readme.internal`, a page pointing at a missing spec).
-  if (fix && results.some((r) => r.fixable)) {
+  if (fix && results.some(r => r.fixable)) {
     const syncResults = syncOas(gitRoot);
     if (syncResults) {
       for (const r of results) {
@@ -65110,6 +65211,8 @@ var OASNormalize = class _OASNormalize {
 
 
 
+
+
 const oas_schema_name = 'oas-schema';
 
 /**
@@ -65248,7 +65351,7 @@ function ordering_parseOrderYaml(content) {
   return content
     .split('\n')
     .map(parseOrderEntry)
-    .filter((entry) => entry !== null);
+    .filter(entry => entry !== null);
 }
 
 function isIndex(name) {
@@ -65323,7 +65426,7 @@ function ordering_validateAll(files, gitRoot, { fix } = {}) {
 
       // On disk but not ordered.
       if (requireOrder) {
-        const missing = [...onDisk].filter((slug) => !ordered.has(slug)).sort();
+        const missing = [...onDisk].filter(slug => !ordered.has(slug)).sort();
         if (missing.length > 0) {
           results.push({
             file: relOrder,
@@ -65367,7 +65470,7 @@ function ordering_validateAll(files, gitRoot, { fix } = {}) {
   for (const r of results) {
     if (!r._fixAdd) continue;
     const { orderPath, missing } = r._fixAdd;
-    const newEntries = missing.map((slug) => `- ${ordering_yamlSafeSlug(slug)}`).join('\n');
+    const newEntries = missing.map(slug => `- ${ordering_yamlSafeSlug(slug)}`).join('\n');
 
     if (external_node_fs_namespaceObject.existsSync(orderPath)) {
       const existing = external_node_fs_namespaceObject.readFileSync(orderPath, 'utf-8');
@@ -65394,11 +65497,11 @@ function ordering_validateAll(files, gitRoot, { fix } = {}) {
     // untouched entries exactly as written.
     const kept = external_node_fs_namespaceObject.readFileSync(orderPath, 'utf-8')
       .split('\n')
-      .filter((line) => {
+      .filter(line => {
         const entry = parseOrderEntry(line);
         return entry === null || !toRemove.has(entry);
       });
-    if (kept.some((line) => parseOrderEntry(line) !== null)) {
+    if (kept.some(line => parseOrderEntry(line) !== null)) {
       external_node_fs_namespaceObject.writeFileSync(orderPath, kept.join('\n'));
     } else {
       external_node_fs_namespaceObject.unlinkSync(orderPath);
@@ -65533,7 +65636,7 @@ function recipes_validate({ content, relativePath }) {
     const block = blocksByLang.get(ref.lang);
 
     if (!block) {
-      const available = codeBlocks.map((b) => b.lang).join(', ');
+      const available = codeBlocks.map(b => b.lang).join(', ');
       results.push({
         file: relativePath,
         rule: recipes_name,
@@ -65571,34 +65674,35 @@ function recipes_validate({ content, relativePath }) {
 
 
 
+
 const TARGET_PATTERNS = [
   { dir: 'custom_blocks', ext: ['.mdx', '.md'] },
   { dir: 'docs', ext: '.md' },
   { dir: 'reference', ext: '.md' },
   { dir: 'custom_pages', ext: '.md' },
   { dir: 'recipes', ext: '.md' },
-]
+];
 
 /**
  * Collect all target files from the repo root.
  */
 function collectFiles(gitRoot) {
-  const files = []
+  const files = [];
 
   for (const { dir, ext } of TARGET_PATTERNS) {
-    const dirPath = external_node_path_namespaceObject.join(gitRoot, dir)
-    if (!external_node_fs_namespaceObject.existsSync(dirPath)) continue
+    const dirPath = external_node_path_namespaceObject.join(gitRoot, dir);
+    if (!external_node_fs_namespaceObject.existsSync(dirPath)) continue;
 
-    const exts = Array.isArray(ext) ? ext : [ext]
-    const entries = external_node_fs_namespaceObject.readdirSync(dirPath, { recursive: true })
+    const exts = Array.isArray(ext) ? ext : [ext];
+    const entries = external_node_fs_namespaceObject.readdirSync(dirPath, { recursive: true });
     for (const entry of entries) {
-      if (exts.some((e) => entry.endsWith(e))) {
-        files.push(external_node_path_namespaceObject.join(dir, entry))
+      if (exts.some(e => entry.endsWith(e))) {
+        files.push(external_node_path_namespaceObject.join(dir, entry));
       }
     }
   }
 
-  return files.sort()
+  return files.sort();
 }
 
 // Every validator in src/validators/, imported statically (rather than
@@ -65617,14 +65721,14 @@ const ALL_VALIDATORS = [
   oas_schema_namespaceObject,
   ordering_namespaceObject,
   recipes_namespaceObject,
-]
+];
 
 /**
  * Validators can export `validate()` for per-file checks and/or
  * `validateAll()` for cross-file checks (like ordering).
  */
 function loadValidators() {
-  return ALL_VALIDATORS.filter((mod) => mod.name && (mod.validate || mod.validateAll))
+  return ALL_VALIDATORS.filter(mod => mod.name && (mod.validate || mod.validateAll));
 }
 
 /**
@@ -65633,44 +65737,44 @@ function loadValidators() {
  * Calls `onFile(relativePath)` before processing each file (for progress reporting).
  */
 async function runValidators(files, gitRoot, { onFile, onBeforeCrossFile, fix, nonInteractive } = {}) {
-  const validators = await loadValidators()
-  const results = []
+  const validators = await loadValidators();
+  const results = [];
 
   // Per-file validators.
   for (const relativePath of files) {
-    if (onFile) onFile(relativePath)
+    if (onFile) onFile(relativePath);
 
-    const filePath = external_node_path_namespaceObject.join(gitRoot, relativePath)
-    const content = external_node_fs_namespaceObject.readFileSync(filePath, 'utf-8')
+    const filePath = external_node_path_namespaceObject.join(gitRoot, relativePath);
+    const content = external_node_fs_namespaceObject.readFileSync(filePath, 'utf-8');
 
     for (const validator of validators) {
-      if (!validator.validate) continue
-      const result = validator.validate({ filePath, content, relativePath, fix })
+      if (!validator.validate) continue;
+      const result = validator.validate({ filePath, content, relativePath, fix });
       if (result) {
         if (Array.isArray(result)) {
-          results.push(...result)
+          results.push(...result);
         } else {
-          results.push(result)
+          results.push(result);
         }
       }
     }
   }
 
   // Cross-file validators — stop the spinner first so interactive prompts work.
-  if (onBeforeCrossFile) onBeforeCrossFile()
+  if (onBeforeCrossFile) onBeforeCrossFile();
   for (const validator of validators) {
-    if (!validator.validateAll) continue
-    const result = await validator.validateAll(files, gitRoot, { fix, nonInteractive })
+    if (!validator.validateAll) continue;
+    const result = await validator.validateAll(files, gitRoot, { fix, nonInteractive });
     if (result) {
       if (Array.isArray(result)) {
-        results.push(...result)
+        results.push(...result);
       } else {
-        results.push(result)
+        results.push(result);
       }
     }
   }
 
-  return results
+  return results;
 }
 
 ;// CONCATENATED MODULE: external "node:child_process"
@@ -67502,10 +67606,10 @@ function detectRemotePlatform() {
   const remotes = readRemotes();
   if (!remotes) return null;
   for (const [key, def] of Object.entries(PLATFORMS)) {
-    if (def.remoteHosts && def.remoteHosts.some((h) => remotes.toLowerCase().includes(h))) {
+    if (def.remoteHosts && def.remoteHosts.some(h => remotes.toLowerCase().includes(h))) {
       return key;
     }
-    if (def.remotePathHints && def.remotePathHints.some((p) => remotes.toLowerCase().includes(p))) {
+    if (def.remotePathHints && def.remotePathHints.some(p => remotes.toLowerCase().includes(p))) {
       return key;
     }
   }
@@ -67520,7 +67624,7 @@ function detectExistingCi(gitRoot) {
   if (!gitRoot) return [];
   const found = [];
   for (const [key, def] of Object.entries(PLATFORMS)) {
-    const hit = def.fsMarkers.some((marker) => external_node_fs_namespaceObject.existsSync(external_node_path_namespaceObject.join(gitRoot, marker)));
+    const hit = def.fsMarkers.some(marker => external_node_fs_namespaceObject.existsSync(external_node_path_namespaceObject.join(gitRoot, marker)));
     if (hit) found.push(key);
   }
   return found;
@@ -67585,9 +67689,9 @@ function getWorkflowVersion(gitRoot) {
 var external_node_os_ = __nccwpck_require__(8161);
 ;// CONCATENATED MODULE: external "node:readline"
 const external_node_readline_namespaceObject = __WEBPACK_EXTERNAL_createRequire(import.meta.url)("node:readline");
-// EXTERNAL MODULE: ./src/utils/eyes.js
-var utils_eyes = __nccwpck_require__(9636);
 ;// CONCATENATED MODULE: ./src/utils/tamagotchi.js
+
+
 
 
 
@@ -67611,7 +67715,16 @@ function getSavePath() {
 const MAX_STAT = 10;
 const DECAY_INTERVAL_MS = (/* unused pure expression or super */ null && (1000 * 60 * 5)); // stats decay every 5 minutes of real time
 
-const ALL_TRICKS = (/* unused pure expression or super */ null && (['hide and seek', 'spin', 'fetch', 'bow', 'chameleon', 'dance', 'owl impression', 'writes an OAS file']));
+const ALL_TRICKS = (/* unused pure expression or super */ null && ([
+  'hide and seek',
+  'spin',
+  'fetch',
+  'bow',
+  'chameleon',
+  'dance',
+  'owl impression',
+  'writes an OAS file',
+]));
 
 function newPet(name = 'Eyes', color = 'blue') {
   return {
@@ -67619,12 +67732,12 @@ function newPet(name = 'Eyes', color = 'blue') {
     color,
     born: Date.now(),
     lastVisit: Date.now(),
-    hunger: 8,    // 0 = starving, 10 = full
+    hunger: 8, // 0 = starving, 10 = full
     happiness: 8, // 0 = miserable, 10 = ecstatic
-    energy: 8,    // 0 = exhausted, 10 = wide awake
+    energy: 8, // 0 = exhausted, 10 = wide awake
     sleeping: false,
-    age: 0,       // total real-time minutes alive
-    tricks: [],   // learned trick names
+    age: 0, // total real-time minutes alive
+    tricks: [], // learned trick names
   };
 }
 
@@ -67673,7 +67786,7 @@ function trickPhrase(trick) {
 }
 
 const tamagotchi_ok = (message, extra = {}) => ({ message, ok: true, ...extra });
-const fail = (message) => ({ message, ok: false });
+const fail = message => ({ message, ok: false });
 
 function feed(pet) {
   if (pet.hunger >= MAX_STAT) return fail('Already full!');
@@ -67759,11 +67872,16 @@ function getMood(pet) {
 
 function getExpression(mood) {
   switch (mood) {
-    case 'sleeping': return 'closed';
-    case 'tired': return 'squint';
-    case 'sad': return 'squint';
-    case 'happy': return 'right';
-    default: return 'right';
+    case 'sleeping':
+      return 'closed';
+    case 'tired':
+      return 'squint';
+    case 'sad':
+      return 'squint';
+    case 'happy':
+      return 'right';
+    default:
+      return 'right';
   }
 }
 
@@ -67792,22 +67910,80 @@ function getAnimFrames(mood) {
       };
     case 'tired':
       return {
-        frames: ['half-blink', 'half-blink', 'half-blink-left', 'half-blink', 'half-blink', 'half-blink-right', 'squint', 'half-blink', 'half-blink-left', 'half-blink', 'half-blink', 'half-blink-right', 'closed', 'half-blink', 'half-blink'],
+        frames: [
+          'half-blink',
+          'half-blink',
+          'half-blink-left',
+          'half-blink',
+          'half-blink',
+          'half-blink-right',
+          'squint',
+          'half-blink',
+          'half-blink-left',
+          'half-blink',
+          'half-blink',
+          'half-blink-right',
+          'closed',
+          'half-blink',
+          'half-blink',
+        ],
         durations: [800, 600, 500, 1000, 400, 500, 150, 800, 500, 600, 800, 500, 200, 300, 1200],
       };
     case 'sad':
       return {
-        frames: ['left', 'left', 'right', 'right', 'left', 'half-blink', 'squint', 'half-blink', 'left', 'left', 'right', 'left'],
+        frames: [
+          'left',
+          'left',
+          'right',
+          'right',
+          'left',
+          'half-blink',
+          'squint',
+          'half-blink',
+          'left',
+          'left',
+          'right',
+          'left',
+        ],
         durations: [800, 400, 200, 800, 600, 80, 400, 80, 600, 400, 300, 800],
       };
     case 'happy':
       return {
-        frames: ['right', 'right', 'right:up', 'right:up', 'right', 'left', 'right', 'half-blink', 'squint', 'closed', 'squint', 'half-blink', 'right', 'right'],
+        frames: [
+          'right',
+          'right',
+          'right:up',
+          'right:up',
+          'right',
+          'left',
+          'right',
+          'half-blink',
+          'squint',
+          'closed',
+          'squint',
+          'half-blink',
+          'right',
+          'right',
+        ],
         durations: [600, 300, 150, 150, 300, 400, 400, 50, 50, 50, 50, 50, 300, 800],
       };
     default:
       return {
-        frames: ['right', 'right', 'right', 'left', 'left', 'right', 'half-blink', 'squint', 'closed', 'squint', 'half-blink', 'right', 'right'],
+        frames: [
+          'right',
+          'right',
+          'right',
+          'left',
+          'left',
+          'right',
+          'half-blink',
+          'squint',
+          'closed',
+          'squint',
+          'half-blink',
+          'right',
+          'right',
+        ],
         durations: [1200, 200, 400, 120, 600, 120, 50, 50, 50, 50, 50, 200, 1000],
       };
   }
@@ -67836,7 +68012,7 @@ function boxVisLen(s) {
   let len = 0;
   for (const ch of stripped) {
     const code = ch.codePointAt(0);
-    len += code >= 0x1F000 ? 2 : 1;
+    len += code >= 0x1f000 ? 2 : 1;
   }
   return len;
 }
@@ -67849,15 +68025,15 @@ function boxLine(content = '', bg = null) {
 }
 
 function boxTop() {
-  return chalk.dim('┌' + '─'.repeat(BOX_WIDTH - 2) + '┐');
+  return chalk.dim(`┌${'─'.repeat(BOX_WIDTH - 2)}┐`);
 }
 
 function boxBottom() {
-  return chalk.dim('└' + '─'.repeat(BOX_WIDTH - 2) + '┘');
+  return chalk.dim(`└${'─'.repeat(BOX_WIDTH - 2)}┘`);
 }
 
 function boxDivider() {
-  return chalk.dim('├' + '─'.repeat(BOX_WIDTH - 2) + '┤');
+  return chalk.dim(`├${'─'.repeat(BOX_WIDTH - 2)}┤`);
 }
 
 const STATUS_LEFT = 22; // inner width of left column
@@ -67872,7 +68048,7 @@ function statusRow(leftContent, rightContent) {
 }
 
 function statusDivider() {
-  return chalk.dim('─'.repeat(STATUS_LEFT) + '┼' + '─'.repeat(STATUS_RIGHT));
+  return chalk.dim(`${'─'.repeat(STATUS_LEFT)}┼${'─'.repeat(STATUS_RIGHT)}`);
 }
 
 function renderStatus(pet) {
@@ -67880,10 +68056,7 @@ function renderStatus(pet) {
   const moodEmoji = { sleeping: 'sleeping', tired: 'tired', sad: 'lonely', happy: 'happy!', normal: 'content' }[mood];
 
   const lines = [
-    statusRow(
-      ` ${chalk.bold(pet.name)}`,
-      ` ${chalk.dim('vitals')}`,
-    ),
+    statusRow(` ${chalk.bold(pet.name)}`, ` ${chalk.dim('vitals')}`),
     statusRow(
       ` ${chalk.dim('age:')} ${formatAge(pet.age)}`,
       ` ${chalk.hex('#ff6b6b')('hunger')}  ${statBar(pet.hunger, MAX_STAT, chalk.hex('#ff6b6b'))}   ${String(pet.hunger).padStart(2)}/${MAX_STAT}`,
@@ -67940,9 +68113,10 @@ async function askSetup() {
   console.log('');
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  const ask = (q) => new Promise((resolve) => {
-    rl.question(q, (answer) => resolve(answer.trim()));
-  });
+  const ask = q =>
+    new Promise(resolve => {
+      rl.question(q, answer => resolve(answer.trim()));
+    });
 
   // Ask name
   const name = (await ask(chalk.hex('#63D2FF')('  A new friend hatched! What will you name them? '))) || 'Eyes';
@@ -68034,7 +68208,7 @@ async function startGame() {
     for (const ch of stripped) {
       const code = ch.codePointAt(0);
       // Emoji (surrogate pairs / high codepoints) are 2 cols, most symbols are 1
-      len += code >= 0x1F000 ? 2 : 1;
+      len += code >= 0x1f000 ? 2 : 1;
     }
     return len;
   }
@@ -68086,7 +68260,9 @@ async function startGame() {
       } else if (trickSceneOverlay && (trickSceneOverlay.right || trickSceneOverlay[r])) {
         if (trickSceneOverlay.left) leftStr = padRight(trickSceneOverlay.left[r] || '', effLeft);
         if (trickSceneOverlay.right) rightStr = padRight(trickSceneOverlay.right[r] || '', effRight);
-        if (!trickSceneOverlay.left && !trickSceneOverlay.right) rightStr = padRight(' ' + (trickSceneOverlay[r] || ''), effRight);
+        if (!trickSceneOverlay.left && !trickSceneOverlay.right) {
+          rightStr = padRight(` ${trickSceneOverlay[r] || ''}`, effRight);
+        }
       }
 
       return leftStr + iconLine + rightStr;
@@ -68104,31 +68280,28 @@ async function startGame() {
       const pos = PAD_LEFT + 2 + offset;
       const pad = ' '.repeat(Math.max(0, pos));
       const skin = chalk.hex('#FFCC88');
-      return [
-        pad + skin(' ╷╷╷╷'),
-        pad + skin('╭┴┴┴┴╮'),
-      ];
+      return [pad + skin(' ╷╷╷╷'), pad + skin('╭┴┴┴┴╮')];
     }
 
     // Render with box border
     const footer = chalk.dim('[r] reset  [q] quit');
     const footerVis = '[r] reset  [q] quit'.length;
     console.log('');
-    console.log('  ' + ' '.repeat(BOX_WIDTH - 2 - footerVis + 1) + footer);
-    console.log('  ' + boxTop());
+    console.log(`  ${' '.repeat(BOX_WIDTH - 2 - footerVis + 1)}${footer}`);
+    console.log(`  ${boxTop()}`);
     const sceneBg = petState.sleeping ? '#05051a' : null;
     const handLines = getPetHand();
     if (handLines.length) {
       // Hand takes 2 rows, so skip the empty top row and trim the last scene row
-      console.log('  ' + boxLine(handLines[0], sceneBg));
-      console.log('  ' + boxLine(handLines[1], sceneBg));
+      console.log(`  ${boxLine(handLines[0], sceneBg)}`);
+      console.log(`  ${boxLine(handLines[1], sceneBg)}`);
       for (let i = 0; i < sceneRows.length - 1; i++) {
-        console.log('  ' + boxLine(sceneRows[i], sceneBg));
+        console.log(`  ${boxLine(sceneRows[i], sceneBg)}`);
       }
     } else {
-      console.log('  ' + boxLine('', sceneBg));
+      console.log(`  ${boxLine('', sceneBg)}`);
       for (const row of sceneRows) {
-        console.log('  ' + boxLine(row, sceneBg));
+        console.log(`  ${boxLine(row, sceneBg)}`);
       }
     }
     // Message centered between scene and vitals
@@ -68137,25 +68310,27 @@ async function startGame() {
     if (boxVisLen(displayMsg) > inner) {
       // Strip ANSI, truncate, re-apply no color (plain truncation)
       const plain = displayMsg.replace(/\x1b\[[0-9;]*m/g, '');
-      displayMsg = plain.slice(0, inner - 1) + '…';
+      displayMsg = `${plain.slice(0, inner - 1)}…`;
     }
     const msgVis = boxVisLen(displayMsg);
     const msgPadL = Math.max(0, Math.floor((inner - msgVis) / 2));
     const msgPadR = Math.max(0, inner - msgVis - msgPadL);
-    console.log('  ' + boxDivider());
-    console.log('  ' + chalk.dim('│') + ' '.repeat(msgPadL) + displayMsg + ' '.repeat(msgPadR) + chalk.dim('│'));
-    console.log('  ' + chalk.dim('├' + '─'.repeat(STATUS_LEFT) + '┬' + '─'.repeat(STATUS_RIGHT) + '┤'));
+    console.log(`  ${boxDivider()}`);
+    console.log(`  ${chalk.dim('│')}${' '.repeat(msgPadL)}${displayMsg}${' '.repeat(msgPadR)}${chalk.dim('│')}`);
+    console.log(`  ${chalk.dim(`├${'─'.repeat(STATUS_LEFT)}┬${'─'.repeat(STATUS_RIGHT)}┤`)}`);
     for (const line of statusLines) {
-      console.log('  ' + boxLine(line));
+      console.log(`  ${boxLine(line)}`);
     }
-    console.log('  ' + chalk.dim('├' + '─'.repeat(STATUS_LEFT) + '┴' + '─'.repeat(STATUS_RIGHT) + '┤'));
+    console.log(`  ${chalk.dim(`├${'─'.repeat(STATUS_LEFT)}┴${'─'.repeat(STATUS_RIGHT)}┤`)}`);
     for (const line of actionLines) {
-      console.log('  ' + boxLine(line));
+      console.log(`  ${boxLine(line)}`);
     }
-    console.log('  ' + boxBottom());
+    console.log(`  ${boxBottom()}`);
     if (confirmingReset) {
       console.log('');
-      console.log('  ' + chalk.hex('#ff6b6b')(`Reset ${petState.name}? They'll be gone forever!`) + chalk.dim('  [y] yes  [n] no'));
+      console.log(
+        `  ${chalk.hex('#ff6b6b')(`Reset ${petState.name}? They'll be gone forever!`)}${chalk.dim('  [y] yes  [n] no')}`,
+      );
     } else {
       console.log('');
     }
@@ -68180,15 +68355,30 @@ async function startGame() {
     }
 
     const leftGrid = [
-      [{ col: 3, seed: 0 }, { col: PAD_LEFT - 4, seed: 8 }],
+      [
+        { col: 3, seed: 0 },
+        { col: PAD_LEFT - 4, seed: 8 },
+      ],
       [{ col: 7, seed: 5 }],
-      [{ col: 2, seed: 2 }, { col: PAD_LEFT - 3, seed: 9 }],
+      [
+        { col: 2, seed: 2 },
+        { col: PAD_LEFT - 3, seed: 9 },
+      ],
     ];
 
     const rightGrid = [
-      [{ col: 2, seed: 3 }, { col: Math.min(10, PAD_RIGHT - 3), seed: 6 }],
-      [{ col: 5, seed: 1 }, { col: Math.min(12, PAD_RIGHT - 4), seed: 10 }],
-      [{ col: 1, seed: 7 }, { col: Math.min(8, PAD_RIGHT - 2), seed: 4 }],
+      [
+        { col: 2, seed: 3 },
+        { col: Math.min(10, PAD_RIGHT - 3), seed: 6 },
+      ],
+      [
+        { col: 5, seed: 1 },
+        { col: Math.min(12, PAD_RIGHT - 4), seed: 10 },
+      ],
+      [
+        { col: 1, seed: 7 },
+        { col: Math.min(8, PAD_RIGHT - 2), seed: 4 },
+      ],
     ];
 
     const leftLines = leftGrid.map(row => {
@@ -68267,11 +68457,11 @@ async function startGame() {
     if (heartFrame < 0) return { left: null, right: null };
     const hearts = [
       { startFrame: 0, side: 'right', startRow: 2, offset: 2 },
-      { startFrame: 1, side: 'left',  startRow: 2, offset: 2 },
+      { startFrame: 1, side: 'left', startRow: 2, offset: 2 },
       { startFrame: 3, side: 'right', startRow: 2, offset: 6 },
-      { startFrame: 4, side: 'left',  startRow: 1, offset: 5 },
+      { startFrame: 4, side: 'left', startRow: 1, offset: 5 },
       { startFrame: 6, side: 'right', startRow: 2, offset: 10 },
-      { startFrame: 7, side: 'left',  startRow: 2, offset: 9 },
+      { startFrame: 7, side: 'left', startRow: 2, offset: 9 },
     ];
     const leftLines = ['', '', '', ''];
     const rightLines = ['', '', '', ''];
@@ -68338,7 +68528,7 @@ async function startGame() {
       const cells = s.side === 'left' ? leftCells[s.r] : rightCells[s.r];
       if (s.col < cells.length) cells[s.col] = chalk.hex(color)(ch);
     }
-    const toStr = (cells) => cells.map(c => c || ' ').join('');
+    const toStr = cells => cells.map(c => c || ' ').join('');
     return {
       left: leftCells.map(toStr),
       right: rightCells.map(toStr),
@@ -68347,7 +68537,21 @@ async function startGame() {
 
   async function animatePlay() {
     playAnimating = true;
-    const bounceFrames = ['right:up', 'right:up', 'right', 'right', 'right:up', 'right:up', 'right', 'right', 'right:up', 'right:up', 'right', 'right', 'right'];
+    const bounceFrames = [
+      'right:up',
+      'right:up',
+      'right',
+      'right',
+      'right:up',
+      'right:up',
+      'right',
+      'right',
+      'right:up',
+      'right:up',
+      'right',
+      'right',
+      'right',
+    ];
     for (playFrame = 0; playFrame <= 12; playFrame++) {
       frameOverride = bounceFrames[playFrame % bounceFrames.length];
       draw();
@@ -68362,8 +68566,12 @@ async function startGame() {
   let teachAnimating = false;
 
   async function animateTrick(name) {
-    const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const setFrame = async (f, ms) => { frameOverride = f; draw(); await wait(ms); };
+    const wait = ms => new Promise(r => setTimeout(r, ms));
+    const setFrame = async (f, ms) => {
+      frameOverride = f;
+      draw();
+      await wait(ms);
+    };
 
     switch (name) {
       case 'hide and seek': {
@@ -68373,10 +68581,14 @@ async function startGame() {
           await setFrame('right', 180);
         }
         // peek — bob up slightly then back down
-        iconShift = 2; await setFrame('right', 200);
-        iconShift = 3; await setFrame('right', 300);
-        iconShift = 2; await setFrame('right', 150);
-        iconShift = 3; await setFrame('right', 400);
+        iconShift = 2;
+        await setFrame('right', 200);
+        iconShift = 3;
+        await setFrame('right', 300);
+        iconShift = 2;
+        await setFrame('right', 150);
+        iconShift = 3;
+        await setFrame('right', 400);
         // come back up
         for (const shift of [2, 1, 0]) {
           iconShift = shift;
@@ -68385,14 +68597,15 @@ async function startGame() {
         break;
       }
       case 'spin': {
-        for (const f of ['left', 'up-left', 'up-right', 'right', 'up-right', 'up-left', 'left', 'up-left', 'right'])
+        for (const f of ['left', 'up-left', 'up-right', 'right', 'up-right', 'up-left', 'left', 'up-left', 'right']) {
           await setFrame(f, 110);
+        }
         break;
       }
       case 'fetch': {
         iconHShift = -8;
         const method = chalk.hex('#63D2FF')('POST');
-        const pending = chalk.dim('○') + ' ' + method + ' /api/pets';
+        const pending = `${chalk.dim('○')} ${method} /api/pets`;
         const d = chalk.dim;
         const json = [
           d('  "id": 1,'),
@@ -68432,8 +68645,16 @@ async function startGame() {
         break;
       }
       case 'bow': {
-        for (const [f, ms] of [['right', 200], ['right:up', 300], ['right:up', 300], ['squint', 500], ['right:up', 300], ['right', 200]])
+        for (const [f, ms] of [
+          ['right', 200],
+          ['right:up', 300],
+          ['right:up', 300],
+          ['squint', 500],
+          ['right:up', 300],
+          ['right', 200],
+        ]) {
           await setFrame(f, ms);
+        }
         break;
       }
       case 'chameleon': {
@@ -68447,19 +68668,41 @@ async function startGame() {
       case 'dance': {
         const notes = ['♩', '♪', '♫', '♬'];
         const nc = chalk.hex('#ffd93d');
-        const place = (width, col, note) => ' '.repeat(Math.min(col, width - 1)) + nc(note) + ' '.repeat(Math.max(0, width - col - 1));
+        const place = (width, col, note) =>
+          ' '.repeat(Math.min(col, width - 1)) + nc(note) + ' '.repeat(Math.max(0, width - col - 1));
         // Each frame: scattered note positions on left and right, shifting each beat
-        const frames = ['left:up', 'left', 'right:up', 'right', 'left:up', 'left', 'right:up', 'right', 'right:up', 'right'];
+        const frames = [
+          'left:up',
+          'left',
+          'right:up',
+          'right',
+          'left:up',
+          'left',
+          'right:up',
+          'right',
+          'right:up',
+          'right',
+        ];
         const spots = [
           { lr: [14, 3], ll: [2, 11], rr: [4, 15], rl: [8, 1] },
-          { lr: [6, 16], ll: [9, 4],  rr: [12, 2], rl: [14, 7] },
+          { lr: [6, 16], ll: [9, 4], rr: [12, 2], rl: [14, 7] },
         ];
         for (let i = 0; i < frames.length; i++) {
           const s = spots[i % 2];
-          const ni = (k) => notes[(i + k) % notes.length];
+          const ni = k => notes[(i + k) % notes.length];
           trickSceneOverlay = {
-            left:  [place(PAD_LEFT, s.ll[0], ni(0)), place(PAD_LEFT, s.ll[1], ni(2)), place(PAD_LEFT, s.lr[0], ni(1)), place(PAD_LEFT, s.lr[1], ni(3))],
-            right: [place(PAD_RIGHT, s.rr[0], ni(2)), place(PAD_RIGHT, s.rl[0], ni(0)), place(PAD_RIGHT, s.rr[1], ni(3)), place(PAD_RIGHT, s.rl[1], ni(1))],
+            left: [
+              place(PAD_LEFT, s.ll[0], ni(0)),
+              place(PAD_LEFT, s.ll[1], ni(2)),
+              place(PAD_LEFT, s.lr[0], ni(1)),
+              place(PAD_LEFT, s.lr[1], ni(3)),
+            ],
+            right: [
+              place(PAD_RIGHT, s.rr[0], ni(2)),
+              place(PAD_RIGHT, s.rl[0], ni(0)),
+              place(PAD_RIGHT, s.rr[1], ni(3)),
+              place(PAD_RIGHT, s.rl[1], ni(1)),
+            ],
           };
           await setFrame(frames[i], 130);
         }
@@ -68469,8 +68712,14 @@ async function startGame() {
       case 'owl impression': {
         setPalette('owl');
         const hoot = chalk.hex('#ffd93d');
-        for (const [f, ms] of [['left', 200], ['right', 200], ['left', 200], ['right', 200]])
+        for (const [f, ms] of [
+          ['left', 200],
+          ['right', 200],
+          ['left', 200],
+          ['right', 200],
+        ]) {
           await setFrame(f, ms);
+        }
         const rpad = () => ' '.repeat(2 + Math.floor(Math.random() * 8));
         trickSceneOverlay = { right: [rpad() + hoot('hoot!'), '', '', ''] };
         await setFrame('up-right', 500);
@@ -68501,8 +68750,9 @@ async function startGame() {
         break;
       }
       default: {
-        for (const f of ['right:up', 'right', 'right:up', 'right'])
+        for (const f of ['right:up', 'right', 'right:up', 'right']) {
           await setFrame(f, 150);
+        }
       }
     }
     frameOverride = null;
@@ -68565,8 +68815,15 @@ async function startGame() {
     });
   }
 
-  const actionKeyMap = new Map([[feed, 'f'], [play, 'p'], [petAction, 'h'], [teach, 't']]);
-  function getnapKey() { return petState.sleeping ? 'w' : 's'; }
+  const actionKeyMap = new Map([
+    [feed, 'f'],
+    [play, 'p'],
+    [petAction, 'h'],
+    [teach, 't'],
+  ]);
+  function getnapKey() {
+    return petState.sleeping ? 'w' : 's';
+  }
 
   function doAction(actionFn) {
     if (actionBusy) return;
@@ -68577,7 +68834,7 @@ async function startGame() {
     savePet(petState);
     animFrame = 0;
     actionBusy = true;
-    activeAction = actionFn === nap ? getnapKey() : (actionKeyMap.get(actionFn) || null);
+    activeAction = actionFn === nap ? getnapKey() : actionKeyMap.get(actionFn) || null;
 
     function done() {
       activeAction = null;
@@ -68591,7 +68848,10 @@ async function startGame() {
       done();
     } else if (actionFn === nap) {
       // Only nap/wake gets the eye open/close animation
-      animateSleep(petState.sleeping).then(() => { draw(); done(); });
+      animateSleep(petState.sleeping).then(() => {
+        draw();
+        done();
+      });
     } else if (actionFn === feed) {
       animateFeed().then(done);
     } else if (actionFn === petAction) {
@@ -68600,9 +68860,8 @@ async function startGame() {
       animatePlay().then(done);
     } else if (actionFn === teach) {
       const tricksAfter = (petState.tricks || []).length;
-      const learnedTrick = tricksAfter > tricksBefore
-        ? petState.tricks[petState.tricks.length - 1]
-        : (result.trick || null);
+      const learnedTrick =
+        tricksAfter > tricksBefore ? petState.tricks[petState.tricks.length - 1] : result.trick || null;
       const learned = tricksAfter > tricksBefore;
       animateTeach(learnedTrick).then(() => {
         activeAction = null;
@@ -68624,14 +68883,16 @@ async function startGame() {
   }
 
   // Input handler
-  process.stdin.on('data', (key) => {
+  process.stdin.on('data', key => {
     if (stopped) return;
 
     if (confirmingReset) {
       if (key === 'y' || key === 'Y') {
         cleanup();
         const savePath = getSavePath();
-        try { fs.unlinkSync(savePath); } catch {}
+        try {
+          fs.unlinkSync(savePath);
+        } catch {}
         console.log('');
         console.log(`  ${chalk.dim('Save data cleared. A new friend will hatch next time!')}`);
         console.log('');
@@ -68662,8 +68923,14 @@ async function startGame() {
       case 't':
         doAction(teach);
         break;
-      case '1': case '2': case '3': case '4':
-      case '5': case '6': case '7': case '8': {
+      case '1':
+      case '2':
+      case '3':
+      case '4':
+      case '5':
+      case '6':
+      case '7':
+      case '8': {
         const idx = parseInt(key) - 1;
         const trickName = ALL_TRICKS[idx];
         const known = (petState.tricks || []).filter(t => ALL_TRICKS.includes(t));
@@ -68687,7 +68954,7 @@ async function startGame() {
         draw();
         cleanup();
         process.exit();
-        break;
+      // oxlint-disable-next-line no-fallthrough -- Can't add a `break` above this because it's unreachable.
       default:
         break;
     }
@@ -68718,12 +68985,13 @@ async function startGame() {
         const moodAfter = getMood(petState);
         if (moodBefore !== moodAfter) {
           if (moodAfter === 'tired') message = chalk.hex('#63D2FF')(`${petState.name} is getting sleepy...`);
-          else if (moodAfter === 'sad' && petState.hunger <= 1) message = chalk.hex('#ff6b6b')(`${petState.name} is hungry!`);
+          else if (moodAfter === 'sad' && petState.hunger <= 1) {
+            message = chalk.hex('#ff6b6b')(`${petState.name} is hungry!`);
+          }
         }
       }
     }
   }
-
 
   await gameLoop();
 }
@@ -68736,7 +69004,7 @@ const tips = [
   {
     weight: 1,
     commands: ['lint', 'oas:validate'],
-    condition: (ctx) => !ctx.isRunningInClaude && ctx.workflowOutdated,
+    condition: ctx => !ctx.isRunningInClaude && ctx.workflowOutdated,
     render() {
       console.log(`  💡 ${bold('Tip:')} Your GitHub Action is out of date!`);
       console.log(`     ${dim('⎿')}  ${orange(`${binName()} setup:github`)}`);
@@ -68746,7 +69014,7 @@ const tips = [
   {
     weight: 1,
     commands: ['lint', 'oas:validate'],
-    condition: (ctx) => !ctx.isRunningInClaude && ctx.detectedPlatform && !ctx.hasCiWorkflow,
+    condition: ctx => !ctx.isRunningInClaude && ctx.detectedPlatform && !ctx.hasCiWorkflow,
     render(ctx) {
       const label = ctx?.detectedPlatformLabel || 'CI';
       console.log(`  💡 ${bold('Tip:')} Set up ${label} to lint your docs on every PR!`);
@@ -68757,17 +69025,19 @@ const tips = [
   {
     weight: 1,
     commands: ['lint', 'oas:validate'],
-    condition: (ctx) => !ctx.isRunningInClaude && ctx.hasClaude,
+    condition: ctx => !ctx.isRunningInClaude && ctx.hasClaude,
     render() {
       console.log(`  💡 ${bold('Tip:')} Claude can fix these issues for you easily!`);
-      console.log(`     ${dim('⎿')}  ${orange(`claude "run '${binName()} lint' and fix the issues"`)}`);
+      console.log(
+        `     ${dim('⎿')}  ${orange(`claude "run '${binName()} lint' and fix the issues"`)}`,
+      );
       console.log();
     },
   },
   {
     weight: 1,
     commands: ['lint', 'oas:validate'],
-    condition: (ctx) => !ctx.isRunningInClaude && !ctx.hasClaude,
+    condition: ctx => !ctx.isRunningInClaude && !ctx.hasClaude,
     render() {
       console.log(`  💡 ${bold('Tip:')} Install Claude to automatically fix these issues!`);
       console.log(`     ${dim('⎿')}  ${dim('https://claude.ai/download')}`);
@@ -68778,7 +69048,9 @@ const tips = [
     weight: 0.1,
     condition: () => !loadPet(),
     render() {
-      console.log(`  💡 ${bold('Tip:')} Want a little friend? Run ${orange(`${binName()} play`)} to hatch one!`);
+      console.log(
+        `  💡 ${bold('Tip:')} Want a little friend? Run ${orange(`${binName()} play`)} to hatch one!`,
+      );
       console.log();
     },
   },
@@ -68787,7 +69059,9 @@ const tips = [
     condition: () => !!loadPet(),
     render() {
       const pet = loadPet();
-      console.log(`  💡 ${bold('Tip:')} ${pet.name} misses you! Run ${orange(`${binName()} play`)} to check in.`);
+      console.log(
+        `  💡 ${bold('Tip:')} ${pet.name} misses you! Run ${orange(`${binName()} play`)} to check in.`,
+      );
       console.log();
     },
   },
@@ -68800,7 +69074,7 @@ const tips = [
  */
 function getRandomTip(context) {
   const cmd = context.command;
-  const eligible = tips.filter((t) => {
+  const eligible = tips.filter(t => {
     // Filter by command if tip has a commands array
     if (t.commands && cmd && !t.commands.includes(cmd)) return false;
     // Tips without commands array show everywhere
@@ -68814,7 +69088,10 @@ function getRandomTip(context) {
   let chosen = eligible[eligible.length - 1];
   for (const tip of eligible) {
     rand -= tip.weight || 1;
-    if (rand <= 0) { chosen = tip; break; }
+    if (rand <= 0) {
+      chosen = tip;
+      break;
+    }
   }
   // Bind context so render() can read it without a second argument.
   return { render: () => chosen.render(context) };
@@ -68832,22 +69109,24 @@ function getRandomTip(context) {
 
 
 
+
+
 const reporter_require = (0,external_node_module_namespaceObject.createRequire)(import.meta.url);
 
 const isRunningInClaude = !!process.env.CLAUDECODE;
 
 const CATEGORY_LABELS = {
-  custom_blocks: "custom blocks",
-  docs: "docs",
-  reference: "reference",
-  custom_pages: "custom pages",
-  recipes: "recipes",
+  custom_blocks: 'custom blocks',
+  docs: 'docs',
+  reference: 'reference',
+  custom_pages: 'custom pages',
+  recipes: 'recipes',
 };
 
 function categorize(files) {
   const counts = new Map();
   for (const file of files) {
-    const dir = file.split("/")[0];
+    const dir = file.split('/')[0];
     const label = CATEGORY_LABELS[dir] || dir;
     counts.set(label, (counts.get(label) || 0) + 1);
   }
@@ -68855,8 +69134,8 @@ function categorize(files) {
 }
 
 function splitResults(results) {
-  const errors = results.filter((r) => r.severity !== "warning");
-  const warnings = results.filter((r) => r.severity === "warning");
+  const errors = results.filter(r => r.severity !== 'warning');
+  const warnings = results.filter(r => r.severity === 'warning');
   return { errors, warnings };
 }
 
@@ -68866,17 +69145,15 @@ function splitResults(results) {
  */
 function styleMessage(message, color) {
   // Strip "(fixed)" suffix — handled separately via the icon.
-  const isFixed = message.endsWith("(fixed)");
-  const raw = isFixed ? message.slice(0, -"(fixed)".length).trimEnd() : message;
+  const isFixed = message.endsWith('(fixed)');
+  const raw = isFixed ? message.slice(0, -'(fixed)'.length).trimEnd() : message;
 
-  const colonIdx = raw.indexOf(":");
+  const colonIdx = raw.indexOf(':');
   let styled;
 
   if (colonIdx !== -1) {
     const title = raw.slice(0, colonIdx);
-    const detail = raw
-      .slice(colonIdx + 1)
-      .replace(/"([^"]+)"/g, (_, val) => bold(`"${val}"`));
+    const detail = raw.slice(colonIdx + 1).replace(/"([^"]+)"/g, (_, val) => bold(`"${val}"`));
     styled = `${color(title)}:${detail}`;
   } else {
     // No colon — highlight quoted values, keep rest normal.
@@ -68888,20 +69165,20 @@ function styleMessage(message, color) {
 
 function summaryLine(errorCount, warningCount) {
   const parts = [];
-  if (errorCount > 0)
-    parts.push(`${errorCount} ${errorCount === 1 ? "error" : "errors"}`);
-  if (warningCount > 0)
-    parts.push(
-      `${warningCount} ${warningCount === 1 ? "warning" : "warnings"}`,
-    );
-  return parts.join(" and ");
+  if (errorCount > 0) {
+    parts.push(`${errorCount} ${errorCount === 1 ? 'error' : 'errors'}`);
+  }
+  if (warningCount > 0) {
+    parts.push(`${warningCount} ${warningCount === 1 ? 'warning' : 'warnings'}`);
+  }
+  return parts.join(' and ');
 }
 
 /**
  * Human-readable reporter with an animated spinner.
  */
 function createHumanReporter() {
-  const spinner = ora({ text: "Running linting...", color: "blue" }).start();
+  const spinner = ora({ text: 'Running linting...', color: 'blue' }).start();
 
   return {
     onFile(relativePath) {
@@ -68913,13 +69190,11 @@ function createHumanReporter() {
     },
 
     finish(total, results, files, { fix, gitRoot } = {}) {
-      spinner.suffixText = "";
+      spinner.suffixText = '';
 
       const { errors, warnings } = splitResults(results);
       const categories = categorize(files);
-      const breakdown = categories
-        .map(([label, count]) => `${count} ${label}`)
-        .join(dim(" · "));
+      const breakdown = categories.map(([label, count]) => `${count} ${label}`).join(dim(' · '));
 
       if (errors.length === 0 && warnings.length === 0) {
         spinner.succeed(`${total} files checked — all good!`);
@@ -68928,9 +69203,7 @@ function createHumanReporter() {
       }
 
       if (errors.length > 0) {
-        spinner.fail(
-          `${summaryLine(errors.length, warnings.length)} in ${total} files`,
-        );
+        spinner.fail(`${summaryLine(errors.length, warnings.length)} in ${total} files`);
       } else {
         spinner.warn(`${summaryLine(0, warnings.length)} in ${total} files`);
       }
@@ -68947,32 +69220,29 @@ function createHumanReporter() {
       for (const [file, fileResults] of grouped) {
         console.log(`  ${bold(file)}`);
         for (const r of fileResults) {
-          const baseColor = r.severity === "warning" ? warn : err;
-          const isFixed = r.message.endsWith("(fixed)");
+          const baseColor = r.severity === 'warning' ? warn : err;
+          const isFixed = r.message.endsWith('(fixed)');
           const color = isFixed ? success : baseColor;
           const styled = styleMessage(r.message, color);
-          const icon = isFixed ? success("✔") : baseColor("●");
+          const icon = isFixed ? success('✔') : baseColor('●');
           console.log(`    ${icon} ${styled}`);
         }
         console.log();
       }
 
       // Tips section.
-      const fixable = !fix
-        ? results.filter((r) => r.fixable && !r.message.endsWith("(fixed)"))
-        : [];
-      const unfixed = results.filter((r) => !r.message.endsWith("(fixed)"));
-      const showTips =
-        fixable.length > 0 || (unfixed.length > 0 && !isRunningInClaude);
+      const fixable = !fix ? results.filter(r => r.fixable && !r.message.endsWith('(fixed)')) : [];
+      const unfixed = results.filter(r => !r.message.endsWith('(fixed)'));
+      const showTips = fixable.length > 0 || (unfixed.length > 0 && !isRunningInClaude);
 
       if (showTips) {
-        console.log(`  ${dim("─".repeat(40))}`);
+        console.log(`  ${dim('─'.repeat(40))}`);
         console.log();
       }
 
       if (fixable.length > 0) {
         console.log(
-          `  ${dim("Run")} ${binName()} lint --fix ${dim("to automatically fix some of these.")}`,
+          `  ${dim('Run')} ${binName()} lint --fix ${dim('to automatically fix some of these.')}`,
         );
         console.log();
       }
@@ -68982,9 +69252,7 @@ function createHumanReporter() {
         const workflowVersion = gitRoot ? getWorkflowVersion(gitRoot) : null;
         const detection = gitRoot ? detectPlatform(gitRoot) : { recommended: null };
         const detectedPlatform = detection.recommended;
-        const hasCiWorkflow = detectedPlatform && gitRoot
-          ? hasReadmeWorkflow(gitRoot, detectedPlatform)
-          : true;
+        const hasCiWorkflow = detectedPlatform && gitRoot ? hasReadmeWorkflow(gitRoot, detectedPlatform) : true;
         const tip = getRandomTip({
           isRunningInClaude,
           hasClaude: hasClaude(),
@@ -69000,39 +69268,36 @@ function createHumanReporter() {
 
       // When running inside Claude, output instructions and structured issue list.
       if (isRunningInClaude && unfixed.length > 0) {
-        const cliRoot = external_node_path_namespaceObject.join(
-          external_node_path_namespaceObject.dirname((0,external_node_url_namespaceObject.fileURLToPath)(import.meta.url)),
-          "../..",
-        );
+        const cliRoot = external_node_path_namespaceObject.join(external_node_path_namespaceObject.dirname((0,external_node_url_namespaceObject.fileURLToPath)(import.meta.url)), '../..');
 
         const gitFormatDir = external_node_path_namespaceObject.dirname(reporter_require.resolve('@readmeio/git-format/package.json'));
-        const claudeMdPath = external_node_path_namespaceObject.join(gitFormatDir, "CLAUDE.md");
-        const toolsMdPath = external_node_path_namespaceObject.join(cliRoot, "vendor/TOOLS.md");
-        const schemaPath = external_node_path_namespaceObject.join(gitFormatDir, "frontmatter.schema.json");
+        const claudeMdPath = external_node_path_namespaceObject.join(gitFormatDir, 'CLAUDE.md');
+        const toolsMdPath = external_node_path_namespaceObject.join(cliRoot, 'vendor/TOOLS.md');
+        const schemaPath = external_node_path_namespaceObject.join(gitFormatDir, 'frontmatter.schema.json');
 
-        console.log("\n<claude-instructions>");
+        console.log('\n<claude-instructions>');
 
         if (external_node_fs_namespaceObject.existsSync(toolsMdPath)) {
-          console.log(external_node_fs_namespaceObject.readFileSync(toolsMdPath, "utf-8"));
+          console.log(external_node_fs_namespaceObject.readFileSync(toolsMdPath, 'utf-8'));
         }
 
         if (external_node_fs_namespaceObject.existsSync(claudeMdPath)) {
-          console.log(external_node_fs_namespaceObject.readFileSync(claudeMdPath, "utf-8"));
+          console.log(external_node_fs_namespaceObject.readFileSync(claudeMdPath, 'utf-8'));
         }
 
         if (external_node_fs_namespaceObject.existsSync(schemaPath)) {
-          console.log("\n## Frontmatter JSON Schema\n");
-          console.log("```json");
-          console.log(external_node_fs_namespaceObject.readFileSync(schemaPath, "utf-8"));
-          console.log("```");
+          console.log('\n## Frontmatter JSON Schema\n');
+          console.log('```json');
+          console.log(external_node_fs_namespaceObject.readFileSync(schemaPath, 'utf-8'));
+          console.log('```');
         }
 
-        console.log("</claude-instructions>\n");
-        console.log("<issues>");
+        console.log('</claude-instructions>\n');
+        console.log('<issues>');
         for (const r of unfixed) {
           console.log(`- [${r.severity}] ${r.file}: ${r.message}`);
         }
-        console.log("</issues>");
+        console.log('</issues>');
       }
     },
   };
@@ -69051,35 +69316,36 @@ function createGithubReporter() {
       const all = [...errors, ...warnings];
 
       // Build file links using GitHub Actions env vars
-      const serverUrl = process.env.GITHUB_SERVER_URL || "https://github.com";
-      const repo = process.env.GITHUB_REPOSITORY || "";
-      const sha = process.env.GITHUB_SHA || "";
+      const serverUrl = process.env.GITHUB_SERVER_URL || 'https://github.com';
+      const repo = process.env.GITHUB_REPOSITORY || '';
+      const sha = process.env.GITHUB_SHA || '';
       const canLink = repo && sha;
 
       function fileLink(filePath) {
-        const name = filePath.split("/").pop();
+        const name = filePath.split('/').pop();
         if (canLink) {
-          const encoded = filePath.split("/").map(encodeURIComponent).join("/");
+          const encoded = filePath.split('/').map(encodeURIComponent).join('/');
           return `[\`${name}\`](${serverUrl}/${repo}/blob/${sha}/${encoded})`;
         }
         return `\`${name}\``;
       }
 
-      let body = "<!-- readme-lint-results -->\n";
-      body += "## ReadMe Docs Lint\n\n";
+      let body = '<!-- readme-lint-results -->\n';
+      body += '## ReadMe Docs Lint\n\n';
 
       if (all.length === 0) {
-        body += "> **All checks passed!** No lint issues found.\n";
+        body += '> **All checks passed!** No lint issues found.\n';
       } else {
-        body += "| File | Message |\n";
-        body += "|------|--------|\n";
+        body += '| File | Message |\n';
+        body += '|------|--------|\n';
         for (const r of all) {
-          const isError = r.severity !== "warning";
-          const label = isError ? "\u{1F534} **Error:**" : "\u{1F7E1} **Warning:**";
+          const isError = r.severity !== 'warning';
+          const label = isError ? '\u{1F534} **Error:**' : '\u{1F7E1} **Warning:**';
           body += `| ${fileLink(r.file)} | ${label} ${r.message} |\n`;
         }
-        body += "\n";
-        body += "> \u{1F4A1} **Tip:** Run `npx @readme/cli lint --fix` locally to automatically fix some of these issues.\n\n";
+        body += '\n';
+        body +=
+          '> \u{1F4A1} **Tip:** Run `npx @readme/cli lint --fix` locally to automatically fix some of these issues.\n\n';
       }
 
       // OAS change detection
@@ -69088,25 +69354,25 @@ function createGithubReporter() {
         try {
           const changed = (0,external_node_child_process_namespaceObject.execSync)(
             `git diff --name-only ${baseSha}..HEAD -- 'reference/*.json' 'reference/*.yaml' 'reference/*.yml'`,
-            { cwd: gitRoot, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
+            { cwd: gitRoot, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
           ).trim();
 
           if (changed) {
-            const files = changed.split("\n");
-            body += "### OAS Changes Detected\n\n";
-            body += "The following OpenAPI spec files were changed in this PR:\n\n";
+            const files = changed.split('\n');
+            body += '### OAS Changes Detected\n\n';
+            body += 'The following OpenAPI spec files were changed in this PR:\n\n';
             for (const f of files) {
               body += `- ${fileLink(f)}\n`;
             }
-            body += "\nRun `npx @readme/cli oas:sync` to sync these changes to ReadMe.\n\n";
+            body += '\nRun `npx @readme/cli oas:sync` to sync these changes to ReadMe.\n\n';
           }
         } catch {
           // git diff failed — skip OAS section silently
         }
       }
 
-      body += "---\n";
-      body += "\u{1F989} Powered by [ReadMe](https://readme.com)\n";
+      body += '---\n';
+      body += '\u{1F989} Powered by [ReadMe](https://readme.com)\n';
 
       console.log(body);
     },
@@ -69142,8 +69408,6 @@ function createJsonReporter() {
   };
 }
 
-;// CONCATENATED MODULE: ./package.json
-const package_namespaceObject = {"rE":"0.1.0"};
 ;// CONCATENATED MODULE: ./src/commands/lint.js
 
 
@@ -69152,16 +69416,16 @@ const package_namespaceObject = {"rE":"0.1.0"};
 
 
 
-const lint_command = 'lint'
-const lint_order = 1
-const aliases = (/* unused pure expression or super */ null && (['validate']))
-const lint_category = 'Linting'
-const lint_description = 'Lint and validate your ReadMe docs'
+const lint_command = 'lint';
+const lint_order = 1;
+const aliases = (/* unused pure expression or super */ null && (['validate']));
+const lint_category = 'Linting';
+const lint_description = 'Lint and validate your ReadMe docs';
 
 function args(cmd) {
-  cmd.option('--json', 'Output results as JSON (for CI and automation)')
-  cmd.option('--github', 'Output a GitHub PR comment body as markdown')
-  cmd.option('--fix', 'Automatically fix issues where possible')
+  cmd.option('--json', 'Output results as JSON (for CI and automation)');
+  cmd.option('--github', 'Output a GitHub PR comment body as markdown');
+  cmd.option('--fix', 'Automatically fix issues where possible');
 }
 
 /**
@@ -69178,42 +69442,49 @@ function args(cmd) {
  * @returns {Promise<{ gitRoot: string, files: string[], results: object[], hasErrors: boolean }>}
  */
 async function lint({ cwd, fix = false, nonInteractive = false, onFile, onBeforeCrossFile } = {}) {
-  const gitRoot = cwd || process.cwd()
-  const files = collectFiles(gitRoot)
-  const results = await runValidators(files, gitRoot, { onFile, onBeforeCrossFile, fix, nonInteractive })
-  const hasErrors = results.some((r) => r.severity !== 'warning')
-  return { gitRoot, files, results, hasErrors }
+  const gitRoot = cwd || process.cwd();
+  const files = collectFiles(gitRoot);
+  const results = await runValidators(files, gitRoot, { onFile, onBeforeCrossFile, fix, nonInteractive });
+  const hasErrors = results.some(r => r.severity !== 'warning');
+  return { gitRoot, files, results, hasErrors };
 }
 
 async function lint_run(options, _cmd, ctx) {
-  const { gitRoot } = ctx
+  const { gitRoot } = ctx;
 
   if (!options.json && !options.github && !(0,utils_eyes/* isAgenticCli */.my)()) {
-    (0,utils_eyes/* printHeader */.hq)({ version: package_namespaceObject.rE, binName: binName(), indent: '  ' })
-    console.log()
+    (0,utils_eyes/* printHeader */.hq)({ version: package_namespaceObject.rE, binName: binName(), indent: '  ' });
+    console.log();
   }
 
-  const reporter = options.github ? createGithubReporter() : options.json ? createJsonReporter() : createHumanReporter()
+  const reporter = options.github
+    ? createGithubReporter()
+    : options.json
+      ? createJsonReporter()
+      : createHumanReporter();
 
   const { files, results, hasErrors } = await lint({
     cwd: gitRoot,
     fix: options.fix,
-    onFile: (f) => reporter.onFile(f),
+    onFile: f => reporter.onFile(f),
     onBeforeCrossFile: () => reporter.pause(),
-  })
+  });
 
-  reporter.finish(files.length, results, files, { fix: options.fix, gitRoot })
+  reporter.finish(files.length, results, files, { fix: options.fix, gitRoot });
 
-  writeGithubActionsOutputs({ 'has-errors': String(hasErrors), results })
+  writeGithubActionsOutputs({ 'has-errors': String(hasErrors), results });
 
   if (hasErrors) {
     // Wait for stdout to flush (important when piped to a file), then exit
-    await new Promise((resolve) => process.stdout.write('', resolve))
-    process.exit(1)
+    await new Promise(resolve => process.stdout.write('', resolve));
+    process.exit(1);
   }
 }
 
 ;// CONCATENATED MODULE: ./src/commands/oas-validate.js
+
+
+
 
 
 
@@ -69330,7 +69601,7 @@ async function validateOas({ cwd, dereference = false } = {}) {
       continue;
     }
 
-    const errors = normalizerResult.valid ? [] : (normalizerResult.errors || []);
+    const errors = normalizerResult.valid ? [] : normalizerResult.errors || [];
     const warnings = normalizerResult.warnings || [];
 
     if (dereference) {
@@ -69374,9 +69645,7 @@ async function validateOasFiles(gitRoot, { dereference = false } = {}) {
 
   for (const r of summary.results) {
     const meta = `${r.filename} · ${r.version} · ${r.opCount} ${r.opCount === 1 ? 'endpoint' : 'endpoints'}`;
-    const dot = r.errors.length > 0
-      ? err('●')
-      : r.warnings.length > 0 ? warn('●') : success('●');
+    const dot = r.errors.length > 0 ? err('●') : r.warnings.length > 0 ? warn('●') : success('●');
 
     console.log();
     console.log(`  ${dot} ${bold(r.title)} ${dim(`(${meta})`)}`);
@@ -69440,7 +69709,9 @@ async function oas_validate_run(options, _cmd, ctx) {
     error(`${parts.join(' and ')} across ${fileCount} ${fileCount === 1 ? 'spec' : 'specs'}.`);
     process.exit(1);
   } else if (totalWarnings > 0) {
-    warning(`${totalValid} of ${fileCount} specs valid with ${totalWarnings} ${totalWarnings === 1 ? 'warning' : 'warnings'}.`);
+    warning(
+      `${totalValid} of ${fileCount} specs valid with ${totalWarnings} ${totalWarnings === 1 ? 'warning' : 'warnings'}.`,
+    );
   } else {
     ok(`${fileCount} ${fileCount === 1 ? 'spec' : 'specs'} validated — all good!`);
   }
@@ -69475,8 +69746,8 @@ async function oas_validate_run(options, _cmd, ctx) {
 // (the commander Command instance normal CLI invocation would pass) — so a
 // plain options object and a null cmd are enough here.
 const COMMANDS = {
-  'lint': { run: lint_run, flags: ['json', 'github', 'fix'] },
-  'validate': { run: lint_run, flags: ['json', 'github', 'fix'] }, // alias, matches src/commands/lint.js
+  lint: { run: lint_run, flags: ['json', 'github', 'fix'] },
+  validate: { run: lint_run, flags: ['json', 'github', 'fix'] }, // alias, matches src/commands/lint.js
   'oas:validate': { run: oas_validate_run, flags: ['dereference'] },
   'oas:sync': { run: run, flags: [] },
 };
@@ -69495,7 +69766,7 @@ async function gha_run() {
   if (!entry) {
     console.error(
       `::error::Unknown or unsupported command "${command || '(empty)'}" for the \`readme\` input. ` +
-        `Supported: ${[...new Set(Object.keys(COMMANDS).filter((k) => k !== 'validate'))].join(', ')}.`,
+        `Supported: ${[...new Set(Object.keys(COMMANDS).filter(k => k !== 'validate'))].join(', ')}.`,
     );
     writeGithubActionsOutputs({ 'has-errors': 'true' });
     process.exit(1);
@@ -69521,8 +69792,8 @@ async function gha_run() {
 
   if (badTokens.length > 0) {
     console.error(
-      `::error::Unknown option${badTokens.length > 1 ? 's' : ''} ${badTokens.map((t) => `"${t}"`).join(', ')} for "${command}". ` +
-        `Supported: ${entry.flags.length > 0 ? entry.flags.map((f) => `--${f}`).join(', ') : '(none)'}.`,
+      `::error::Unknown option${badTokens.length > 1 ? 's' : ''} ${badTokens.map(t => `"${t}"`).join(', ')} for "${command}". ` +
+        `Supported: ${entry.flags.length > 0 ? entry.flags.map(f => `--${f}`).join(', ') : '(none)'}.`,
     );
     writeGithubActionsOutputs({ 'has-errors': 'true' });
     process.exit(1);
@@ -69538,7 +69809,7 @@ async function gha_run() {
   await entry.run(options, null, { gitRoot });
 }
 
-gha_run().catch((err) => {
+gha_run().catch(err => {
   console.error(err);
   // A thrown error (as opposed to a command's own controlled process.exit)
   // means whatever run() was doing never reached its own

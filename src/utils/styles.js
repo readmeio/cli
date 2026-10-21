@@ -1,5 +1,6 @@
-import path from 'node:path';
 import { createRequire } from 'node:module';
+import path from 'node:path';
+
 import chalk from 'chalk';
 
 /** Returns the CLI name depending on how it was invoked (e.g. "readme", "readme_", or "npx @readme/cli"). */

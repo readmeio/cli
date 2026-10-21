@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { slugForEntry } from '../utils/slug-for-entry.js';
+
 import { parseFrontmatter } from '../utils/markdown.js';
+import { slugForEntry } from '../utils/slug-for-entry.js';
 
 export const name = 'links';
 

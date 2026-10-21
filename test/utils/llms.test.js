@@ -1,7 +1,8 @@
 import { describe, test, it, expect } from 'vitest';
-import { parseLlmsTxt, analyzeLlmsTxt } from '../../src/utils/llms.js'
 
-const BASE = 'https://docs.example.com/llms.txt'
+import { parseLlmsTxt, analyzeLlmsTxt } from '../../src/utils/llms.js';
+
+const BASE = 'https://docs.example.com/llms.txt';
 
 // ---------------------------------------------------------------------------
 // parseLlmsTxt — root-relative resolution
@@ -11,97 +12,91 @@ test('parseLlmsTxt: root-relative links resolve from the origin by default', () 
   const parsed = parseLlmsTxt(
     `# Example\n\n## Guides\n- [Overview](/overview.md)\n- [Install](/docs/install.md)\n`,
     'https://example.com/docs/llms.txt',
-  )
+  );
 
-  const urls = parsed.sections[0].items.map((item) => item.url)
-  expect(urls).toStrictEqual([
-    'https://example.com/overview.md',
-    'https://example.com/docs/install.md',
-  ])
-})
+  const urls = parsed.sections[0].items.map(item => item.url);
+  expect(urls).toStrictEqual(['https://example.com/overview.md', 'https://example.com/docs/install.md']);
+});
 
 test('parseLlmsTxt: explicit llms-dir policy resolves nested root-relative page links from the llms.txt directory', () => {
   const parsed = parseLlmsTxt(
     `# Example\n\n## Guides\n- [Overview](/overview.md)\n- [API](/api/reference.md)\n- [Absolute](https://example.com/reference/openapi.md)\n`,
     'https://example.com/docs/llms.txt',
     { rootRelativeResolution: 'llms-dir' },
-  )
+  );
 
-  const urls = parsed.sections[0].items.map((item) => item.url)
+  const urls = parsed.sections[0].items.map(item => item.url);
   expect(urls).toStrictEqual([
     'https://example.com/docs/overview.md',
     'https://example.com/docs/api/reference.md',
     'https://example.com/reference/openapi.md',
-  ])
-})
+  ]);
+});
 
 test('parseLlmsTxt: llms-dir policy preserves links already scoped to the llms.txt directory', () => {
   const parsed = parseLlmsTxt(
     `# Example\n\n## Guides\n- [Already scoped](/docs/reference.md)\n- [Deep already scoped](/docs/api/reference.md?version=1#auth)\n`,
     'https://example.com/docs/llms.txt',
     { rootRelativeResolution: 'llms-dir' },
-  )
+  );
 
-  const urls = parsed.sections[0].items.map((item) => item.url)
+  const urls = parsed.sections[0].items.map(item => item.url);
   expect(urls).toStrictEqual([
     'https://example.com/docs/reference.md',
     'https://example.com/docs/api/reference.md?version=1#auth',
-  ])
-})
+  ]);
+});
 
 test('parseLlmsTxt: llms-dir policy does not rewrite explicit nested llms.txt links', () => {
   const parsed = parseLlmsTxt(
     `# Example\n\n## Guides\n- [API llms](/api/llms.txt)\n- [Docs API llms](/docs/api/llms.txt)\n`,
     'https://example.com/docs/llms.txt',
     { rootRelativeResolution: 'llms-dir' },
-  )
+  );
 
-  const urls = parsed.sections[0].items.map((item) => item.url)
-  expect(urls).toStrictEqual([
-    'https://example.com/api/llms.txt',
-    'https://example.com/docs/api/llms.txt',
-  ])
-})
+  const urls = parsed.sections[0].items.map(item => item.url);
+  expect(urls).toStrictEqual(['https://example.com/api/llms.txt', 'https://example.com/docs/api/llms.txt']);
+});
 
 test('parseLlmsTxt: llms-dir policy preserves root-scoped non-page files', () => {
   const parsed = parseLlmsTxt(
     `# Example\n\n## Guides\n- [Overview](/overview.md)\n- [OpenAPI](/reference/openapi.yaml)\n- [Image](/assets/logo.png)\n`,
     'https://example.com/docs/llms.txt',
     { rootRelativeResolution: 'llms-dir' },
-  )
+  );
 
-  const urls = parsed.sections[0].items.map((item) => item.url)
+  const urls = parsed.sections[0].items.map(item => item.url);
   expect(urls).toStrictEqual([
     'https://example.com/docs/overview.md',
     'https://example.com/reference/openapi.yaml',
     'https://example.com/assets/logo.png',
-  ])
-})
+  ]);
+});
 
 test('parseLlmsTxt: llms-dir policy handles query and hash page links', () => {
   const parsed = parseLlmsTxt(
     `# Example\n\n## Guides\n- [Overview](/overview.md?tab=js#install)\n- [No extension](/get-started?tab=js#install)\n- [Hash only](#local)\n`,
     'https://example.com/docs/llms.txt',
     { rootRelativeResolution: 'llms-dir' },
-  )
+  );
 
-  const urls = parsed.sections[0].items.map((item) => item.url)
+  const urls = parsed.sections[0].items.map(item => item.url);
   expect(urls).toStrictEqual([
     'https://example.com/docs/overview.md?tab=js#install',
     'https://example.com/docs/get-started?tab=js#install',
-  ])
-})
+  ]);
+});
 
 test('parseLlmsTxt: malformed and unsupported links are ignored', () => {
   const parsed = parseLlmsTxt(
     `# Example\n\n## Guides\n- [Mail](mailto:test@example.com)\n- [JS](javascript:alert(1))\n- [OK](/ok.md)\n`,
     'https://example.com/docs/llms.txt',
     { rootRelativeResolution: 'llms-dir' },
-  )
+  );
 
-  const urls = parsed.sections[0].items.map((item) => item.url)
-  expect(urls).toStrictEqual(['https://example.com/docs/ok.md'])
-})
+  const urls = parsed.sections[0].items.map(item => item.url);
+  expect(urls).toStrictEqual(['https://example.com/docs/ok.md']);
+});
 
 // ---------------------------------------------------------------------------
 // parseLlmsTxt — standard H2 sections
@@ -117,27 +112,24 @@ test('parseLlmsTxt: parses H1 title and H2 sections', () => {
     '',
     '## Reference',
     '- [API](https://docs.example.com/api)',
-  ].join('\n')
+  ].join('\n');
 
-  const result = parseLlmsTxt(body, BASE)
-  expect(result.title).toBe('My Docs')
-  expect(result.sections).toHaveLength(2)
-  expect(result.sections[0].title).toBe('Getting Started')
-  expect(result.sections[0].items).toHaveLength(2)
-  expect(result.sections[1].title).toBe('Reference')
-  expect(result.h3Fallback).toBeUndefined()
-})
+  const result = parseLlmsTxt(body, BASE);
+  expect(result.title).toBe('My Docs');
+  expect(result.sections).toHaveLength(2);
+  expect(result.sections[0].title).toBe('Getting Started');
+  expect(result.sections[0].items).toHaveLength(2);
+  expect(result.sections[1].title).toBe('Reference');
+  expect(result.h3Fallback).toBeUndefined();
+});
 
 test('parseLlmsTxt: items with no H2 fall into implicit Resources section', () => {
-  const body = [
-    '# My Docs',
-    '- [Overview](https://docs.example.com/overview)',
-  ].join('\n')
+  const body = ['# My Docs', '- [Overview](https://docs.example.com/overview)'].join('\n');
 
-  const result = parseLlmsTxt(body, BASE)
-  expect(result.sections).toHaveLength(1)
-  expect(result.sections[0].title).toBe('Resources')
-})
+  const result = parseLlmsTxt(body, BASE);
+  expect(result.sections).toHaveLength(1);
+  expect(result.sections[0].title).toBe('Resources');
+});
 
 test('parseLlmsTxt: strips trailing (section) markers from H2 titles', () => {
   const body = [
@@ -151,17 +143,20 @@ test('parseLlmsTxt: strips trailing (section) markers from H2 titles', () => {
     '',
     '## Guides (section) extra',
     '- [Install](https://docs.example.com/install)',
-  ].join('\n')
+  ].join('\n');
 
-  const result = parseLlmsTxt(body, BASE)
-  expect(
-    result.sections.map((s) => s.title)).toStrictEqual(
-    ['getting-started', 'API Reference', 'Guides (section) extra'],
-  )
-})
+  const result = parseLlmsTxt(body, BASE);
+  expect(result.sections.map(s => s.title)).toStrictEqual([
+    'getting-started',
+    'API Reference',
+    'Guides (section) extra',
+  ]);
+});
 
 test('parseLlmsTxt: strips (section) markers when falling back to H3 headings', () => {
-  const manyItems = Array.from({ length: 201 }, (_, i) => `- [Page ${i}](https://docs.example.com/page-${i})`).join('\n')
+  const manyItems = Array.from({ length: 201 }, (_, i) => `- [Page ${i}](https://docs.example.com/page-${i})`).join(
+    '\n',
+  );
   const body = [
     '# Big Site',
     '',
@@ -173,17 +168,17 @@ test('parseLlmsTxt: strips (section) markers when falling back to H3 headings', 
     '',
     '### Reference (section)',
     '- [B1](https://docs.example.com/b1)',
-  ].join('\n')
+  ].join('\n');
 
-  const result = parseLlmsTxt(body, BASE)
-  expect(result.h3Fallback).toBe(true)
+  const result = parseLlmsTxt(body, BASE);
+  expect(result.h3Fallback).toBe(true);
 
-  const titles = result.sections.map((s) => s.title)
-  expect(titles).toContain('getting-started')
-  expect(titles).toContain('Reference')
-  expect(titles).not.toContain('getting-started (section)')
-  expect(titles).not.toContain('Reference (section)')
-})
+  const titles = result.sections.map(s => s.title);
+  expect(titles).toContain('getting-started');
+  expect(titles).toContain('Reference');
+  expect(titles).not.toContain('getting-started (section)');
+  expect(titles).not.toContain('Reference (section)');
+});
 
 // ---------------------------------------------------------------------------
 // parseLlmsTxt — H3 fallback
@@ -193,24 +188,24 @@ test('parseLlmsTxt: strips (section) markers when falling back to H3 headings', 
 // with `itemsPerSection` pages. With itemsPerSection >= 68, the single H2
 // section exceeds MAX_SECTION_ITEMS (200) and triggers the H3 fallback.
 function makeCouchbaseBody(sections, itemsPerSection) {
-  const lines = ['# Couchbase', '', '> Official Couchbase docs.', '', '## Docs', '']
+  const lines = ['# Couchbase', '', '> Official Couchbase docs.', '', '## Docs', ''];
   for (const title of sections) {
-    lines.push(`### ${title}`)
+    lines.push(`### ${title}`);
     for (let i = 0; i < itemsPerSection; i++) {
-      const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-')
-      lines.push(`- [Page ${i}](https://docs.couchbase.com/${slug}/page-${i})`)
+      const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+      lines.push(`- [Page ${i}](https://docs.couchbase.com/${slug}/page-${i})`);
     }
-    lines.push('')
+    lines.push('');
   }
-  return lines.join('\n')
+  return lines.join('\n');
 }
 
-const CB_SECTIONS = ['.NET Analytics SDK (1.0)', '.NET Entity Framework (1.0)', '.NET SDK (3.9)']
+const CB_SECTIONS = ['.NET Analytics SDK (1.0)', '.NET Entity Framework (1.0)', '.NET SDK (3.9)'];
 
 test('parseLlmsTxt: falls back to H3 when single H2 section is oversized', () => {
-  const manyItems = Array.from({ length: 201 }, (_, i) =>
-    `- [Page ${i}](https://docs.example.com/page-${i})`
-  ).join('\n')
+  const manyItems = Array.from({ length: 201 }, (_, i) => `- [Page ${i}](https://docs.example.com/page-${i})`).join(
+    '\n',
+  );
 
   const body = [
     '# Big Site',
@@ -224,29 +219,29 @@ test('parseLlmsTxt: falls back to H3 when single H2 section is oversized', () =>
     '',
     '### Section B',
     '- [B1](https://docs.example.com/b1)',
-  ].join('\n')
+  ].join('\n');
 
-  const result = parseLlmsTxt(body, BASE)
-  expect(result.h3Fallback).toBe(true)
-  expect(result.sections.length).toBeGreaterThan(1, `expected >1 section, got ${result.sections.length}`)
+  const result = parseLlmsTxt(body, BASE);
+  expect(result.h3Fallback).toBe(true);
+  expect(result.sections.length).toBeGreaterThan(1, `expected >1 section, got ${result.sections.length}`);
 
-  const titles = result.sections.map((s) => s.title)
-  expect(titles).toContain('Section A')
-  expect(titles).toContain('Section B')
-})
+  const titles = result.sections.map(s => s.title);
+  expect(titles).toContain('Section A');
+  expect(titles).toContain('Section B');
+});
 
 test('parseLlmsTxt: Couchbase-style H3 structure produces one section per SDK', () => {
-  const body = makeCouchbaseBody(CB_SECTIONS, 70)
-  const result = parseLlmsTxt(body, 'https://docs.couchbase.com/llms.txt')
+  const body = makeCouchbaseBody(CB_SECTIONS, 70);
+  const result = parseLlmsTxt(body, 'https://docs.couchbase.com/llms.txt');
 
-  expect(result.h3Fallback).toBe(true)
-  expect(result.title).toBe('Couchbase')
-  expect(result.sections).toHaveLength(3)
-  expect(result.sections[0].title).toBe('.NET Analytics SDK (1.0)')
-  expect(result.sections[1].title).toBe('.NET Entity Framework (1.0)')
-  expect(result.sections[2].title).toBe('.NET SDK (3.9)')
-  expect(result.sections[0].items).toHaveLength(70)
-})
+  expect(result.h3Fallback).toBe(true);
+  expect(result.title).toBe('Couchbase');
+  expect(result.sections).toHaveLength(3);
+  expect(result.sections[0].title).toBe('.NET Analytics SDK (1.0)');
+  expect(result.sections[1].title).toBe('.NET Entity Framework (1.0)');
+  expect(result.sections[2].title).toBe('.NET SDK (3.9)');
+  expect(result.sections[0].items).toHaveLength(70);
+});
 
 test('parseLlmsTxt: does NOT use H3 fallback when H2 sections are usable', () => {
   const body = [
@@ -261,42 +256,42 @@ test('parseLlmsTxt: does NOT use H3 fallback when H2 sections are usable', () =>
     '',
     '### Sub B',
     '- [B2](https://docs.example.com/b2)',
-  ].join('\n')
+  ].join('\n');
 
-  const result = parseLlmsTxt(body, BASE)
-  expect(result.h3Fallback).toBeUndefined()
-  expect(result.sections).toHaveLength(2)
-  expect(result.sections[0].title).toBe('Section A')
-  expect(result.sections[1].title).toBe('Section B')
-})
+  const result = parseLlmsTxt(body, BASE);
+  expect(result.h3Fallback).toBeUndefined();
+  expect(result.sections).toHaveLength(2);
+  expect(result.sections[0].title).toBe('Section A');
+  expect(result.sections[1].title).toBe('Section B');
+});
 
 test('parseLlmsTxt: does NOT use H3 fallback when no H3 headings exist', () => {
-  const manyItems = Array.from({ length: 201 }, (_, i) =>
-    `- [Page ${i}](https://docs.example.com/page-${i})`
-  ).join('\n')
+  const manyItems = Array.from({ length: 201 }, (_, i) => `- [Page ${i}](https://docs.example.com/page-${i})`).join(
+    '\n',
+  );
 
-  const body = ['# Big Site', '', '## Docs', manyItems].join('\n')
+  const body = ['# Big Site', '', '## Docs', manyItems].join('\n');
 
-  const result = parseLlmsTxt(body, BASE)
-  expect(result.h3Fallback).toBeUndefined()
-  expect(result.sections).toHaveLength(1)
-  expect(result.sections[0].title).toBe('Docs')
-})
+  const result = parseLlmsTxt(body, BASE);
+  expect(result.h3Fallback).toBeUndefined();
+  expect(result.sections).toHaveLength(1);
+  expect(result.sections[0].title).toBe('Docs');
+});
 
 // ---------------------------------------------------------------------------
 // analyzeLlmsTxt
 // ---------------------------------------------------------------------------
 
 test('analyzeLlmsTxt: marks usable when it has link items', () => {
-  const body = '## Section\n- [Page](https://docs.example.com/page)'
-  const result = analyzeLlmsTxt(body, BASE)
-  expect(result.usable).toBe(true)
-  expect(result.reason).toBeNull()
-})
+  const body = '## Section\n- [Page](https://docs.example.com/page)';
+  const result = analyzeLlmsTxt(body, BASE);
+  expect(result.usable).toBe(true);
+  expect(result.reason).toBeNull();
+});
 
 test('analyzeLlmsTxt: marks not usable when no link items', () => {
-  const body = '# Just a title\n\nSome prose with no links.'
-  const result = analyzeLlmsTxt(body, BASE)
-  expect(result.usable).toBe(false)
-  expect(result.reason).toBeDefined()
-})
+  const body = '# Just a title\n\nSome prose with no links.';
+  const result = analyzeLlmsTxt(body, BASE);
+  expect(result.usable).toBe(false);
+  expect(result.reason).toBeDefined();
+});

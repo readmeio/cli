@@ -82,7 +82,7 @@ function sortFrontmatterObj(obj, customOrder = []) {
   const sortedObj = {};
 
   // Helper function to check if a value is an object
-  const isObject = (value) => value && typeof value === 'object' && !Array.isArray(value);
+  const isObject = value => value && typeof value === 'object' && !Array.isArray(value);
 
   // Add keys in the custom order first
   customOrder.forEach(key => {

@@ -1,44 +1,46 @@
-import fs from "node:fs";
-import path from "node:path";
-import markdown from "@readme/markdown";
-import { parseFrontmatter } from "../utils/markdown.js";
+import fs from 'node:fs';
+import path from 'node:path';
+
+import markdown from '@readme/markdown';
+
+import { parseFrontmatter } from '../utils/markdown.js';
 
 const { mdxishTags } = markdown;
 
-export const name = "components";
+export const name = 'components';
 
 // Built-in components provided by @readme/markdown.
 const BUILTIN_COMPONENTS = new Set([
   // Documented in ReadMe user docs
-  "Accordion",
-  "Tabs",
-  "Tab",
-  "Cards",
-  "Card",
-  "Columns",
-  "Column",
-  "Image",
+  'Accordion',
+  'Tabs',
+  'Tab',
+  'Cards',
+  'Card',
+  'Columns',
+  'Column',
+  'Image',
   // Available from @readme/markdown
-  "Anchor",
-  "Callout",
-  "Code",
-  "CodeTabs",
-  "Embed",
-  "Glossary",
-  "Heading",
-  "HTMLBlock",
-  "Table",
-  "TableOfContents",
-  "Recipe",
-  "MCPIntro",
-  "PostmanRunButton",
-  "TailwindRoot",
-  "TailwindStyle",
-  "TutorialTile",
+  'Anchor',
+  'Callout',
+  'Code',
+  'CodeTabs',
+  'Embed',
+  'Glossary',
+  'Heading',
+  'HTMLBlock',
+  'Table',
+  'TableOfContents',
+  'Recipe',
+  'MCPIntro',
+  'PostmanRunButton',
+  'TailwindRoot',
+  'TailwindStyle',
+  'TutorialTile',
 ]);
 
 // Directories that can contain MDXish content with component references.
-const CONTENT_DIRS = new Set(["docs", "reference", "custom_pages", "recipes"]);
+const CONTENT_DIRS = new Set(['docs', 'reference', 'custom_pages', 'recipes']);
 
 /**
  * Extract component tag names from MDXish content.
@@ -77,19 +79,19 @@ function extractExportedNames(body) {
  * .md files: uses the filename slug (e.g., Greeting.md → <Greeting />).
  */
 function collectCustomBlockNames(gitRoot) {
-  const blocksDir = path.join(gitRoot, "custom_blocks");
+  const blocksDir = path.join(gitRoot, 'custom_blocks');
   if (!fs.existsSync(blocksDir)) return new Set();
 
   const names = new Set();
   const entries = fs.readdirSync(blocksDir);
 
   for (const entry of entries) {
-    if (!entry.endsWith(".md") && !entry.endsWith(".mdx")) continue;
+    if (!entry.endsWith('.md') && !entry.endsWith('.mdx')) continue;
 
     try {
-      const content = fs.readFileSync(path.join(blocksDir, entry), "utf-8");
+      const content = fs.readFileSync(path.join(blocksDir, entry), 'utf-8');
 
-      if (entry.endsWith(".mdx")) {
+      if (entry.endsWith('.mdx')) {
         // .mdx: component names come from exports.
         const { content: body } = parseFrontmatter(content);
         for (const n of extractExportedNames(body)) {
@@ -97,13 +99,13 @@ function collectCustomBlockNames(gitRoot) {
         }
       } else {
         // .md snippet: component name is the PascalCase filename.
-        const slug = entry.replace(/\.md$/, "");
+        const slug = entry.replace(/\.md$/, '');
         names.add(slug);
         // Also register the PascalCase form so references resolve.
         const pascalCase = slug
           .split(/[-_]/)
-          .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-          .join("");
+          .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+          .join('');
         names.add(pascalCase);
       }
     } catch {
@@ -120,11 +122,11 @@ function collectCustomBlockNames(gitRoot) {
  * - .md: filename must be capitalized (used as component name via <Name />)
  */
 export function validate({ content, relativePath }) {
-  if (!relativePath.startsWith("custom_blocks/")) return null;
+  if (!relativePath.startsWith('custom_blocks/')) return null;
 
   const filename = path.basename(relativePath);
-  const isMdx = relativePath.endsWith(".mdx");
-  const isMd = relativePath.endsWith(".md");
+  const isMdx = relativePath.endsWith('.mdx');
+  const isMd = relativePath.endsWith('.md');
 
   if (!isMdx && !isMd) return null;
 
@@ -135,16 +137,16 @@ export function validate({ content, relativePath }) {
   // digits are fine (<Helm_v4_error /> is valid); hyphens and a lowercase initial
   // are not.
   if (isMd) {
-    const slug = filename.replace(/\.md$/, "");
+    const slug = filename.replace(/\.md$/, '');
     if (!/^[A-Z][A-Za-z0-9_$]*$/.test(slug)) {
       const suggestion = slug
         .split(/[-_]/)
-        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-        .join("");
+        .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+        .join('');
       results.push({
         file: relativePath,
         rule: name,
-        severity: "warning",
+        severity: 'warning',
         message: `Bad filename: "${slug}" can't be used as a component tag — rename to "${suggestion}.md" so it can be used as <${suggestion} />`,
       });
     }
@@ -177,7 +179,7 @@ export function validate({ content, relativePath }) {
     results.push({
       file: relativePath,
       rule: name,
-      severity: "warning",
+      severity: 'warning',
       message: `Missing example: no usage example found for "${componentName}"`,
     });
   }
@@ -194,14 +196,14 @@ export function validateAll(files, gitRoot) {
   const available = new Set([...BUILTIN_COMPONENTS, ...customBlocks]);
 
   for (const relPath of files) {
-    const dir = relPath.split("/")[0];
+    const dir = relPath.split('/')[0];
     if (!CONTENT_DIRS.has(dir)) continue;
-    if (!relPath.endsWith(".md")) continue;
+    if (!relPath.endsWith('.md')) continue;
 
     const filePath = path.join(gitRoot, relPath);
     let content;
     try {
-      content = fs.readFileSync(filePath, "utf-8");
+      content = fs.readFileSync(filePath, 'utf-8');
     } catch {
       continue;
     }

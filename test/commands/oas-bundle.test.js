@@ -1,6 +1,8 @@
-import { test, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+
+import { test, expect } from 'vitest';
+
 import { bundleOas, writeBundle } from '../../src/commands/oas-bundle.js';
 import { makeRepo, rmRepo } from '../helpers.js';
 
@@ -53,7 +55,7 @@ test('bundles external YAML and JSON partials into one document with only intern
     expect(spec.components.schemas.Pet).toStrictEqual(JSON.parse(PET_PARTIAL));
 
     const refs = collectRefs(spec);
-    expect(refs.every((r) => r.startsWith('#/'))).toBe(true, `expected only internal refs, got ${refs.join(', ')}`);
+    expect(refs.every(r => r.startsWith('#/'))).toBe(true, `expected only internal refs, got ${refs.join(', ')}`);
     expect(refs).toContain('#/components/schemas/Pet', 'cross-file ref should be rewritten to an internal pointer');
   } finally {
     rmRepo(root);
@@ -79,7 +81,7 @@ test('writeBundle writes JSON by default and creates parent directories', async 
 
     const written = JSON.parse(fs.readFileSync(outPath, 'utf-8'));
     expect(written.info.title).toBe('Pets');
-    expect(collectRefs(written).some((r) => !r.startsWith('#/'))).toBe(false);
+    expect(collectRefs(written).some(r => !r.startsWith('#/'))).toBe(false);
   } finally {
     rmRepo(root);
   }
@@ -92,7 +94,7 @@ test('writeBundle serializes as YAML when the output path ends in .yaml', async 
 
     const raw = fs.readFileSync(outPath, 'utf-8');
     expect(raw.startsWith('openapi: 3.0.0')).toBe(true, `expected YAML output, got:\n${raw.slice(0, 80)}`);
-    expect(raw.includes("$ref: '#/components/schemas/Pet'")).toBe(true);
+    expect(raw).toContain("$ref: '#/components/schemas/Pet'");
   } finally {
     rmRepo(root);
   }
@@ -105,10 +107,7 @@ test('rejects with a clear error when a referenced partial is missing', async ()
     // partials/pet.json intentionally omitted
   });
   try {
-    await expect(
-      () => bundleOas({ file: 'specs/openapi.yaml', cwd: root })).rejects.toThrow(
-      /pet\.json/
-    );
+    await expect(() => bundleOas({ file: 'specs/openapi.yaml', cwd: root })).rejects.toThrow(/pet\.json/);
   } finally {
     rmRepo(root);
   }
@@ -117,10 +116,7 @@ test('rejects with a clear error when a referenced partial is missing', async ()
 test('rejects when the spec file does not exist', async () => {
   const root = makeRepo({});
   try {
-    await expect(
-      () => bundleOas({ file: 'nope.yaml', cwd: root })).rejects.toThrow(
-      /nope\.yaml/
-    );
+    await expect(() => bundleOas({ file: 'nope.yaml', cwd: root })).rejects.toThrow(/nope\.yaml/);
   } finally {
     rmRepo(root);
   }

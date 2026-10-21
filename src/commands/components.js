@@ -13,9 +13,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
-import ora from 'ora';
+
 import { query } from '@anthropic-ai/claude-agent-sdk';
-import * as styles from '../utils/styles.js';
+import ora from 'ora';
+
+import { stripCodeFences } from '../prompts/index.js';
 import {
   listMarketplaceComponents,
   fetchMarketplaceComponent,
@@ -23,7 +25,7 @@ import {
   localComponentsDir,
   listLocalComponents,
 } from '../utils/marketplace.js';
-import { stripCodeFences } from '../prompts/index.js';
+import * as styles from '../utils/styles.js';
 
 export const command = 'components [action] [name...]';
 export const order = 3;
@@ -33,7 +35,7 @@ export const beta = true;
 export const helpHint = [
   'readme components               # list marketplace + installed',
   'readme components add <Name>    # copy a marketplace component into ./components/',
-  'readme components show <Name>   # print the component\'s source',
+  "readme components show <Name>   # print the component's source",
   'readme components new "<idea>"  # ask Claude to generate a new component',
 ].join('\n');
 
@@ -46,7 +48,7 @@ export function args(cmd) {
 export async function run(action, names, options, _cmd, ctx) {
   const { gitRoot } = ctx;
   const sub = (action || 'list').toLowerCase();
-  const arg = (names && names.length) ? names.join(' ') : null;
+  const arg = names && names.length ? names.join(' ') : null;
 
   switch (sub) {
     case 'list':
@@ -107,9 +109,9 @@ async function runList(gitRoot, options) {
   }
   spinner.stop();
 
-  const local = new Set(listLocalComponents(gitRoot).map((c) => c.name.toLowerCase()));
+  const local = new Set(listLocalComponents(gitRoot).map(c => c.name.toLowerCase()));
 
-  const nameWidth = Math.max(...marketplace.map((c) => c.name.length));
+  const nameWidth = Math.max(...marketplace.map(c => c.name.length));
   for (const c of marketplace) {
     const installed = local.has(c.name.toLowerCase());
     const marker = installed ? styles.success('●') : styles.dim('○');
@@ -118,7 +120,7 @@ async function runList(gitRoot, options) {
   }
 
   console.log();
-  const installedCount = [...local].filter((n) => marketplace.some((c) => c.name.toLowerCase() === n)).length;
+  const installedCount = [...local].filter(n => marketplace.some(c => c.name.toLowerCase() === n)).length;
   styles.info(`${marketplace.length} components in the marketplace · ${installedCount} already installed.`);
   styles.info(`Run ${styles.bold('readme components add <Name>')} to copy one into ./components/.`);
 }
@@ -173,12 +175,22 @@ async function runShow(name, options) {
   console.log(`  ${styles.heading(comp.name)}  ${styles.dim(comp.htmlUrl)}`);
   if (comp.readme) {
     console.log();
-    console.log(comp.readme.split('\n').map((l) => '  ' + l).join('\n'));
+    console.log(
+      comp.readme
+        .split('\n')
+        .map(l => `  ${l}`)
+        .join('\n'),
+    );
   }
   console.log();
   console.log(`  ${styles.bold('Source')} ${styles.dim(`(${comp.name}.mdx)`)}`);
   console.log();
-  console.log(comp.mdx.split('\n').map((l) => '    ' + l).join('\n'));
+  console.log(
+    comp.mdx
+      .split('\n')
+      .map(l => `    ${l}`)
+      .join('\n'),
+  );
   console.log();
 }
 
@@ -198,7 +210,9 @@ async function runNew(gitRoot, description, options) {
     try {
       const c = await fetchMarketplaceComponent(n);
       exemplars.push({ name: c.name, mdx: c.mdx });
-    } catch { /* skip */ }
+    } catch {
+      /* skip */
+    }
   }
 
   const systemPrompt = [
@@ -221,7 +235,7 @@ async function runNew(gitRoot, description, options) {
     '',
     'For style and conventions, follow these existing components (do NOT copy them — match their structure):',
     '',
-    ...exemplars.map((e) => `### ${e.name}\n\`\`\`mdx\n${e.mdx}\n\`\`\``),
+    ...exemplars.map(e => `### ${e.name}\n\`\`\`mdx\n${e.mdx}\n\`\`\``),
     '',
     'Now write the new component .mdx. Pick a good PascalCase name that matches the brief.',
   ].join('\n');
@@ -243,7 +257,7 @@ async function runNew(gitRoot, description, options) {
         }
       } else if (message.type === 'result') {
         if (message.subtype && message.subtype !== 'success') {
-          throw new Error(`${message.subtype}${message.error?.message ? ' — ' + message.error.message : ''}`);
+          throw new Error(`${message.subtype}${message.error?.message ? ` — ${message.error.message}` : ''}`);
         }
         break;
       }
@@ -258,7 +272,7 @@ async function runNew(gitRoot, description, options) {
   const mdx = stripCodeFences(text).trim();
   const nameMatch = mdx.match(/export\s+const\s+([A-Z][A-Za-z0-9]+)\s*=/);
   if (!nameMatch) {
-    styles.error('Claude\'s response did not include `export const <Name> = ...`. Try again.');
+    styles.error("Claude's response did not include `export const <Name> = ...`. Try again.");
     process.exit(1);
   }
 
@@ -266,10 +280,13 @@ async function runNew(gitRoot, description, options) {
   const file = path.join(dest, `${name}.mdx`);
   if (fs.existsSync(file) && !options.yes) {
     const ok = await confirm(`${styles.bold(name)}.mdx already exists. Overwrite?`);
-    if (!ok) { styles.info('Aborted.'); return; }
+    if (!ok) {
+      styles.info('Aborted.');
+      return;
+    }
   }
 
-  fs.writeFileSync(file, mdx + '\n', 'utf-8');
+  fs.writeFileSync(file, `${mdx}\n`, 'utf-8');
   console.log();
   styles.ok(`Created ${styles.bold(name)} → ${styles.dim(path.relative(gitRoot, file))}`);
   styles.info(`Use it in any docs page as ${styles.bold(`<${name} ... />`)}.`);
@@ -278,9 +295,9 @@ async function runNew(gitRoot, description, options) {
 // ─── tiny readline confirm ───────────────────────────────────────────────────
 
 function confirm(message) {
-  return new Promise((resolve) => {
+  return new Promise(resolve => {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    rl.question(`${styles.warn('?')} ${message} ${styles.dim('[y/N]')} `, (ans) => {
+    rl.question(`${styles.warn('?')} ${message} ${styles.dim('[y/N]')} `, ans => {
       rl.close();
       resolve(/^y(es)?$/i.test(ans.trim()));
     });

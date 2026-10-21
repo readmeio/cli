@@ -1,9 +1,11 @@
-import { expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+
+import { expect, it, test } from 'vitest';
+
 import { makeRepo, rmRepo } from './helpers.js';
 
-it('makeRepo writes files and rmRepo cleans up', () => {
+test('makeRepo writes files and rmRepo cleans up', () => {
   const root = makeRepo({ 'docs/a.md': 'hello' });
   expect(fs.readFileSync(path.join(root, 'docs/a.md'), 'utf-8')).toBe('hello');
   rmRepo(root);
