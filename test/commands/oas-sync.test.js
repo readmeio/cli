@@ -161,14 +161,12 @@ test('a tag whose pages all live in another category gets no empty category page
     'reference/_order.yaml': '- Applications\n',
     'reference/Applications/_order.yaml': '- sites-api-v20\n',
     'reference/Applications/sites-api-v20/index.md': '---\ntitle: Sites API v2.0\nhidden: false\n---',
-    'reference/Applications/sites-api-v20/getsites.md':
-      '---\napi:\n  file: sites.json\n  operationId: getSites\n---\n',
-    'reference/Applications/sites-api-v20/addsite.md':
-      '---\napi:\n  file: sites.json\n  operationId: addSite\n---\n',
+    'reference/Applications/sites-api-v20/getsites.md': '---\napi:\n  file: sites.json\n  operationId: getSites\n---\n',
+    'reference/Applications/sites-api-v20/addsite.md': '---\napi:\n  file: sites.json\n  operationId: addSite\n---\n',
   });
   try {
     const [result] = syncOas(root);
-    expect(result.changes.added).toEqual([]);
+    expect(result.changes.added).toStrictEqual([]);
     expect(fs.existsSync(path.join(root, 'reference/Sites API'))).toBe(false);
     expect(fs.readFileSync(path.join(root, 'reference/_order.yaml'), 'utf-8')).toBe('- Applications\n');
   } finally {
@@ -185,12 +183,11 @@ test('a tag whose pages live in a differently spelled folder of the same categor
   const root = makeRepo({
     'reference/site.json': spec,
     'reference/Site API/site-api-v10/index.md': '---\ntitle: Site API v1.0\nhidden: false\n---',
-    'reference/Site API/site-api-v10/getsite.md':
-      '---\napi:\n  file: site.json\n  operationId: getSite\n---\n',
+    'reference/Site API/site-api-v10/getsite.md': '---\napi:\n  file: site.json\n  operationId: getSite\n---\n',
   });
   try {
     const [result] = syncOas(root);
-    expect(result.changes.added).toEqual([]);
+    expect(result.changes.added).toStrictEqual([]);
     expect(fs.existsSync(path.join(root, 'reference/Site API/site-api-v1-0'))).toBe(false);
   } finally {
     rmRepo(root);
@@ -219,9 +216,9 @@ test('a tag whose only page is nested under its folder still gets its category p
     expect(data.excerpt).toBe('Tag t');
     expect(fs.existsSync(path.join(root, 'reference/API/t/custom/a.md'))).toBe(true);
     expect(fs.existsSync(path.join(root, 'reference/API/t/a.md'))).toBe(false);
-    expect(result.changes.added).toEqual(['API/t/index.md']);
-    expect(order(root, 'reference/API/_order.yaml')).toEqual(['t']);
-    expect(order(root, 'reference/_order.yaml')).toEqual(['API']);
+    expect(result.changes.added).toStrictEqual(['API/t/index.md']);
+    expect(order(root, 'reference/API/_order.yaml')).toStrictEqual(['t']);
+    expect(order(root, 'reference/_order.yaml')).toStrictEqual(['API']);
   } finally {
     rmRepo(root);
   }
@@ -263,7 +260,7 @@ test('with apply-tag-changes, a tag whose pages all live in another category sti
   });
   try {
     const [result] = syncOas(root);
-    expect(result.changes.added).toEqual([]);
+    expect(result.changes.added).toStrictEqual([]);
     expect(fs.existsSync(path.join(root, 'reference/API'))).toBe(false);
     expect(fs.existsSync(path.join(root, 'reference/Elsewhere/a.md'))).toBe(true);
   } finally {
