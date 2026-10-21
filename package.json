@@ -2,11 +2,23 @@
   "name": "@readme/cli",
   "version": "0.1.0",
   "description": "The ReadMe CLI",
-  "type": "module",
+  "keywords": [
+    "cli",
+    "docs",
+    "readme"
+  ],
+  "license": "ISC",
   "bin": {
     "readme": "./bin/readme.js",
     "readme_": "./bin/readme.js"
   },
+  "files": [
+    "bin",
+    "src",
+    "vendor",
+    "README.md"
+  ],
+  "type": "module",
   "exports": {
     ".": "./src/index.js",
     "./commands/lint": "./src/commands/lint.js",
@@ -17,29 +29,17 @@
     "./prompts": "./src/prompts/index.js",
     "./package.json": "./package.json"
   },
-  "files": [
-    "bin",
-    "src",
-    "vendor",
-    "README.md"
-  ],
-  "scripts": {
-    "build:gha": "ncc build src/gha.js -o dist-gha --external @readme/markdown",
-    "start": "node bin/readme.js",
-    "test": "vitest run"
-  },
-  "engines": {
-    "node": ">=22"
-  },
-  "keywords": [
-    "readme",
-    "cli",
-    "docs"
-  ],
-  "license": "ISC",
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org"
+  },
+  "scripts": {
+    "build:gha": "ncc build src/gha.js -o dist-gha --external @readme/markdown",
+    "format": "npx oxlint --fix && npx oxfmt --write",
+    "lint": "npx oxlint && npx oxfmt --check .",
+    "pretest": "npm run lint",
+    "start": "node bin/readme.js",
+    "test": "vitest run"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.207",
@@ -61,8 +61,14 @@
     "update-notifier": "^7.3.1"
   },
   "devDependencies": {
+    "@readme/oxlint-config": "^1.9.0",
     "@vercel/ncc": "^0.45.0",
     "@vitest/coverage-v8": "^5.0.5",
+    "oxfmt": "^0.74.0",
+    "oxlint": "^1.89.0",
     "vitest": "^5.0.5"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

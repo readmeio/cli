@@ -1,9 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
+
 import OASNormalize from 'oas-normalize';
-import { findOasFiles, extractOperations } from './oas-sync.js';
-import * as styles from '../utils/styles.js';
+
 import { writeGithubActionsOutputs } from '../utils/gha-output.js';
+import * as styles from '../utils/styles.js';
+
+import { findOasFiles, extractOperations } from './oas-sync.js';
 
 export const command = 'oas:validate';
 export const order = 3;
@@ -114,7 +117,7 @@ export async function validateOas({ cwd, dereference = false } = {}) {
       continue;
     }
 
-    const errors = normalizerResult.valid ? [] : (normalizerResult.errors || []);
+    const errors = normalizerResult.valid ? [] : normalizerResult.errors || [];
     const warnings = normalizerResult.warnings || [];
 
     if (dereference) {
@@ -158,9 +161,7 @@ export async function validateOasFiles(gitRoot, { dereference = false } = {}) {
 
   for (const r of summary.results) {
     const meta = `${r.filename} · ${r.version} · ${r.opCount} ${r.opCount === 1 ? 'endpoint' : 'endpoints'}`;
-    const dot = r.errors.length > 0
-      ? styles.err('●')
-      : r.warnings.length > 0 ? styles.warn('●') : styles.success('●');
+    const dot = r.errors.length > 0 ? styles.err('●') : r.warnings.length > 0 ? styles.warn('●') : styles.success('●');
 
     console.log();
     console.log(`  ${dot} ${styles.bold(r.title)} ${styles.dim(`(${meta})`)}`);
@@ -224,7 +225,9 @@ export async function run(options, _cmd, ctx) {
     styles.error(`${parts.join(' and ')} across ${fileCount} ${fileCount === 1 ? 'spec' : 'specs'}.`);
     process.exit(1);
   } else if (totalWarnings > 0) {
-    styles.warning(`${totalValid} of ${fileCount} specs valid with ${totalWarnings} ${totalWarnings === 1 ? 'warning' : 'warnings'}.`);
+    styles.warning(
+      `${totalValid} of ${fileCount} specs valid with ${totalWarnings} ${totalWarnings === 1 ? 'warning' : 'warnings'}.`,
+    );
   } else {
     styles.ok(`${fileCount} ${fileCount === 1 ? 'spec' : 'specs'} validated — all good!`);
   }

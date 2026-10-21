@@ -33,7 +33,7 @@ function parseOrderYaml(content) {
   return content
     .split('\n')
     .map(parseOrderEntry)
-    .filter((entry) => entry !== null);
+    .filter(entry => entry !== null);
 }
 
 function isIndex(name) {
@@ -108,7 +108,7 @@ export function validateAll(files, gitRoot, { fix } = {}) {
 
       // On disk but not ordered.
       if (requireOrder) {
-        const missing = [...onDisk].filter((slug) => !ordered.has(slug)).sort();
+        const missing = [...onDisk].filter(slug => !ordered.has(slug)).sort();
         if (missing.length > 0) {
           results.push({
             file: relOrder,
@@ -152,7 +152,7 @@ export function validateAll(files, gitRoot, { fix } = {}) {
   for (const r of results) {
     if (!r._fixAdd) continue;
     const { orderPath, missing } = r._fixAdd;
-    const newEntries = missing.map((slug) => `- ${yamlSafeSlug(slug)}`).join('\n');
+    const newEntries = missing.map(slug => `- ${yamlSafeSlug(slug)}`).join('\n');
 
     if (fs.existsSync(orderPath)) {
       const existing = fs.readFileSync(orderPath, 'utf-8');
@@ -180,11 +180,11 @@ export function validateAll(files, gitRoot, { fix } = {}) {
     const kept = fs
       .readFileSync(orderPath, 'utf-8')
       .split('\n')
-      .filter((line) => {
+      .filter(line => {
         const entry = parseOrderEntry(line);
         return entry === null || !toRemove.has(entry);
       });
-    if (kept.some((line) => parseOrderEntry(line) !== null)) {
+    if (kept.some(line => parseOrderEntry(line) !== null)) {
       fs.writeFileSync(orderPath, kept.join('\n'));
     } else {
       fs.unlinkSync(orderPath);

@@ -1,7 +1,9 @@
 import fs from 'node:fs';
-import path from 'node:path';
 import { createRequire } from 'node:module';
+import path from 'node:path';
+
 import Ajv from 'ajv';
+
 import { parseFrontmatter } from '../utils/markdown.js';
 
 const require = createRequire(import.meta.url);
@@ -12,7 +14,7 @@ function getNestedValue(obj, instancePath) {
   const keys = instancePath.split('/').filter(Boolean);
   let current = obj;
   for (const key of keys) {
-    if (current == null || typeof current !== 'object') return undefined;
+    if (current == null || typeof current !== 'object') return;
     current = current[key];
   }
   return current;
@@ -27,9 +29,7 @@ function levenshtein(a, b) {
   for (let j = 0; j <= n; j++) dp[0][j] = j;
   for (let i = 1; i <= m; i++) {
     for (let j = 1; j <= n; j++) {
-      dp[i][j] = a[i - 1] === b[j - 1]
-        ? dp[i - 1][j - 1]
-        : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+      dp[i][j] = a[i - 1] === b[j - 1] ? dp[i - 1][j - 1] : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
     }
   }
   return dp[m][n];
@@ -124,7 +124,7 @@ export function validate({ content, filePath, relativePath, fix }) {
 
         if (err.keyword === 'not' && err.schema?.properties) {
           const target = err.instancePath ? getNestedValue(data, err.instancePath) : data;
-          if (!target || !Object.keys(err.schema.properties).some((k) => k in target)) continue;
+          if (!target || !Object.keys(err.schema.properties).some(k => k in target)) continue;
         }
 
         let msg;
@@ -167,9 +167,9 @@ export function validate({ content, filePath, relativePath, fix }) {
 
   // Step 4: Detect typos by comparing unknown properties against known ones.
   const missingRequired = results.filter(
-    (r) => r.severity === 'error' && r.message.includes('must have required property'),
+    r => r.severity === 'error' && r.message.includes('must have required property'),
   );
-  const unknowns = results.filter((r) => r._key);
+  const unknowns = results.filter(r => r._key);
 
   const consumed = new Set();
 
@@ -221,8 +221,8 @@ export function validate({ content, filePath, relativePath, fix }) {
 
   // Step 5: Apply fixes — rename unknown (non-typo) properties to x- prefixed.
   if (fix && filePath) {
-    const typoKeys = new Set([...consumed].map((r) => r._key));
-    const keysToFix = unknownKeys.filter((key) => !typoKeys.has(key) && !suggestedTypos.has(key));
+    const typoKeys = new Set([...consumed].map(r => r._key));
+    const keysToFix = unknownKeys.filter(key => !typoKeys.has(key) && !suggestedTypos.has(key));
 
     if (keysToFix.length > 0) {
       let fileContent = fs.readFileSync(filePath, 'utf-8');
@@ -251,6 +251,6 @@ export function validate({ content, filePath, relativePath, fix }) {
   }
 
   // Remove consumed warnings (they've been merged into the error).
-  const final = results.filter((r) => !consumed.has(r));
+  const final = results.filter(r => !consumed.has(r));
   return final.length > 0 ? final : null;
 }

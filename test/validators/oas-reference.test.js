@@ -1,6 +1,8 @@
-import { expect, test } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+
+import { expect, test } from 'vitest';
+
 import { collectFiles } from '../../src/utils/lint.js';
 import { validateAll } from '../../src/validators/oas-reference.js';
 import { makeRepo, rmRepo } from '../helpers.js';
@@ -23,7 +25,7 @@ test('mismatched title/excerpt no longer reported as out of sync', () => {
   });
   try {
     const res = validateAll(collectFiles(root), root, {});
-    expect(!res.some((r) => r.message.includes('Out of sync')), 'no out-of-sync results').toBe(true);
+    expect(!res.some(r => r.message.includes('Out of sync')), 'no out-of-sync results').toBe(true);
   } finally {
     rmRepo(root);
   }
@@ -32,12 +34,11 @@ test('mismatched title/excerpt no longer reported as out of sync', () => {
 test('operation not found is still reported', () => {
   const root = makeRepo({
     'reference/pets.json': SPEC,
-    'reference/Pets/Other/ghost.md':
-      '---\napi:\n  file: pets.json\n  operationId: ghostOp\n---\n',
+    'reference/Pets/Other/ghost.md': '---\napi:\n  file: pets.json\n  operationId: ghostOp\n---\n',
   });
   try {
     const res = validateAll(collectFiles(root), root, {});
-    expect(res.some((r) => r.message.includes('Operation not found'))).toBe(true);
+    expect(res.some(r => r.message.includes('Operation not found'))).toBe(true);
   } finally {
     rmRepo(root);
   }
@@ -60,7 +61,7 @@ test('a page for a spec webhook is not reported as "Operation not found"', () =>
   });
   try {
     const res = validateAll(collectFiles(root), root, {});
-    expect(res.some((r) => r.message.includes('Operation not found'))).toBe(false);
+    expect(res.some(r => r.message.includes('Operation not found'))).toBe(false);
   } finally {
     rmRepo(root);
   }
@@ -86,8 +87,8 @@ test('a path page and a webhook page sharing an operationId are both recognized,
   });
   try {
     const res = validateAll(collectFiles(root), root, {});
-    expect(res.some((r) => r.message.includes('Operation not found'))).toBe(false);
-    expect(res.some((r) => r.message.includes('Missing page'))).toBe(false);
+    expect(res.some(r => r.message.includes('Operation not found'))).toBe(false);
+    expect(res.some(r => r.message.includes('Missing page'))).toBe(false);
   } finally {
     rmRepo(root);
   }
@@ -108,15 +109,9 @@ test('x-readme.internal is warned about at the root and on operations, x-interna
   });
   const root = makeRepo({ 'reference/pets.json': spec });
   try {
-    const res = validateAll(collectFiles(root), root, {}).filter((r) =>
-      r.message.includes('x-readme.internal'),
-    );
-    expect(res.map((r) => r.message.match(/\((.+?)\)/)[1])).toStrictEqual([
-      'root',
-      'GET /pets',
-      'webhook POST newPet',
-    ]);
-    expect(res.every((r) => r.file === 'reference/pets.json' && r.severity === 'warning' && !r.fixable)).toBe(true);
+    const res = validateAll(collectFiles(root), root, {}).filter(r => r.message.includes('x-readme.internal'));
+    expect(res.map(r => r.message.match(/\((.+?)\)/)[1])).toStrictEqual(['root', 'GET /pets', 'webhook POST newPet']);
+    expect(res.every(r => r.file === 'reference/pets.json' && r.severity === 'warning' && !r.fixable)).toBe(true);
   } finally {
     rmRepo(root);
   }
@@ -150,12 +145,12 @@ test('lint --fix leaves the reference alone when every finding is unfixable', ()
   const fixableRoot = makeRepo({ 'reference/pets.json': spec });
   try {
     const res = validateAll(collectFiles(fixableRoot), fixableRoot, { fix: true });
-    const missing = res.find((r) => r.message.includes('Missing page'));
+    const missing = res.find(r => r.message.includes('Missing page'));
     expect(missing && missing.fixable).toBe(true);
     expect(missing.message.endsWith('(fixed)')).toBe(true);
     expect(fs.existsSync(path.join(fixableRoot, 'reference/Pets/pets/listpets.md'))).toBe(true);
     // The unfixable warning is still reported, but never marked fixed.
-    const warning = res.find((r) => r.message.includes('x-readme.internal'));
+    const warning = res.find(r => r.message.includes('x-readme.internal'));
     expect(warning && !warning.message.endsWith('(fixed)')).toBe(true);
   } finally {
     rmRepo(fixableRoot);

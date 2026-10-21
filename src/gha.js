@@ -17,8 +17,8 @@
 // let it do what it already does, exit code included.
 
 import * as lint from './commands/lint.js';
-import * as oasValidate from './commands/oas-validate.js';
 import * as oasSync from './commands/oas-sync.js';
+import * as oasValidate from './commands/oas-validate.js';
 import { writeGithubActionsOutputs } from './utils/gha-output.js';
 
 // Each command's run(options, cmd, ctx) only ever reads specific boolean
@@ -26,8 +26,8 @@ import { writeGithubActionsOutputs } from './utils/gha-output.js';
 // (the commander Command instance normal CLI invocation would pass) — so a
 // plain options object and a null cmd are enough here.
 const COMMANDS = {
-  'lint': { run: lint.run, flags: ['json', 'github', 'fix'] },
-  'validate': { run: lint.run, flags: ['json', 'github', 'fix'] }, // alias, matches src/commands/lint.js
+  lint: { run: lint.run, flags: ['json', 'github', 'fix'] },
+  validate: { run: lint.run, flags: ['json', 'github', 'fix'] }, // alias, matches src/commands/lint.js
   'oas:validate': { run: oasValidate.run, flags: ['dereference'] },
   'oas:sync': { run: oasSync.run, flags: [] },
 };
@@ -46,7 +46,7 @@ export async function run() {
   if (!entry) {
     console.error(
       `::error::Unknown or unsupported command "${command || '(empty)'}" for the \`readme\` input. ` +
-        `Supported: ${[...new Set(Object.keys(COMMANDS).filter((k) => k !== 'validate'))].join(', ')}.`,
+        `Supported: ${[...new Set(Object.keys(COMMANDS).filter(k => k !== 'validate'))].join(', ')}.`,
     );
     writeGithubActionsOutputs({ 'has-errors': 'true' });
     process.exit(1);
@@ -72,8 +72,8 @@ export async function run() {
 
   if (badTokens.length > 0) {
     console.error(
-      `::error::Unknown option${badTokens.length > 1 ? 's' : ''} ${badTokens.map((t) => `"${t}"`).join(', ')} for "${command}". ` +
-        `Supported: ${entry.flags.length > 0 ? entry.flags.map((f) => `--${f}`).join(', ') : '(none)'}.`,
+      `::error::Unknown option${badTokens.length > 1 ? 's' : ''} ${badTokens.map(t => `"${t}"`).join(', ')} for "${command}". ` +
+        `Supported: ${entry.flags.length > 0 ? entry.flags.map(f => `--${f}`).join(', ') : '(none)'}.`,
     );
     writeGithubActionsOutputs({ 'has-errors': 'true' });
     process.exit(1);
@@ -89,7 +89,7 @@ export async function run() {
   await entry.run(options, null, { gitRoot });
 }
 
-run().catch((err) => {
+run().catch(err => {
   console.error(err);
   // A thrown error (as opposed to a command's own controlled process.exit)
   // means whatever run() was doing never reached its own

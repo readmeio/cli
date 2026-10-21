@@ -1,4 +1,5 @@
 import { redirect } from 'next/navigation';
+
 import { getFirstPageHref } from '../lib/docs';
 
 export const dynamic = 'force-dynamic';

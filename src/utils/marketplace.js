@@ -64,7 +64,11 @@ export async function listMarketplaceComponents({ force = false } = {}) {
   if (!force) {
     const cached = readCache(cacheKey);
     if (cached) {
-      try { return JSON.parse(cached); } catch { /* fall through */ }
+      try {
+        return JSON.parse(cached);
+      } catch {
+        /* fall through */
+      }
     }
   }
 
@@ -73,8 +77,8 @@ export async function listMarketplaceComponents({ force = false } = {}) {
   const entries = JSON.parse(body);
 
   const components = entries
-    .filter((e) => e.type === 'dir' && !e.name.startsWith('.'))
-    .map((e) => ({
+    .filter(e => e.type === 'dir' && !e.name.startsWith('.'))
+    .map(e => ({
       name: e.name,
       htmlUrl: `https://github.com/${REPO}/tree/${BRANCH}/${COMPONENTS_PATH}/${e.name}`,
       mdxUrl: `https://raw.githubusercontent.com/${REPO}/${BRANCH}/${COMPONENTS_PATH}/${e.name}/${e.name}.mdx`,
@@ -92,7 +96,7 @@ export async function listMarketplaceComponents({ force = false } = {}) {
  */
 export async function fetchMarketplaceComponent(name, { force = false } = {}) {
   const components = await listMarketplaceComponents({ force });
-  const match = components.find((c) => c.name.toLowerCase() === name.toLowerCase());
+  const match = components.find(c => c.name.toLowerCase() === name.toLowerCase());
   if (!match) {
     throw new Error(`Component "${name}" not found in marketplace.`);
   }
@@ -130,7 +134,10 @@ export function summarizeReadme(readme) {
   let inOverview = false;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
-    if (/^##\s+overview/i.test(line)) { inOverview = true; continue; }
+    if (/^##\s+overview/i.test(line)) {
+      inOverview = true;
+      continue;
+    }
     if (inOverview && line && !line.startsWith('#') && !line.startsWith('![')) {
       return line.replace(/[*_`]/g, '').slice(0, 140);
     }

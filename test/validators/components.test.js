@@ -1,4 +1,5 @@
 import { expect, test } from 'vitest';
+
 import { collectFiles } from '../../src/utils/lint.js';
 import { validate, validateAll } from '../../src/validators/components.js';
 import { makeRepo, rmRepo } from '../helpers.js';
@@ -9,8 +10,7 @@ test('unknown component is reported as a warning, not an error', () => {
   });
   try {
     const res = validateAll(collectFiles(root), root);
-    const unknown = res.find((r) => r.message.includes('Unknown component'));
-    expect(unknown, 'expected an unknown-component result').toBeTruthy();
+    const unknown = res.find(r => r.message.includes('Unknown component'));
     expect(unknown.severity).toBe('warning');
   } finally {
     rmRepo(root);
@@ -25,15 +25,13 @@ test('custom_block .md filename with underscores is allowed (valid component tag
 
 test('custom_block .md filename with hyphens is flagged (invalid component tag)', () => {
   const res = validate({ content: 'A snippet.\n', relativePath: 'custom_blocks/helm-v4-error.md' });
-  const warn = (res || []).find((r) => r.message.includes('Bad filename'));
-  expect(warn, 'expected a Bad filename warning for a hyphenated name').toBeTruthy();
+  const warn = (res || []).find(r => r.message.includes('Bad filename'));
   expect(warn.severity).toBe('warning');
   expect(warn.message).toMatch(/HelmV4Error\.md/);
 });
 
 test('custom_block .md filename with a lowercase initial is flagged', () => {
   const res = validate({ content: 'A snippet.\n', relativePath: 'custom_blocks/myBlock.md' });
-  const warn = (res || []).find((r) => r.message.includes('Bad filename'));
-  expect(warn, 'expected a Bad filename warning for a lowercase initial').toBeTruthy();
+  const warn = (res || []).find(r => r.message.includes('Bad filename'));
   expect(warn.message).toMatch(/MyBlock\.md/);
 });

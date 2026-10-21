@@ -1,7 +1,9 @@
 import fs from 'node:fs';
-import path from 'node:path';
 import { createRequire } from 'node:module';
+import path from 'node:path';
+
 import { bundle } from '@readme/openapi-parser';
+
 import * as styles from '../utils/styles.js';
 
 const require = createRequire(import.meta.url);
@@ -61,7 +63,9 @@ export async function run(specArg, options) {
       const opCount = countOperations(spec);
       const rel = path.relative(process.cwd(), outPath);
       const shown = rel && !rel.startsWith('..') ? rel : outPath;
-      styles.ok(`Bundled ${styles.bold(spec.info?.title || specArg)} (${opCount} ${opCount === 1 ? 'endpoint' : 'endpoints'}) → ${shown}`);
+      styles.ok(
+        `Bundled ${styles.bold(spec.info?.title || specArg)} (${opCount} ${opCount === 1 ? 'endpoint' : 'endpoints'}) → ${shown}`,
+      );
       return;
     }
 

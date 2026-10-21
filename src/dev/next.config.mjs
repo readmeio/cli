@@ -11,7 +11,7 @@ export default {
   // default. Marking our own package as a transpile target bypasses that.
   transpilePackages: ['@readme/cli'],
   serverExternalPackages: ['js-yaml', '@readme/markdown'],
-  webpack: (config) => {
+  webpack: config => {
     // Suppress noisy cache serialization warnings from large @readme/markdown bundle
     config.infrastructureLogging = {
       ...config.infrastructureLogging,

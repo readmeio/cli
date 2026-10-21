@@ -1,12 +1,14 @@
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
+
 import { Command } from 'commander';
-import { createRequire } from 'node:module';
 import updateNotifier from 'update-notifier';
+
 import bootstrap from './bootstrap.js';
-import * as styles from './utils/styles.js';
 import { header, setPalette, isAgenticCli } from './utils/eyes.js';
+import * as styles from './utils/styles.js';
 import { loadPet, applyDecay, getPetHeader } from './utils/tamagotchi.js';
 import { getRandomTip } from './utils/tips.js';
 
@@ -46,18 +48,20 @@ export async function main() {
 
   if (!isRunningInClaude) {
     program.addHelpText('beforeAll', () => {
-      return '\n' + header({
+      return `\n${header({
         version: pkg.version,
         binName: styles.binName(),
         greeting: petGreeting,
         expression: petExpression,
-      }).map(l => '  ' + l).join('\n') + '\n';
+      })
+        .map(l => `  ${l}`)
+        .join('\n')}\n`;
     });
   }
 
   // Auto-discover and register every command in src/commands/
   const commandsDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'commands');
-  const files = fs.readdirSync(commandsDir).filter((f) => f.endsWith('.js') && !f.endsWith('.test.js'));
+  const files = fs.readdirSync(commandsDir).filter(f => f.endsWith('.js') && !f.endsWith('.test.js'));
 
   // Load all modules, then sort by order (default 0)
   const mods = [];
@@ -111,7 +115,7 @@ export async function main() {
   program.addHelpText('after', () => {
     // Group registered commands by category. The built-in `help` command
     // doesn't go through the loop above, so we add it manually.
-    const groups = { 'Linting': [], 'OAS Tooling': [], 'Other': [] };
+    const groups = { Linting: [], 'OAS Tooling': [], Other: [] };
     for (const [cmd, category] of commandCategories.entries()) {
       if (cmd._hidden) continue;
       if (!groups[category]) groups[category] = [];
@@ -123,12 +127,12 @@ export async function main() {
 
     const allCmds = Object.values(groups).flat();
     if (allCmds.length === 0) return '';
-    const nameWidth = Math.max(...allCmds.map((c) => c.name().length));
+    const nameWidth = Math.max(...allCmds.map(c => c.name().length));
 
     // Map cmd → its source module so we can pull optional helpHint.
     const cmdToMod = new Map();
     for (const mod of mods) {
-      const cmd = program.commands.find((c) => c.name() === mod.command);
+      const cmd = program.commands.find(c => c.name() === mod.command);
       if (cmd) cmdToMod.set(cmd, mod);
     }
 
@@ -158,10 +162,12 @@ export async function main() {
     if (tip) {
       let output = '';
       const origLog = console.log;
-      console.log = (...args) => { output += args.join(' ') + '\n'; };
+      console.log = (...args) => {
+        output += `${args.join(' ')}\n`;
+      };
       tip.render();
       console.log = origLog;
-      return '\n' + output;
+      return `\n${output}`;
     }
     return '';
   });
@@ -185,7 +191,7 @@ export async function main() {
   let cmdIdx = 2;
   while (cmdIdx < argv.length && argv[cmdIdx].startsWith('-')) cmdIdx++;
   const cmdArg = argv[cmdIdx];
-  if (cmdArg && cmdArg.includes(':') && !program.commands.some((c) => c.name() === cmdArg)) {
+  if (cmdArg && cmdArg.includes(':') && !program.commands.some(c => c.name() === cmdArg)) {
     const [base, ...rest] = cmdArg.split(':');
     argv.splice(cmdIdx, 1, base, rest.join(':'));
   }

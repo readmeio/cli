@@ -5,7 +5,7 @@ const tips = [
   {
     weight: 1,
     commands: ['lint', 'oas:validate'],
-    condition: (ctx) => !ctx.isRunningInClaude && ctx.workflowOutdated,
+    condition: ctx => !ctx.isRunningInClaude && ctx.workflowOutdated,
     render() {
       console.log(`  💡 ${styles.bold('Tip:')} Your GitHub Action is out of date!`);
       console.log(`     ${styles.dim('⎿')}  ${styles.orange(`${styles.binName()} setup:github`)}`);
@@ -15,7 +15,7 @@ const tips = [
   {
     weight: 1,
     commands: ['lint', 'oas:validate'],
-    condition: (ctx) => !ctx.isRunningInClaude && ctx.detectedPlatform && !ctx.hasCiWorkflow,
+    condition: ctx => !ctx.isRunningInClaude && ctx.detectedPlatform && !ctx.hasCiWorkflow,
     render(ctx) {
       const label = ctx?.detectedPlatformLabel || 'CI';
       console.log(`  💡 ${styles.bold('Tip:')} Set up ${label} to lint your docs on every PR!`);
@@ -26,17 +26,19 @@ const tips = [
   {
     weight: 1,
     commands: ['lint', 'oas:validate'],
-    condition: (ctx) => !ctx.isRunningInClaude && ctx.hasClaude,
+    condition: ctx => !ctx.isRunningInClaude && ctx.hasClaude,
     render() {
       console.log(`  💡 ${styles.bold('Tip:')} Claude can fix these issues for you easily!`);
-      console.log(`     ${styles.dim('⎿')}  ${styles.orange(`claude "run '${styles.binName()} lint' and fix the issues"`)}`);
+      console.log(
+        `     ${styles.dim('⎿')}  ${styles.orange(`claude "run '${styles.binName()} lint' and fix the issues"`)}`,
+      );
       console.log();
     },
   },
   {
     weight: 1,
     commands: ['lint', 'oas:validate'],
-    condition: (ctx) => !ctx.isRunningInClaude && !ctx.hasClaude,
+    condition: ctx => !ctx.isRunningInClaude && !ctx.hasClaude,
     render() {
       console.log(`  💡 ${styles.bold('Tip:')} Install Claude to automatically fix these issues!`);
       console.log(`     ${styles.dim('⎿')}  ${styles.dim('https://claude.ai/download')}`);
@@ -47,7 +49,9 @@ const tips = [
     weight: 0.1,
     condition: () => !loadPet(),
     render() {
-      console.log(`  💡 ${styles.bold('Tip:')} Want a little friend? Run ${styles.orange(`${styles.binName()} play`)} to hatch one!`);
+      console.log(
+        `  💡 ${styles.bold('Tip:')} Want a little friend? Run ${styles.orange(`${styles.binName()} play`)} to hatch one!`,
+      );
       console.log();
     },
   },
@@ -56,7 +60,9 @@ const tips = [
     condition: () => !!loadPet(),
     render() {
       const pet = loadPet();
-      console.log(`  💡 ${styles.bold('Tip:')} ${pet.name} misses you! Run ${styles.orange(`${styles.binName()} play`)} to check in.`);
+      console.log(
+        `  💡 ${styles.bold('Tip:')} ${pet.name} misses you! Run ${styles.orange(`${styles.binName()} play`)} to check in.`,
+      );
       console.log();
     },
   },
@@ -69,7 +75,7 @@ const tips = [
  */
 export function getRandomTip(context) {
   const cmd = context.command;
-  const eligible = tips.filter((t) => {
+  const eligible = tips.filter(t => {
     // Filter by command if tip has a commands array
     if (t.commands && cmd && !t.commands.includes(cmd)) return false;
     // Tips without commands array show everywhere
@@ -83,7 +89,10 @@ export function getRandomTip(context) {
   let chosen = eligible[eligible.length - 1];
   for (const tip of eligible) {
     rand -= tip.weight || 1;
-    if (rand <= 0) { chosen = tip; break; }
+    if (rand <= 0) {
+      chosen = tip;
+      break;
+    }
   }
   // Bind context so render() can read it without a second argument.
   return { render: () => chosen.render(context) };

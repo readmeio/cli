@@ -63,10 +63,10 @@ export function detectRemotePlatform() {
   const remotes = readRemotes();
   if (!remotes) return null;
   for (const [key, def] of Object.entries(PLATFORMS)) {
-    if (def.remoteHosts && def.remoteHosts.some((h) => remotes.toLowerCase().includes(h))) {
+    if (def.remoteHosts && def.remoteHosts.some(h => remotes.toLowerCase().includes(h))) {
       return key;
     }
-    if (def.remotePathHints && def.remotePathHints.some((p) => remotes.toLowerCase().includes(p))) {
+    if (def.remotePathHints && def.remotePathHints.some(p => remotes.toLowerCase().includes(p))) {
       return key;
     }
   }
@@ -81,7 +81,7 @@ export function detectExistingCi(gitRoot) {
   if (!gitRoot) return [];
   const found = [];
   for (const [key, def] of Object.entries(PLATFORMS)) {
-    const hit = def.fsMarkers.some((marker) => fs.existsSync(path.join(gitRoot, marker)));
+    const hit = def.fsMarkers.some(marker => fs.existsSync(path.join(gitRoot, marker)));
     if (hit) found.push(key);
   }
   return found;

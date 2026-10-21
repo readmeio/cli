@@ -1,8 +1,9 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, it } from 'vitest';
+
 import { parseFrontmatter, toFrontmatter, frontmatterWriteError } from '../../src/utils/markdown.js';
 
 describe('#frontmatterWriteError()', () => {
-  test('frontmatterWriteError guards write paths against failed parses', () => {
+  it('frontmatterWriteError guards write paths against failed parses', () => {
     const ok = parseFrontmatter('---\ntitle: ok\n---\n# Body');
     expect(frontmatterWriteError(ok)).toBeNull();
 
@@ -17,7 +18,7 @@ describe('#frontmatterWriteError()', () => {
 });
 
 describe('#parseFrontmatter()', () => {
-  test('should parse and extract metadata from a piece fully populated content', () => {
+  it('should parse and extract metadata from a piece fully populated content', () => {
     const content = `---
 deprecated: true
 hidden: true
@@ -29,9 +30,7 @@ link:
 ---
 # Hello world`;
 
-    expect(
-      parseFrontmatter(content),
-    ).toStrictEqual({
+    expect(parseFrontmatter(content)).toStrictEqual({
       content: '# Hello world',
       data: {
         deprecated: true,
@@ -42,11 +41,11 @@ link:
           new_tab: true,
           url: 'https://example.com',
         },
-      }
+      },
     });
   });
 
-  test('should extract unknown top-level and metadata keys', () => {
+  it('should extract unknown top-level and metadata keys', () => {
     const content = `---
 title: test5
 anotherCustomValue: anotherCustomValue
@@ -60,9 +59,7 @@ metadata:
 ---
 # Body`;
 
-    expect(
-      parseFrontmatter(content),
-    ).toStrictEqual({
+    expect(parseFrontmatter(content)).toStrictEqual({
       content: '# Body',
       data: {
         title: 'test5',
@@ -78,7 +75,7 @@ metadata:
     });
   });
 
-  test('should parse an unquoted value that contains a colon', () => {
+  it('should parse an unquoted value that contains a colon', () => {
     const content = `---
 title: Upsert a contact from a CRM
 description: GET → 404 ? POST : PATCH — the canonical sync pattern for any CRM integration.
@@ -89,9 +86,7 @@ recipe:
 ---
 # Body`;
 
-    expect(
-      parseFrontmatter(content),
-    ).toStrictEqual({
+    expect(parseFrontmatter(content)).toStrictEqual({
       content: '# Body',
       data: {
         title: 'Upsert a contact from a CRM',
@@ -105,7 +100,7 @@ recipe:
     });
   });
 
-  test('should parse several unquoted colon values, including apostrophes and nested keys', () => {
+  it('should parse several unquoted colon values, including apostrophes and nested keys', () => {
     const content = `---
 title: Sync
 excerpt: say "hello": world
@@ -114,9 +109,7 @@ metadata:
 ---
 # Body`;
 
-    expect(
-      parseFrontmatter(content),
-    ).toStrictEqual({
+    expect(parseFrontmatter(content)).toStrictEqual({
       content: '# Body',
       data: {
         title: 'Sync',
@@ -128,7 +121,7 @@ metadata:
     });
   });
 
-  test('should leave block scalar text alone when a sibling value contains a colon', () => {
+  it('should leave block scalar text alone when a sibling value contains a colon', () => {
     const content = `---
 title: ok
 body: |
@@ -139,9 +132,7 @@ description: POST : PATCH
 ---
 # Body`;
 
-    expect(
-      parseFrontmatter(content),
-    ).toStrictEqual({
+    expect(parseFrontmatter(content)).toStrictEqual({
       content: '# Body',
       data: {
         title: 'ok',
@@ -152,15 +143,13 @@ description: POST : PATCH
     });
   });
 
-  test('should parse an unquoted colon value that uses a tab, and drop a trailing comment', () => {
+  it('should parse an unquoted colon value that uses a tab, and drop a trailing comment', () => {
     const content = `---
 description: POST :\tPATCH # note
 ---
 # Body`;
 
-    expect(
-      parseFrontmatter(content),
-    ).toStrictEqual({
+    expect(parseFrontmatter(content)).toStrictEqual({
       content: '# Body',
       data: {
         description: 'POST :\tPATCH',
@@ -168,15 +157,13 @@ description: POST :\tPATCH # note
     });
   });
 
-  test('should keep a non-breaking space before a hash inside the value', () => {
+  it('should keep a non-breaking space before a hash inside the value', () => {
     const content = `---
 description: POST : PATCH\u00a0#tag
 ---
 # Body`;
 
-    expect(
-      parseFrontmatter(content),
-    ).toStrictEqual({
+    expect(parseFrontmatter(content)).toStrictEqual({
       content: '# Body',
       data: {
         description: 'POST : PATCH\u00a0#tag',
@@ -184,29 +171,27 @@ description: POST : PATCH\u00a0#tag
     });
   });
 
-  test('should repair nine unquoted colon values within the parse attempt cap', () => {
+  it('should repair nine unquoted colon values within the parse attempt cap', () => {
     const fields = Array.from({ length: 9 }, (_, index) => `field${index}: value : ${index}`).join('\n');
     const content = `---\n${fields}\n---\n# Body`;
 
-    expect(
-      parseFrontmatter(content),
-    ).toStrictEqual({
+    expect(parseFrontmatter(content)).toStrictEqual({
       content: '# Body',
       data: Object.fromEntries(Array.from({ length: 9 }, (_, index) => [`field${index}`, `value : ${index}`])),
     });
   });
 
-  test('should give up when unquoted colon values need more than ten parses', () => {
+  it('should give up when unquoted colon values need more than ten parses', () => {
     const fields = Array.from({ length: 10 }, (_, index) => `field${index}: value : ${index}`).join('\n');
     const content = `---\n${fields}\n---\n# Body`;
 
     const result = parseFrontmatter(content);
     expect(result.content).toBe('# Body');
     expect(result.data).toStrictEqual({});
-    expect(result.error, 'YAML failure is surfaced on `error`').toBeTruthy();
+    expect(result.error, 'YAML failure is surfaced on `error`').toBeDefined();
   });
 
-  test('should leave frontmatter empty when a mapping is mis-indented', () => {
+  it('should leave frontmatter empty when a mapping is mis-indented', () => {
     const content = `---
 a: 1
   b: 2
@@ -216,18 +201,16 @@ a: 1
     const result = parseFrontmatter(content);
     expect(result.content).toBe('# Body');
     expect(result.data).toStrictEqual({});
-    expect(result.error, 'YAML failure is surfaced on `error`').toBeTruthy();
+    expect(result.error, 'YAML failure is surfaced on `error`').toBeDefined();
   });
 
-   test('should parse and extract metadata from a piece sparsely-populated content', () => {
+  it('should parse and extract metadata from a piece sparsely-populated content', () => {
     const content = `---
 title: Hello world!
 ---
 `;
 
-    expect(
-      parseFrontmatter(content),
-    ).toStrictEqual({
+    expect(parseFrontmatter(content)).toStrictEqual({
       content: '',
       data: {
         title: 'Hello world!',
@@ -236,7 +219,7 @@ title: Hello world!
   });
 
   describe('quirks', () => {
-    test('should be able to handle frontmatter that is preceded with linebreaks', () => {
+    it('should be able to handle frontmatter that is preceded with linebreaks', () => {
       const content = `
 
 ---
@@ -249,9 +232,7 @@ link:
 ---
 # Hello world`;
 
-      expect(
-        parseFrontmatter(content),
-      ).toStrictEqual({
+      expect(parseFrontmatter(content)).toStrictEqual({
         content: '# Hello world',
         data: {
           deprecated: true,
@@ -262,13 +243,11 @@ link:
       });
     });
 
-    test('should preserve leading newline in body when present after closing ---', () => {
+    it('should preserve leading newline in body when present after closing ---', () => {
       // When there's a blank line after ---, preserve it in the body
       const content = '---\nname: test\n---\n\n# Content';
 
-      expect(
-        parseFrontmatter(content),
-      ).toStrictEqual({
+      expect(parseFrontmatter(content)).toStrictEqual({
         content: '\n# Content',
         data: {
           name: 'test',
@@ -276,13 +255,11 @@ link:
       });
     });
 
-    test('should not add leading newline in body when not present after closing ---', () => {
+    it('should not add leading newline in body when not present after closing ---', () => {
       // When there's no blank line after ---, body starts immediately
       const content = '---\nname: test\n---\n# Content';
 
-      expect(
-        parseFrontmatter(content),
-      ).toStrictEqual({
+      expect(parseFrontmatter(content)).toStrictEqual({
         content: '# Content',
         data: {
           name: 'test',
@@ -290,13 +267,11 @@ link:
       });
     });
 
-    test('should strip BOM (Byte Order Mark) from content', () => {
+    it('should strip BOM (Byte Order Mark) from content', () => {
       // Add BOM character (U+FEFF) to the beginning of content
       const contentWithBOM = '\uFEFF---\ntitle: Hello BOM!\n---\n# Content with BOM';
 
-      expect(
-        parseFrontmatter(contentWithBOM),
-      ).toStrictEqual({
+      expect(parseFrontmatter(contentWithBOM)).toStrictEqual({
         content: '# Content with BOM',
         data: {
           title: 'Hello BOM!',
@@ -304,125 +279,103 @@ link:
       });
     });
 
-    test('should strip BOM even when there is no frontmatter', () => {
+    it('should strip BOM even when there is no frontmatter', () => {
       const contentWithBOM = '\uFEFF# Just content with BOM';
 
-      expect(
-        parseFrontmatter(contentWithBOM),
-      ).toStrictEqual({
+      expect(parseFrontmatter(contentWithBOM)).toStrictEqual({
         content: '# Just content with BOM',
         data: {},
       });
     });
 
-    test('should handle windows line endings', () => {
+    it('should handle windows line endings', () => {
       const content = '---\r\ntitle: windows line ending\r\n---\r\n# Content with windows line endings\r\n';
 
-      expect(
-        parseFrontmatter(content),
-      ).toStrictEqual({
+      expect(parseFrontmatter(content)).toStrictEqual({
         content: '# Content with windows line endings\n',
         data: { title: 'windows line ending' },
       });
     });
 
-    test('should handle partial header with windows line endings', () => {
+    it('should handle partial header with windows line endings', () => {
       const content = '---\r\ntitle: windows line ending\r\n';
 
-      expect(
-        parseFrontmatter(content),
-      ).toStrictEqual({
+      expect(parseFrontmatter(content)).toStrictEqual({
         content: '',
         data: { title: 'windows line ending' },
       });
     });
 
-    test('should handle empty frontmatter', () => {
+    it('should handle empty frontmatter', () => {
       const content = '---\n\n---\n# Content';
 
-      expect(
-        parseFrontmatter(content),
-      ).toStrictEqual({
+      expect(parseFrontmatter(content)).toStrictEqual({
         content: '# Content',
         data: {},
       });
     });
 
-    test('should handle empty frontmatter with adjacent fences', () => {
+    it('should handle empty frontmatter with adjacent fences', () => {
       // No blank line between opening and closing ---
       const content = '---\n---\n# Content';
 
-      expect(
-        parseFrontmatter(content),
-      ).toStrictEqual({
+      expect(parseFrontmatter(content)).toStrictEqual({
         content: '# Content',
         data: {},
       });
     });
 
-    test('should keep body content that appears before a later --- after empty adjacent fences', () => {
+    it('should keep body content that appears before a later --- after empty adjacent fences', () => {
       // Regression: the old regex missed `---\n---`, treated the body as YAML, then
       // used a later `---` as the closing fence and dropped everything before it.
       const content = '---\n---\n# Intro\n\n---\n\nMore content';
 
-      expect(
-        parseFrontmatter(content),
-      ).toStrictEqual({
+      expect(parseFrontmatter(content)).toStrictEqual({
         content: '# Intro\n\n---\n\nMore content',
         data: {},
       });
     });
 
-    test('should allow trailing spaces and tabs on fence lines', () => {
+    it('should allow trailing spaces and tabs on fence lines', () => {
       const content = '--- \ntitle: spaced\n---\t\n# Content';
 
-      expect(
-        parseFrontmatter(content),
-      ).toStrictEqual({
+      expect(parseFrontmatter(content)).toStrictEqual({
         content: '# Content',
         data: { title: 'spaced' },
       });
     });
 
-    test('should allow trailing whitespace on adjacent empty fences', () => {
+    it('should allow trailing whitespace on adjacent empty fences', () => {
       const content = '--- \n---\t\n# Content';
 
-      expect(
-        parseFrontmatter(content),
-      ).toStrictEqual({
+      expect(parseFrontmatter(content)).toStrictEqual({
         content: '# Content',
         data: {},
       });
     });
 
-    test('should keep quoted --- inside YAML values when fences are adjacent-safe', () => {
+    it('should keep quoted --- inside YAML values when fences are adjacent-safe', () => {
       const content = '---\ntitle: "---"\n---\n# Content';
 
-      expect(
-        parseFrontmatter(content),
-      ).toStrictEqual({
+      expect(parseFrontmatter(content)).toStrictEqual({
         content: '# Content',
         data: { title: '---' },
       });
     });
 
-    test('should handle mixed line endings', () => {
+    it('should handle mixed line endings', () => {
       const content = '---\r\ntitle: Mixed\nexcerpt: Unix here\r\n---\n# Content';
 
-      expect(
-        parseFrontmatter(content),
-      ).toStrictEqual({
+      expect(parseFrontmatter(content)).toStrictEqual({
         content: '# Content',
         data: { title: 'Mixed', excerpt: 'Unix here' },
       });
     });
 
-    test('should handle frontmatter without a closing delimiter', () => {
+    it('should handle frontmatter without a closing delimiter', () => {
       const content = '---\ntitle: Test\nexcerpt: No closing delimiter';
 
-      expect(
-        parseFrontmatter(content),
-      ).toStrictEqual({
+      expect(parseFrontmatter(content)).toStrictEqual({
         content: '',
         data: {
           title: 'Test',
@@ -431,15 +384,13 @@ link:
       });
     });
 
-    test('should handle frontmatter without closing delimiter and with body content', () => {
+    it('should handle frontmatter without closing delimiter and with body content', () => {
       // This is a bit ambiguous - without a closing ---, everything after could be
       // considered part of the frontmatter. Our implementation treats everything
       // after the opening --- as frontmatter if there's no closing ---
       const content = '---\ntitle: Test\n';
 
-      expect(
-        parseFrontmatter(content),
-      ).toStrictEqual({
+      expect(parseFrontmatter(content)).toStrictEqual({
         content: '',
         data: {
           title: 'Test',
@@ -449,45 +400,37 @@ link:
   });
 
   describe('non-object YAML types', () => {
-    test('should return empty object when frontmatter is a boolean', () => {
+    it('should return empty object when frontmatter is a boolean', () => {
       const content = '---\ntrue\n---\n# Content';
 
-      expect(
-        parseFrontmatter(content),
-      ).toStrictEqual({
+      expect(parseFrontmatter(content)).toStrictEqual({
         content: '# Content',
         data: {},
       });
     });
 
-    test('should return empty object when frontmatter is a string', () => {
+    it('should return empty object when frontmatter is a string', () => {
       const content = '---\njust a string\n---\n# Content';
 
-      expect(
-        parseFrontmatter(content),
-      ).toStrictEqual({
+      expect(parseFrontmatter(content)).toStrictEqual({
         content: '# Content',
         data: {},
       });
     });
 
-    test('should return empty object when frontmatter is a number', () => {
+    it('should return empty object when frontmatter is a number', () => {
       const content = '---\n42\n---\n# Content';
 
-      expect(
-        parseFrontmatter(content),
-      ).toStrictEqual({
+      expect(parseFrontmatter(content)).toStrictEqual({
         content: '# Content',
         data: {},
       });
     });
 
-    test('should return empty object when frontmatter is an array', () => {
+    it('should return empty object when frontmatter is an array', () => {
       const content = '---\n- one\n- two\n---\n# Content';
 
-      expect(
-        parseFrontmatter(content),
-      ).toStrictEqual({
+      expect(parseFrontmatter(content)).toStrictEqual({
         content: '# Content',
         data: {},
       });
@@ -495,16 +438,15 @@ link:
   });
 });
 
-
 describe('#toFrontmatter()', () => {
   describe('given an empty object', () => {
-    test('should not generate any frontmatter', () => {
+    it('should not generate any frontmatter', () => {
       expect(toFrontmatter({})).toBe('');
     });
   });
 
   describe('given an object containing null values', () => {
-    test('should remove them', () => {
+    it('should remove them', () => {
       const data = {
         hidden: null,
         title: 'Getting Started',
@@ -525,21 +467,19 @@ describe('#toFrontmatter()', () => {
         api: null,
       };
 
-      expect(
-        toFrontmatter(data),
-      ).toBe(`---
+      expect(toFrontmatter(data)).toBe(`---
 title: Getting Started
 ---`);
     });
   });
 
   describe('given a changelog author', () => {
-    test('should serialize it', () => {
+    it('should serialize it', () => {
       expect(
         toFrontmatter({
-        title: 'Launch week',
-        author: 'Buster',
-        published_at: '2026-08-07T00:00:00.000Z',
+          title: 'Launch week',
+          author: 'Buster',
+          published_at: '2026-08-07T00:00:00.000Z',
         }),
       ).toBe(`---
 title: Launch week
@@ -548,11 +488,11 @@ published_at: '2026-08-07T00:00:00.000Z'
 ---`);
     });
 
-    test('should drop the key entirely when null, which is how a byline is cleared', () => {
+    it('should drop the key entirely when null, which is how a byline is cleared', () => {
       expect(
         toFrontmatter({
-        title: 'Launch week',
-        author: null,
+          title: 'Launch week',
+          author: null,
         }),
       ).toBe(`---
 title: Launch week
@@ -561,7 +501,7 @@ title: Launch week
   });
 
   describe('given an object', () => {
-    test('should generate valid frontmatter', () => {
+    it('should generate valid frontmatter', () => {
       const data = {
         hidden: false,
         title: 'Getting Started',
@@ -596,9 +536,7 @@ title: Launch week
         },
       };
 
-      expect(
-        toFrontmatter(data),
-      ).toBe(`---
+      expect(toFrontmatter(data)).toBe(`---
 title: Getting Started
 excerpt: This is the excerpt
 deprecated: true
@@ -626,7 +564,7 @@ next:
 ---`);
     });
 
-    test('should be ordered properly', () => {
+    it('should be ordered properly', () => {
       // Order should be title, description/excerpt, type, {..alphabetical}
       const data = {
         hidden: false,
@@ -662,9 +600,7 @@ next:
         },
       };
 
-      expect(
-        toFrontmatter(data),
-      ).toBe(`---
+      expect(toFrontmatter(data)).toBe(`---
 title: Getting Started
 excerpt: This is the excerpt
 deprecated: true
@@ -692,7 +628,7 @@ next:
 ---`);
     });
 
-    test('should keep unknown top-level and metadata keys', () => {
+    it('should keep unknown top-level and metadata keys', () => {
       const data = {
         title: 'test5',
         anotherCustomValue: 'anotherCustomValue',
@@ -705,9 +641,7 @@ next:
         },
       };
 
-      expect(
-        toFrontmatter(data),
-      ).toBe(`---
+      expect(toFrontmatter(data)).toBe(`---
 title: test5
 anotherCustomValue: anotherCustomValue
 deprecated: true

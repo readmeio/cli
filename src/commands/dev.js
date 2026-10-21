@@ -1,11 +1,13 @@
 import fs from 'fs';
-import path from 'path';
 import { createServer } from 'http';
-import { fileURLToPath } from 'url';
 import { createRequire } from 'node:module';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
 import chalk from 'chalk';
-import { binName } from '../utils/styles.js';
+
 import { header, setPalette, isAgenticCli } from '../utils/eyes.js';
+import { binName } from '../utils/styles.js';
 import { loadPet } from '../utils/tamagotchi.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -35,15 +37,17 @@ export async function run(options, _cmd, ctx) {
   try {
     const pet = loadPet();
     if (pet?.color) setPalette(pet.color);
-  } catch {}
+  } catch {
+    // no-op
+  }
 
   // Suppress Next.js noisy compile/request logging
   for (const stream of [process.stdout, process.stderr]) {
     const original = stream.write.bind(stream);
-    stream.write = (chunk, ...args) => {
+    stream.write = (chunk, ...streamAgs) => {
       const str = typeof chunk === 'string' ? chunk : chunk.toString();
       if (/^ [○✓⨯▲ ]*(Compiled|Compiling|GET |POST |⚠|Warning:)/.test(str)) return true;
-      return original(chunk, ...args);
+      return original(chunk, ...streamAgs);
     };
   }
 
@@ -84,7 +88,7 @@ export async function run(options, _cmd, ctx) {
 
   function listen(port) {
     return new Promise((resolve, reject) => {
-      const onError = (err) => {
+      const onError = err => {
         if (err.code === 'EADDRINUSE') {
           resolve(listen(port + 1));
         } else {
@@ -108,7 +112,7 @@ export async function run(options, _cmd, ctx) {
       binName: `${binName()} dev`,
     });
     for (const line of headerLines) {
-      console.log('  ' + line);
+      console.log(`  ${line}`);
     }
     console.log();
   }

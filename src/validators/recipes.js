@@ -110,7 +110,7 @@ export function validate({ content, relativePath }) {
     const block = blocksByLang.get(ref.lang);
 
     if (!block) {
-      const available = codeBlocks.map((b) => b.lang).join(', ');
+      const available = codeBlocks.map(b => b.lang).join(', ');
       results.push({
         file: relativePath,
         rule: name,
