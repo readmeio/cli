@@ -1,34 +1,18 @@
-// oxlint-disable require-await
-import { afterEach, it, expect, test } from 'vitest';
+import { afterEach, expect, test } from 'vitest';
 
 import { __test__ } from '../../src/commands/import.js';
-
-const originalFetch = globalThis.fetch;
+import { mockFetch, resetFetchMocks } from '../mock-fetch.js';
 
 afterEach(() => {
-  globalThis.fetch = originalFetch;
+  resetFetchMocks();
 });
 
 function mockLlmsFetch(files) {
-  const seen = [];
-  globalThis.fetch = async url => {
-    const href = String(url);
-    seen.push(href);
-    if (!Object.hasOwn(files, href)) return new Response('', { status: 404 });
-    return new Response(files[href], {
-      status: 200,
-      headers: { 'content-type': 'text/plain' },
-    });
-  };
-  return seen;
+  return mockFetch(files);
 }
 
 function mockRedirectFetch(files) {
-  globalThis.fetch = async url => {
-    const entry = files[String(url)];
-    if (!entry) return { ok: false, status: 404, url: String(url), text: async () => '' };
-    return { ok: true, status: 200, url: entry.finalUrl || String(url), text: async () => entry.body || '' };
-  };
+  mockFetch(files);
 }
 
 function mergedItems(merged) {
@@ -125,28 +109,23 @@ test('resolveRedirectedSourceUrl ignores query and hash-only redirects', async (
 });
 
 test('resolveRedirectedSourceUrl returns null on non-ok responses', async () => {
-  globalThis.fetch = async url => ({ ok: false, status: 500, url: String(url), text: async () => '' });
+  mockFetch({ 'https://example.com/': { status: 500, body: '' } });
   await expect(__test__.resolveRedirectedSourceUrl(new URL('https://example.com/'))).resolves.toBeNull();
 });
 
 test('resolveRedirectedSourceUrl returns null when fetch throws', async () => {
-  globalThis.fetch = async () => {
-    throw new Error('network down');
-  };
+  mockFetch({ 'https://example.com/': new Error('network down') });
   await expect(__test__.resolveRedirectedSourceUrl(new URL('https://example.com/'))).resolves.toBeNull();
 });
 
 function mockDocsProbeFetch(files, { catchAllBody } = {}) {
-  globalThis.fetch = async url => {
-    const href = String(url);
-    if (new URL(href).hostname !== 'example.com') throw new Error('getaddrinfo ENOTFOUND');
-    const entry = files[href];
-    if (entry) return { ok: true, status: 200, url: entry.finalUrl || href, text: async () => entry.body || '' };
-    if (catchAllBody && !href.endsWith('/llms.txt')) {
-      return { ok: true, status: 200, url: href, text: async () => catchAllBody };
-    }
-    return { ok: false, status: 404, url: href, text: async () => '' };
-  };
+  mockFetch(files, {
+    origins: ['https://example.com'],
+    fallback(href) {
+      if (catchAllBody && !href.endsWith('/llms.txt')) return [200, catchAllBody];
+      return [404, ''];
+    },
+  });
 }
 
 test('resolveDocsBaseUrl adopts a path route whose trailing slash gets stripped by a redirect', async () => {
@@ -207,12 +186,7 @@ function fernHtml(fragments, { aside = true, generator = false, extraBody = '' }
 }
 
 function mockHtmlFetch(pages) {
-  globalThis.fetch = async url => {
-    const entry = pages[String(url)];
-    if (entry === undefined) return { ok: false, status: 404, url: String(url), text: async () => '' };
-    if (entry instanceof Error) throw entry;
-    return { ok: true, status: 200, url: String(url), text: async () => entry };
-  };
+  mockFetch(pages);
 }
 
 const GEN1_TREE =

@@ -1,29 +1,16 @@
-// oxlint-disable require-await
 import { afterEach, test, expect } from 'vitest';
 
 import { __test__ } from '../../../src/commands/import.js';
+import { mockFetch, resetFetchMocks } from '../../mock-fetch.js';
 
 const { injectSectionLandingPages, parseMetaRefreshTarget, parseHtmlCanonical } = __test__;
 
-const originalFetch = globalThis.fetch;
-
 afterEach(() => {
-  globalThis.fetch = originalFetch;
+  resetFetchMocks();
 });
 
 function mockLandingFetch(routes) {
-  globalThis.fetch = async url => {
-    const href = String(url);
-    const entry = routes[href];
-    if (!entry) return { ok: false, status: 404, url: href, text: async () => '' };
-    if (entry instanceof Error) throw entry;
-    return {
-      ok: entry.ok !== false,
-      status: entry.status ?? 200,
-      url: entry.finalUrl || href,
-      text: async () => entry.body || '',
-    };
-  };
+  mockFetch(routes);
 }
 
 test('parseMetaRefreshTarget resolves relative, quoted, and entity-encoded targets', () => {
@@ -149,11 +136,7 @@ test('injectSectionLandingPages skips landings that HTTP-redirect onto a known c
 });
 
 test('injectSectionLandingPages does not probe the import base or categories with a single child', async () => {
-  const seen = [];
-  globalThis.fetch = async url => {
-    seen.push(String(url));
-    return { ok: true, status: 200, url: String(url), text: async () => '<title>Docs</title>' };
-  };
+  const seen = mockFetch({});
   const organized = {
     categories: [
       {

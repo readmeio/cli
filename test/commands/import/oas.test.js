@@ -1,4 +1,3 @@
-// oxlint-disable require-await
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -6,6 +5,7 @@ import path from 'node:path';
 import { afterEach, test, expect } from 'vitest';
 
 import { __test__ } from '../../../src/commands/import.js';
+import { mockFetch, resetFetchMocks } from '../../mock-fetch.js';
 
 const {
   sniffOasContent,
@@ -18,36 +18,16 @@ const {
   downloadOasSpecs,
 } = __test__;
 
-const originalFetch = globalThis.fetch;
-
 afterEach(() => {
-  globalThis.fetch = originalFetch;
+  resetFetchMocks();
 });
 
 const JSON_SPEC = JSON.stringify({ openapi: '3.0.0', info: { title: 'T', version: '1' }, paths: {} });
 const YAML_SPEC = 'openapi: 3.0.0\ninfo:\n  title: T\n  version: "1"\npaths: {}\n';
 const HTML_SHELL = '<!DOCTYPE html><html><head><title>Docs</title></head><body>hi</body></html>';
 
-function toArrayBuffer(str) {
-  const buf = Buffer.from(str);
-  return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
-}
-
 function mockProbeFetch(routes) {
-  const seen = [];
-  globalThis.fetch = async url => {
-    const href = String(url);
-    seen.push(href);
-    const entry = routes[href] || routes['*'];
-    if (!entry) return { ok: false, status: 404, url: href, arrayBuffer: async () => new ArrayBuffer(0) };
-    return {
-      ok: true,
-      status: 200,
-      url: entry.finalUrl || href,
-      arrayBuffer: async () => toArrayBuffer(entry.body),
-    };
-  };
-  return seen;
+  return mockFetch(routes, { origins: ['https://foo.com'] });
 }
 
 test('sniffOasContent accepts JSON and YAML specs, rejects HTML and random content', () => {
@@ -226,11 +206,9 @@ test('extractOasSpecUrlsFromParsed captures .yaml links too and prunes emptied s
 });
 
 test('downloadOasSpecs writes prefetched bodies without fetching and preserves extensions', async () => {
-  const seen = [];
-  globalThis.fetch = async url => {
-    seen.push(String(url));
-    return { ok: true, status: 200, url: String(url), arrayBuffer: async () => toArrayBuffer(YAML_SPEC) };
-  };
+  const seen = mockFetch({
+    'https://foo.com/specs/api.yaml': YAML_SPEC,
+  });
   const stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'import-oas-test-'));
   const written = await downloadOasSpecs(
     [
@@ -264,11 +242,8 @@ test('downloadOasSpecs sniffs an extension for extensionless URLs', async () => 
 });
 
 test('downloadOasSpecs skips HTML bodies and suffixes filename collisions', async () => {
-  globalThis.fetch = async url => ({
-    ok: true,
-    status: 200,
-    url: String(url),
-    arrayBuffer: async () => toArrayBuffer(HTML_SHELL),
+  mockFetch({
+    'https://foo.com/shell.json': HTML_SHELL,
   });
   const stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'import-oas-test-'));
   const written = await downloadOasSpecs(
