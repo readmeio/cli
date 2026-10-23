@@ -28,12 +28,18 @@ export function validate({ filePath, content, relativePath }) {
     return null;
   }
   if (trimmed.length === 0) {
-    // index.md files that act as parent pages (have child .md siblings) can be empty.
+    // index.md files that act as parent pages (have child .md siblings or nested page
+    // directories) can be empty.
     if (path.basename(filePath) === 'index.md') {
-      const siblings = fs.readdirSync(path.dirname(filePath));
-      if (siblings.some(f => f.endsWith('.md') && f !== 'index.md')) {
-        return null;
-      }
+      const dir = path.dirname(filePath);
+      const hasChildren = fs
+        .readdirSync(dir, { withFileTypes: true })
+        .some(
+          e =>
+            (!e.isDirectory() && e.name.endsWith('.md') && e.name !== 'index.md') ||
+            (e.isDirectory() && fs.readdirSync(path.join(dir, e.name)).some(f => f.endsWith('.md'))),
+        );
+      if (hasChildren) return null;
     }
 
     return {

@@ -52222,12 +52222,17 @@ function content_validate({ filePath, content, relativePath }) {
     return null;
   }
   if (trimmed.length === 0) {
-    // index.md files that act as parent pages (have child .md siblings) can be empty.
+    // index.md files that act as parent pages (have child .md siblings or nested page
+    // directories) can be empty.
     if (external_node_path_namespaceObject.basename(filePath) === 'index.md') {
-      const siblings = external_node_fs_namespaceObject.readdirSync(external_node_path_namespaceObject.dirname(filePath));
-      if (siblings.some(f => f.endsWith('.md') && f !== 'index.md')) {
-        return null;
-      }
+      const dir = external_node_path_namespaceObject.dirname(filePath);
+      const hasChildren = external_node_fs_namespaceObject.readdirSync(dir, { withFileTypes: true })
+        .some(
+          e =>
+            (!e.isDirectory() && e.name.endsWith('.md') && e.name !== 'index.md') ||
+            (e.isDirectory() && external_node_fs_namespaceObject.readdirSync(external_node_path_namespaceObject.join(dir, e.name)).some(f => f.endsWith('.md'))),
+        );
+      if (hasChildren) return null;
     }
 
     return {
