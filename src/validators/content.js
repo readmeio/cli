@@ -36,7 +36,7 @@ export function validate({ filePath, content, relativePath }) {
         .readdirSync(dir, { withFileTypes: true })
         .some(
           e =>
-            (e.isFile() && e.name.endsWith('.md') && e.name !== 'index.md') ||
+            (!e.isDirectory() && e.name.endsWith('.md') && e.name !== 'index.md') ||
             (e.isDirectory() && fs.readdirSync(path.join(dir, e.name)).some(f => f.endsWith('.md'))),
         );
       if (hasChildren) return null;

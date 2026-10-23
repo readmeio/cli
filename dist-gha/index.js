@@ -52229,7 +52229,7 @@ function content_validate({ filePath, content, relativePath }) {
       const hasChildren = external_node_fs_namespaceObject.readdirSync(dir, { withFileTypes: true })
         .some(
           e =>
-            (e.isFile() && e.name.endsWith('.md') && e.name !== 'index.md') ||
+            (!e.isDirectory() && e.name.endsWith('.md') && e.name !== 'index.md') ||
             (e.isDirectory() && external_node_fs_namespaceObject.readdirSync(external_node_path_namespaceObject.join(dir, e.name)).some(f => f.endsWith('.md'))),
         );
       if (hasChildren) return null;

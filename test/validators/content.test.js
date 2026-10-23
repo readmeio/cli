@@ -23,6 +23,19 @@ test('empty index.md with a sibling page is not flagged', () => {
   }
 });
 
+test('empty index.md with a symlinked sibling page is not flagged', () => {
+  const root = makeRepo({
+    'docs/guides/index.md': '---\ntitle: Guides\n---\n',
+    'shared/page.md': '---\ntitle: Page\n---\nHello',
+  });
+  try {
+    fs.symlinkSync(path.join(root, 'shared/page.md'), path.join(root, 'docs/guides/page.md'));
+    expect(validateFile(root, 'docs/guides/index.md')).toBeNull();
+  } finally {
+    rmRepo(root);
+  }
+});
+
 test('empty index.md with only a nested page directory is not flagged', () => {
   const root = makeRepo({
     'docs/guides/index.md': '---\ntitle: Guides\n---\n',
