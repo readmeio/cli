@@ -48,6 +48,36 @@ test('empty index.md with only a nested page directory is not flagged', () => {
   }
 });
 
+test('empty index.md with .MD or .mdx children is not flagged', () => {
+  const root = makeRepo({
+    'docs/upper/index.md': '---\ntitle: Upper\n---\n',
+    'docs/upper/page.MD': '---\ntitle: Page\n---\nHello',
+    'docs/mdx/index.md': '---\ntitle: MDX\n---\n',
+    'docs/mdx/page.mdx': '---\ntitle: Page\n---\nHello',
+    'docs/nested/index.md': '---\ntitle: Nested\n---\n',
+    'docs/nested/child/index.MDX': '---\ntitle: Child\n---\nHello',
+  });
+  try {
+    expect(validateFile(root, 'docs/upper/index.md')).toBeNull();
+    expect(validateFile(root, 'docs/mdx/index.md')).toBeNull();
+    expect(validateFile(root, 'docs/nested/index.md')).toBeNull();
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('empty index.md with only an index.MD/index.mdx sibling is flagged', () => {
+  const root = makeRepo({
+    'docs/guides/index.md': '---\ntitle: Guides\n---\n',
+    'docs/guides/index.mdx': '---\ntitle: Guides\n---\nHello',
+  });
+  try {
+    expect(validateFile(root, 'docs/guides/index.md')?.message).toBe('Empty page: non-hidden page has no content');
+  } finally {
+    rmRepo(root);
+  }
+});
+
 test('empty index.md with no children is flagged', () => {
   const root = makeRepo({
     'docs/guides/index.md': '---\ntitle: Guides\n---\n',

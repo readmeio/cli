@@ -28,16 +28,17 @@ export function validate({ filePath, content, relativePath }) {
     return null;
   }
   if (trimmed.length === 0) {
-    // index.md files that act as parent pages (have child .md siblings or nested page
-    // directories) can be empty.
+    // index.md files that act as parent pages (have child page siblings or nested page
+    // directories) can be empty. The backend accepts .md and .mdx in any case.
     if (path.basename(filePath) === 'index.md') {
       const dir = path.dirname(filePath);
+      const isPage = f => /\.mdx?$/i.test(f);
       const hasChildren = fs
         .readdirSync(dir, { withFileTypes: true })
         .some(
           e =>
-            (!e.isDirectory() && e.name.endsWith('.md') && e.name !== 'index.md') ||
-            (e.isDirectory() && fs.readdirSync(path.join(dir, e.name)).some(f => f.endsWith('.md'))),
+            (!e.isDirectory() && isPage(e.name) && !/^index\.mdx?$/i.test(e.name)) ||
+            (e.isDirectory() && fs.readdirSync(path.join(dir, e.name)).some(isPage)),
         );
       if (hasChildren) return null;
     }
