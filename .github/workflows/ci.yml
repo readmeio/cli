@@ -22,7 +22,10 @@ jobs:
       fail-fast: false
       matrix:
         node-version:
-          - 22
+          # see the following:
+          # https://github.com/actions/setup-node?tab=readme-ov-file#supported-version-syntax
+          # https://github.com/nvm-sh/nvm/issues/1998#issuecomment-594958684
+          - lts/-1
           - lts/*
           - latest
 
@@ -33,7 +36,7 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
-          cache: npm
+          cache: 'npm'
 
       - name: Install dependencies
         run: npm ci
@@ -45,15 +48,20 @@ jobs:
     name: GitHub Action bundle is up to date
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version:
+          - lts/-1
 
     steps:
       - uses: actions/checkout@v7
 
-      - name: Use Node.js 22
+      - name: Use Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v7
         with:
-          node-version: 22
-          cache: npm
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
 
       - name: Install dependencies
         run: npm ci
