@@ -36,8 +36,10 @@
   "scripts": {
     "build:gha": "ncc build src/gha.js -o dist-gha --external @readme/markdown",
     "format": "npx oxlint --fix && npx oxfmt --write",
-    "lint": "npx oxlint && npx oxfmt --check .",
+    "lint": "npx oxlint && npx oxfmt --check . && npm run schemas:check",
     "pretest": "npm run lint",
+    "schemas:check": "./bin/git-format.js",
+    "schemas:write": "./bin/git-format.js --update && npx oxfmt --write vendor/git-format/frontmatter.schema.json",
     "start": "node bin/readme.js",
     "test": "vitest run"
   },
@@ -45,7 +47,6 @@
     "@anthropic-ai/claude-agent-sdk": "^0.3.207",
     "@readme/markdown": "^13.3.0",
     "@readme/openapi-parser": "^5.5.0",
-    "@readmeio/git-format": "git+https://github.com/readmeio/git-format.git",
     "ajv": "^8.18.0",
     "chalk": "^5.4.1",
     "cli-spinners": "^3.4.0",

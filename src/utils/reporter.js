@@ -1,6 +1,5 @@
 import { execSync } from 'node:child_process';
 import fs from 'node:fs';
-import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -18,8 +17,6 @@ import {
 } from './git.js';
 import * as styles from './styles.js';
 import { getRandomTip } from './tips.js';
-
-const require = createRequire(import.meta.url);
 
 const isRunningInClaude = !!process.env.CLAUDECODE;
 
@@ -178,7 +175,7 @@ export function createHumanReporter() {
       if (isRunningInClaude && unfixed.length > 0) {
         const cliRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
-        const gitFormatDir = path.dirname(require.resolve('@readmeio/git-format/package.json'));
+        const gitFormatDir = path.join(cliRoot, 'vendor/git-format');
         const claudeMdPath = path.join(gitFormatDir, 'CLAUDE.md');
         const toolsMdPath = path.join(cliRoot, 'vendor/TOOLS.md');
         const schemaPath = path.join(gitFormatDir, 'frontmatter.schema.json');

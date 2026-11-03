@@ -1,12 +1,9 @@
 import fs from 'node:fs';
-import { createRequire } from 'node:module';
-import path from 'node:path';
 
 import Ajv from 'ajv';
 
+import frontmatterSchema from '../../vendor/git-format/frontmatter.schema.json' with { type: 'json' };
 import { parseFrontmatter } from '../utils/markdown.js';
-
-const require = createRequire(import.meta.url);
 
 export const name = 'frontmatter';
 
@@ -77,18 +74,15 @@ const DIR_SCHEMA_INDEX = {
   custom_blocks: 4,
 };
 
-// Load the schema and compile a validator for each directory type.
-const schemaPath = require.resolve('@readmeio/git-format/frontmatter.schema.json');
-const fullSchema = JSON.parse(fs.readFileSync(schemaPath, 'utf-8'));
-
+// Compile a validator for each directory type from the vendored schema.
 const ajv = new Ajv({ allErrors: true, strict: false, logger: false, verbose: true });
 
 const validators = {};
 const knownProperties = {};
 for (const [dir, index] of Object.entries(DIR_SCHEMA_INDEX)) {
-  const subSchema = { defs: fullSchema.defs, ...fullSchema.oneOf[index] };
+  const subSchema = { defs: frontmatterSchema.defs, ...frontmatterSchema.oneOf[index] };
   validators[dir] = ajv.compile(subSchema);
-  knownProperties[dir] = collectPropertyNames(subSchema, fullSchema.defs);
+  knownProperties[dir] = collectPropertyNames(subSchema, frontmatterSchema.defs);
 }
 
 export function validate({ content, filePath, relativePath, fix }) {
