@@ -1,9 +1,10 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
-import { test, expect } from 'vitest';
+import { test, expect, vi } from 'vitest';
 
-import { applyOASOrder, findOasFiles, syncOas } from '../../src/commands/oas-sync.js';
+import { applyOASOrder, findOasFiles, syncOas, run } from '../../src/commands/oas-sync.js';
 import { parseFrontmatter, toFrontmatter } from '../../src/utils/markdown.js';
 import { makeRepo, rmRepo } from '../helpers.js';
 
@@ -1513,6 +1514,149 @@ test('applyOASOrder refills only API slots and inserts new slugs after the last 
   expect(applyOASOrder([], ['b', 'a'])).toStrictEqual(['b', 'a']);
   expect(applyOASOrder(['x', 'y'], ['a'])).toStrictEqual(['x', 'y', 'a']);
   expect(applyOASOrder(['a', 'x', 'b', 'y'], ['b', 'c', 'a'])).toStrictEqual(['b', 'x', 'c', 'a', 'y']);
+});
+
+test('a symlink at reference/<title> cannot redirect writes or deletes outside the repo', () => {
+  const root = makeRepo({
+    'reference/pets.json': SPEC,
+    // In-repo page for an operation the spec no longer has. Sync must refuse
+    // the symlink before it deletes anything, not halfway through the run.
+    'reference/Other/stale.md': '---\napi:\n  file: pets.json\n  operationId: removed\n---\n',
+  });
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'rdme-cli-outside-'));
+  fs.mkdirSync(path.join(outside, 'pets'));
+  fs.writeFileSync(path.join(outside, 'pets/stale.md'), '---\napi:\n  file: pets.json\n  operationId: removed\n---\n');
+  fs.writeFileSync(path.join(outside, 'victim.md'), 'keep me');
+  fs.symlinkSync(outside, path.join(root, 'reference/Pets'));
+  try {
+    expect(() => syncOas(root)).toThrow(/symbolic links inside the reference directory are not followed/);
+
+    expect(fs.readdirSync(outside).sort()).toStrictEqual(['pets', 'victim.md']);
+    expect(fs.readdirSync(path.join(outside, 'pets'))).toStrictEqual(['stale.md']);
+    expect(fs.readFileSync(path.join(outside, 'victim.md'), 'utf-8')).toBe('keep me');
+    expect(fs.existsSync(path.join(root, 'reference/Other/stale.md'))).toBe(true);
+    expect(fs.readdirSync(path.join(root, 'reference')).sort()).toStrictEqual(['Other', 'Pets', 'pets.json']);
+    expect(fs.lstatSync(path.join(root, 'reference/Pets')).isSymbolicLink()).toBe(true);
+  } finally {
+    rmRepo(root);
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test('a tag-folder symlink under a real API directory is not followed', () => {
+  const root = makeRepo({ 'reference/pets.json': SPEC });
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'rdme-cli-outside-'));
+  fs.writeFileSync(path.join(outside, 'victim.md'), 'keep me');
+  fs.mkdirSync(path.join(root, 'reference/Pets'));
+  // Untagged /pets groups under the folder "pets".
+  fs.symlinkSync(outside, path.join(root, 'reference/Pets/pets'));
+  try {
+    expect(() => syncOas(root)).toThrow(/symbolic links/);
+    expect(fs.readdirSync(outside)).toStrictEqual(['victim.md']);
+    expect(fs.readFileSync(path.join(outside, 'victim.md'), 'utf-8')).toBe('keep me');
+  } finally {
+    rmRepo(root);
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test('a symlink whose target is also inside reference/ is not followed', () => {
+  const root = makeRepo({
+    'reference/pets.json': SPEC,
+    'reference/Real/pets/listpets.md': '---\napi:\n  file: pets.json\n  operationId: listPets\n---\n',
+  });
+  fs.symlinkSync(path.join(root, 'reference/Real'), path.join(root, 'reference/Pets'));
+  try {
+    expect(() => syncOas(root)).toThrow(/symbolic links/);
+    expect(fs.readdirSync(path.join(root, 'reference/Real/pets'))).toStrictEqual(['listpets.md']);
+    expect(fs.readFileSync(path.join(root, 'reference/Real/pets/listpets.md'), 'utf-8')).not.toMatch(/hidden/);
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('a symlinked page is not overwritten or unlinked', () => {
+  const spec = JSON.stringify({
+    openapi: '3.0.0',
+    info: { title: 'Pets' },
+    paths: {
+      '/pets': { get: { operationId: 'listPets' } },
+    },
+  });
+  const root = makeRepo({ 'reference/pets.json': spec });
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'rdme-cli-outside-'));
+  const victim = path.join(outside, 'victim.md');
+  fs.writeFileSync(victim, 'keep me');
+  const pageDir = path.join(root, 'reference/Pets/pets');
+  fs.mkdirSync(pageDir, { recursive: true });
+  fs.symlinkSync(victim, path.join(pageDir, 'listpets.md'));
+  try {
+    expect(() => syncOas(root)).toThrow(/symbolic links/);
+    expect(fs.readFileSync(victim, 'utf-8')).toBe('keep me');
+    expect(fs.lstatSync(path.join(pageDir, 'listpets.md')).isSymbolicLink()).toBe(true);
+  } finally {
+    rmRepo(root);
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test('a spec that is itself a symlink is refused instead of reporting no specs', async () => {
+  const root = makeRepo({
+    'reference/Other/stale.md': '---\napi:\n  file: pets.json\n  operationId: removed\n---\n',
+  });
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'rdme-cli-outside-'));
+  const specPath = path.join(outside, 'pets.json');
+  fs.writeFileSync(specPath, SPEC);
+  fs.symlinkSync(specPath, path.join(root, 'reference/pets.json'));
+
+  const exit = vi.spyOn(process, 'exit').mockImplementation(code => {
+    throw new Error(`exit:${code}`);
+  });
+  const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+  try {
+    expect(() => syncOas(root)).toThrow(/symbolic links inside the reference directory are not followed/);
+    expect(fs.readFileSync(specPath, 'utf-8')).toBe(SPEC);
+    expect(fs.existsSync(path.join(root, 'reference/Other/stale.md'))).toBe(true);
+    expect(fs.existsSync(path.join(root, 'reference/Pets'))).toBe(false);
+
+    await expect(run({}, null, { gitRoot: root })).rejects.toThrow('exit:1');
+    const printed = error.mock.calls.flat().join('\n');
+    expect(printed).toMatch(/symbolic links inside the reference directory are not followed/);
+    expect(printed).toMatch(/pets\.json/);
+    expect(log.mock.calls.flat().join('\n')).not.toMatch(/No OpenAPI spec files found/);
+  } finally {
+    exit.mockRestore();
+    error.mockRestore();
+    log.mockRestore();
+    rmRepo(root);
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test('oas:sync reports the symlink and exits non-zero', async () => {
+  const root = makeRepo({ 'reference/pets.json': SPEC });
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'rdme-cli-outside-'));
+  fs.writeFileSync(path.join(outside, 'victim.md'), 'keep me');
+  fs.symlinkSync(outside, path.join(root, 'reference/Pets'));
+
+  const exit = vi.spyOn(process, 'exit').mockImplementation(code => {
+    throw new Error(`exit:${code}`);
+  });
+  const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    await expect(run({}, null, { gitRoot: root })).rejects.toThrow('exit:1');
+    const printed = error.mock.calls.flat().join('\n');
+    expect(printed).toMatch(/symbolic links inside the reference directory are not followed/);
+    expect(printed).toMatch(/Pets/);
+    expect(fs.readdirSync(outside)).toStrictEqual(['victim.md']);
+    expect(fs.readFileSync(path.join(outside, 'victim.md'), 'utf-8')).toBe('keep me');
+  } finally {
+    exit.mockRestore();
+    error.mockRestore();
+    rmRepo(root);
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
 });
 
 test('applyOASOrder never emits undefined when the current order repeats a slug', () => {
