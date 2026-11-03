@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 import { expect, test } from 'vitest';
@@ -154,5 +155,34 @@ test('lint --fix leaves the reference alone when every finding is unfixable', ()
     expect(warning && !warning.message.endsWith('(fixed)')).toBe(true);
   } finally {
     rmRepo(fixableRoot);
+  }
+});
+
+test('lint --fix reports a symlink refusal instead of marking the sync fixed', () => {
+  const root = makeRepo({ 'reference/pets.json': SPEC });
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'rdme-cli-outside-'));
+  fs.writeFileSync(path.join(outside, 'victim.md'), 'keep me');
+  fs.symlinkSync(outside, path.join(root, 'reference/Pets'));
+  try {
+    const res = validateAll(collectFiles(root), root, { fix: true });
+
+    const missing = res.find(r => r.message.includes('Missing page'));
+    expect(missing && missing.fixable).toBe(true);
+    expect(missing.message.endsWith('(fixed)')).toBe(false);
+
+    const refusal = res.find(r => r.message.includes('symbolic links'));
+    expect(refusal).toMatchObject({
+      file: 'reference/Pets',
+      rule: 'oas-reference',
+      severity: 'error',
+      fixable: false,
+    });
+
+    expect(fs.readdirSync(outside)).toStrictEqual(['victim.md']);
+    expect(fs.readFileSync(path.join(outside, 'victim.md'), 'utf-8')).toBe('keep me');
+    expect(fs.existsSync(path.join(root, 'reference/Pets/pets/listpets.md'))).toBe(false);
+  } finally {
+    rmRepo(root);
+    fs.rmSync(outside, { recursive: true, force: true });
   }
 });

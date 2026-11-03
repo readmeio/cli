@@ -6,6 +6,7 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import { InvalidArgumentError, Option } from 'commander';
 
 import { prettifyPagePrompt, prettifyPageOutputSchema } from '../prompts/index.js';
+import { makeContainment, PathEscapeError } from '../utils/containment.js';
 import { printHeader, isAgenticCli } from '../utils/eyes.js';
 import { collectFiles } from '../utils/lint.js';
 import { parseFrontmatter, toFrontmatter, frontmatterWriteError } from '../utils/markdown.js';
@@ -205,6 +206,10 @@ export async function run(file, options, _cmd, ctx) {
     console.log();
   }
 
+  // Lexical `path.relative` treats a symlink inside the repo as inside it,
+  // and the later write follows the link. Same check `oas:sync` uses.
+  const assertContained = makeContainment(gitRoot, { label: 'repository' });
+
   let files;
   if (file) {
     const absFile = path.resolve(file);
@@ -212,12 +217,16 @@ export async function run(file, options, _cmd, ctx) {
       styles.error(`File not found: ${styles.bold(file)}`);
       process.exit(1);
     }
-    const relFile = path.relative(gitRoot, absFile);
-    if (relFile.startsWith('..') || path.isAbsolute(relFile)) {
-      styles.error(`File must be inside the repo: ${styles.bold(file)}`);
+
+    try {
+      assertContained(absFile);
+    } catch (err) {
+      if (!(err instanceof PathEscapeError)) throw err;
+      styles.error(err.message);
       process.exit(1);
     }
-    files = [relFile];
+
+    files = [path.relative(gitRoot, absFile)];
   } else {
     files = collectFiles(gitRoot);
   }
@@ -290,6 +299,7 @@ export async function run(file, options, _cmd, ctx) {
 
     try {
       const filePath = path.join(gitRoot, relativePath);
+      assertContained(filePath);
       const original = fs.readFileSync(filePath, 'utf-8');
       const parsed = parseFrontmatter(original);
       const parseError = frontmatterWriteError(parsed);

@@ -18,6 +18,7 @@ import {
   organizeFromScratchPrompt,
   organizeFromScratchOutputSchema,
 } from '../prompts/index.js';
+import { makeContainment, PathEscapeError } from '../utils/containment.js';
 import { analyzeLlmsTxt } from '../utils/llms.js';
 import { parseFrontmatter, toFrontmatter } from '../utils/markdown.js';
 import * as styles from '../utils/styles.js';
@@ -1322,6 +1323,11 @@ export async function runAgent({ userPrompt, systemPrompt, cwd, model }) {
 
 function makeStagingGuard(stagingDir) {
   const absStaging = path.resolve(stagingDir);
+
+  // `path.relative` is lexical, so a symlink planted in the staging dir
+  // (or a path whose existing ancestor is one) would look inside it while
+  // the Write tool follows the link. Same containment check as oas:sync.
+  const assertContained = makeContainment(stagingDir, { label: 'staging directory' });
   const WRITE_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit', 'MultiEdit']);
 
   return async (toolName, input) => {
@@ -1330,10 +1336,13 @@ function makeStagingGuard(stagingDir) {
     if (typeof fp !== 'string' || !fp) {
       return { behavior: 'deny', message: `${toolName}: missing file_path` };
     }
+
     const abs = path.isAbsolute(fp) ? path.resolve(fp) : path.resolve(absStaging, fp);
-    const rel = path.relative(absStaging, abs);
-    const inside = rel && !rel.startsWith('..') && !path.isAbsolute(rel);
-    if (!inside) {
+
+    try {
+      assertContained(abs);
+    } catch (err) {
+      if (!(err instanceof PathEscapeError)) throw err;
       styles.warning(`Blocked ${toolName} outside staging: ${fp}`);
       return {
         behavior: 'deny',

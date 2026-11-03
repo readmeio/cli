@@ -9,6 +9,7 @@ import {
   operationKey,
   findIgnoredInternalExtensions,
 } from '../commands/oas-sync.js';
+import { PathEscapeError } from '../utils/containment.js';
 import { parseFrontmatter } from '../utils/markdown.js';
 
 export const name = 'oas-reference';
@@ -103,11 +104,24 @@ export function validateAll(files, gitRoot, { fix } = {}) {
   // reference files, which is far too much to do on the strength of an
   // unfixable warning (`x-readme.internal`, a page pointing at a missing spec).
   if (fix && results.some(r => r.fixable)) {
-    const syncResults = syncOas(gitRoot);
-    if (syncResults) {
-      for (const r of results) {
-        if (r.fixable) r.message += ' (fixed)';
+    try {
+      const syncResults = syncOas(gitRoot);
+      if (syncResults) {
+        for (const r of results) {
+          if (r.fixable) r.message += ' (fixed)';
+        }
       }
+    } catch (err) {
+      if (!(err instanceof PathEscapeError)) throw err;
+
+      // Don't mark the other fixes applied — sync stopped before it could.
+      results.push({
+        file: path.relative(gitRoot, err.target) || 'reference',
+        rule: name,
+        severity: 'error',
+        message: err.message,
+        fixable: false,
+      });
     }
   }
 
