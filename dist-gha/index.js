@@ -53116,35 +53116,35 @@ function writeOrderYaml(filePath, slugs, assertContained) {
   external_node_fs_namespaceObject.writeFileSync(filePath, content);
 }
 
+// `assertContained` allows a path that does not exist yet, so lstat first to
+// tell an absent order file from one that must be refused before it is read.
+function readOrderIfExists(orderPath, assertContained) {
+  try {
+    external_node_fs_namespaceObject.lstatSync(orderPath);
+  } catch (err) {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  }
+  assertContained(orderPath);
+  return external_node_fs_namespaceObject.readFileSync(orderPath, 'utf-8');
+}
+
 function addToOrder(orderPath, slug, assertContained) {
-  if (external_node_fs_namespaceObject.existsSync(orderPath)) {
-    const content = external_node_fs_namespaceObject.readFileSync(orderPath, 'utf-8');
-    const slugs = parseOrderYaml(content);
-    if (!slugs.includes(slug)) {
-      slugs.push(slug);
-      writeOrderYaml(orderPath, slugs, assertContained);
-    }
-  } else {
+  const content = readOrderIfExists(orderPath, assertContained);
+  if (content === null) {
     writeOrderYaml(orderPath, [slug], assertContained);
+    return;
+  }
+  const slugs = parseOrderYaml(content);
+  if (!slugs.includes(slug)) {
+    slugs.push(slug);
+    writeOrderYaml(orderPath, slugs, assertContained);
   }
 }
 
 function removeFromOrder(orderPath, slug, assertContained) {
-  // `existsSync` follows links. A dangling link is "missing" and left in
-  // place; a link to a real file must be refused before the rewrite, which
-  // would otherwise truncate the target.
-  let st;
-  try {
-    st = external_node_fs_namespaceObject.lstatSync(orderPath);
-  } catch (err) {
-    if (err.code === 'ENOENT') return;
-    throw err;
-  }
-  if (st.isSymbolicLink()) {
-    throw new PathEscapeError(orderPath, 'symbolic links inside the reference directory are not followed');
-  }
-  assertContained(orderPath);
-  const content = external_node_fs_namespaceObject.readFileSync(orderPath, 'utf-8');
+  const content = readOrderIfExists(orderPath, assertContained);
+  if (content === null) return;
   const slugs = parseOrderYaml(content).filter(s => s !== slug);
   if (slugs.length > 0) {
     writeOrderYaml(orderPath, slugs, assertContained);
@@ -53273,22 +53273,16 @@ function operationGroup(op) {
  */
 function existingFoldersBySlug(apiDir) {
   const bySlug = new Map();
-  let lst;
   try {
-    lst = external_node_fs_namespaceObject.lstatSync(apiDir);
+    // Caller has already refused a symlink at apiDir. lstat only distinguishes
+    // "not created yet" from a real directory `readdir` can list.
+    external_node_fs_namespaceObject.lstatSync(apiDir);
   } catch (err) {
     if (err.code === 'ENOENT') return bySlug; // apiDir doesn't exist yet — nothing to reuse.
     throw err;
   }
 
-  // `readdir` follows a directory symlink. Refuse before listing the target.
-  if (lst.isSymbolicLink()) {
-    throw new PathEscapeError(apiDir, 'symbolic links inside the reference directory are not followed');
-  }
-
-  const entries = external_node_fs_namespaceObject.readdirSync(apiDir, { withFileTypes: true });
-  for (const entry of entries) {
-    if (entry.isSymbolicLink()) continue;
+  for (const entry of external_node_fs_namespaceObject.readdirSync(apiDir, { withFileTypes: true })) {
     if (entry.isDirectory()) bySlug.set(slugifyFolder(entry.name), entry.name);
   }
   return bySlug;
@@ -53460,24 +53454,16 @@ function isGeneratedTagIndex(indexPath, specDescriptions) {
  */
 function cleanupTagFolder(dir, { refDir, specDescriptions, takenSlugs, changes, assertContained }) {
   assertContained(dir);
-  let lst;
   try {
-    lst = external_node_fs_namespaceObject.lstatSync(dir);
-  } catch {
-    return;
-  }
-
-  if (lst.isSymbolicLink()) {
-    throw new PathEscapeError(dir, 'symbolic links inside the reference directory are not followed');
+    external_node_fs_namespaceObject.lstatSync(dir);
+  } catch (err) {
+    if (err.code === 'ENOENT') return;
+    throw err;
   }
 
   const entries = external_node_fs_namespaceObject.readdirSync(dir, { withFileTypes: true });
-  const link = entries.find(e => e.isSymbolicLink());
-  if (link) {
-    throw new PathEscapeError(
-      external_node_path_namespaceObject.join(dir, link.name),
-      'symbolic links inside the reference directory are not followed',
-    );
+  for (const entry of entries) {
+    assertContained(external_node_path_namespaceObject.join(dir, entry.name));
   }
 
   const names = entries.map(e => e.name);

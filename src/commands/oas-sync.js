@@ -283,35 +283,35 @@ function writeOrderYaml(filePath, slugs, assertContained) {
   fs.writeFileSync(filePath, content);
 }
 
+// `assertContained` allows a path that does not exist yet, so lstat first to
+// tell an absent order file from one that must be refused before it is read.
+function readOrderIfExists(orderPath, assertContained) {
+  try {
+    fs.lstatSync(orderPath);
+  } catch (err) {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  }
+  assertContained(orderPath);
+  return fs.readFileSync(orderPath, 'utf-8');
+}
+
 function addToOrder(orderPath, slug, assertContained) {
-  if (fs.existsSync(orderPath)) {
-    const content = fs.readFileSync(orderPath, 'utf-8');
-    const slugs = parseOrderYaml(content);
-    if (!slugs.includes(slug)) {
-      slugs.push(slug);
-      writeOrderYaml(orderPath, slugs, assertContained);
-    }
-  } else {
+  const content = readOrderIfExists(orderPath, assertContained);
+  if (content === null) {
     writeOrderYaml(orderPath, [slug], assertContained);
+    return;
+  }
+  const slugs = parseOrderYaml(content);
+  if (!slugs.includes(slug)) {
+    slugs.push(slug);
+    writeOrderYaml(orderPath, slugs, assertContained);
   }
 }
 
 function removeFromOrder(orderPath, slug, assertContained) {
-  // `existsSync` follows links. A dangling link is "missing" and left in
-  // place; a link to a real file must be refused before the rewrite, which
-  // would otherwise truncate the target.
-  let st;
-  try {
-    st = fs.lstatSync(orderPath);
-  } catch (err) {
-    if (err.code === 'ENOENT') return;
-    throw err;
-  }
-  if (st.isSymbolicLink()) {
-    throw new PathEscapeError(orderPath, 'symbolic links inside the reference directory are not followed');
-  }
-  assertContained(orderPath);
-  const content = fs.readFileSync(orderPath, 'utf-8');
+  const content = readOrderIfExists(orderPath, assertContained);
+  if (content === null) return;
   const slugs = parseOrderYaml(content).filter(s => s !== slug);
   if (slugs.length > 0) {
     writeOrderYaml(orderPath, slugs, assertContained);
@@ -440,22 +440,16 @@ function operationGroup(op) {
  */
 function existingFoldersBySlug(apiDir) {
   const bySlug = new Map();
-  let lst;
   try {
-    lst = fs.lstatSync(apiDir);
+    // Caller has already refused a symlink at apiDir. lstat only distinguishes
+    // "not created yet" from a real directory `readdir` can list.
+    fs.lstatSync(apiDir);
   } catch (err) {
     if (err.code === 'ENOENT') return bySlug; // apiDir doesn't exist yet — nothing to reuse.
     throw err;
   }
 
-  // `readdir` follows a directory symlink. Refuse before listing the target.
-  if (lst.isSymbolicLink()) {
-    throw new PathEscapeError(apiDir, 'symbolic links inside the reference directory are not followed');
-  }
-
-  const entries = fs.readdirSync(apiDir, { withFileTypes: true });
-  for (const entry of entries) {
-    if (entry.isSymbolicLink()) continue;
+  for (const entry of fs.readdirSync(apiDir, { withFileTypes: true })) {
     if (entry.isDirectory()) bySlug.set(slugifyFolder(entry.name), entry.name);
   }
   return bySlug;
@@ -627,24 +621,16 @@ function isGeneratedTagIndex(indexPath, specDescriptions) {
  */
 function cleanupTagFolder(dir, { refDir, specDescriptions, takenSlugs, changes, assertContained }) {
   assertContained(dir);
-  let lst;
   try {
-    lst = fs.lstatSync(dir);
-  } catch {
-    return;
-  }
-
-  if (lst.isSymbolicLink()) {
-    throw new PathEscapeError(dir, 'symbolic links inside the reference directory are not followed');
+    fs.lstatSync(dir);
+  } catch (err) {
+    if (err.code === 'ENOENT') return;
+    throw err;
   }
 
   const entries = fs.readdirSync(dir, { withFileTypes: true });
-  const link = entries.find(e => e.isSymbolicLink());
-  if (link) {
-    throw new PathEscapeError(
-      path.join(dir, link.name),
-      'symbolic links inside the reference directory are not followed',
-    );
+  for (const entry of entries) {
+    assertContained(path.join(dir, entry.name));
   }
 
   const names = entries.map(e => e.name);
