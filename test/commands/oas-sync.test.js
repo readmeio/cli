@@ -1600,6 +1600,40 @@ test('a symlinked page is not overwritten or unlinked', () => {
   }
 });
 
+test('a spec that is itself a symlink is refused instead of reporting no specs', async () => {
+  const root = makeRepo({
+    'reference/Other/stale.md': '---\napi:\n  file: pets.json\n  operationId: removed\n---\n',
+  });
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'rdme-cli-outside-'));
+  const specPath = path.join(outside, 'pets.json');
+  fs.writeFileSync(specPath, SPEC);
+  fs.symlinkSync(specPath, path.join(root, 'reference/pets.json'));
+
+  const exit = vi.spyOn(process, 'exit').mockImplementation(code => {
+    throw new Error(`exit:${code}`);
+  });
+  const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+  try {
+    expect(() => syncOas(root)).toThrow(/symbolic links inside the reference directory are not followed/);
+    expect(fs.readFileSync(specPath, 'utf-8')).toBe(SPEC);
+    expect(fs.existsSync(path.join(root, 'reference/Other/stale.md'))).toBe(true);
+    expect(fs.existsSync(path.join(root, 'reference/Pets'))).toBe(false);
+
+    await expect(run({}, null, { gitRoot: root })).rejects.toThrow('exit:1');
+    const printed = error.mock.calls.flat().join('\n');
+    expect(printed).toMatch(/symbolic links inside the reference directory are not followed/);
+    expect(printed).toMatch(/pets\.json/);
+    expect(log.mock.calls.flat().join('\n')).not.toMatch(/No OpenAPI spec files found/);
+  } finally {
+    exit.mockRestore();
+    error.mockRestore();
+    log.mockRestore();
+    rmRepo(root);
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
 test('oas:sync reports the symlink and exits non-zero', async () => {
   const root = makeRepo({ 'reference/pets.json': SPEC });
   const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'rdme-cli-outside-'));

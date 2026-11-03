@@ -28,7 +28,8 @@ export function findOasFiles(refDir) {
 
   for (const entry of entries) {
     // `stat` follows links. A spec committed as a symlink would be read from
-    // outside the repo; skip it (sync refuses the link before writing).
+    // outside the repo; skip it. `syncOas` refuses the link itself, including
+    // when it is the only spec, so this skip cannot turn into a silent success.
     if (entry.isSymbolicLink() || !entry.isFile()) continue;
     if (!/\.(json|yaml|yml)$/i.test(entry.name)) continue;
     const filePath = path.join(refDir, entry.name);
@@ -1026,13 +1027,16 @@ export function syncOas(input) {
   const refDir = path.join(gitRoot, 'reference');
   if (!fs.existsSync(refDir)) return null;
 
+  // Before the no-spec return and before any write. `findOasFiles` skips
+  // symlink specs, so a reference/ whose only spec is a link would otherwise
+  // report success and leave pages unsynced. Refusing first also keeps a later
+  // real spec from being half-applied, and keeps a link the page walk would
+  // have skipped from being deleted or written through.
+  refuseSymlinks(refDir);
+
   const oasFiles = findOasFiles(refDir);
   if (oasFiles.length === 0) return null;
 
-  // Before any spec is written. A symlink anywhere under reference/ is refused
-  // up front so a later spec can't be half-applied, and so a link that the
-  // page walk would have skipped can't still be deleted or written through.
-  refuseSymlinks(refDir);
   const assertContained = makeContainment(refDir);
 
   // Reference slugs share one flat namespace across every spec, so build the set
