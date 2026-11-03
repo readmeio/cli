@@ -6,6 +6,11 @@ export default defineConfig(
     sortImports: {
       ...oxfmtConfig.sortImports,
     },
-    ignorePatterns: ['coverage/', 'dist/', 'dist-gha/'],
+    ignorePatterns: [
+      'coverage/',
+      'dist/',
+      'dist-gha/',
+      'vendor/git-format/CLAUDE.md', // This file is vendored, don't worry about it.
+    ],
   }),
 );

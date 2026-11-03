@@ -52316,10 +52316,10 @@ function duplicates_validateAll(files) {
   return results.length > 0 ? results : null;
 }
 
-;// CONCATENATED MODULE: external "node:module"
-const external_node_module_namespaceObject = __WEBPACK_EXTERNAL_createRequire(import.meta.url)("node:module");
 // EXTERNAL MODULE: ./node_modules/ajv/dist/ajv.js
 var ajv = __nccwpck_require__(2463);
+;// CONCATENATED MODULE: ./vendor/git-format/frontmatter.schema.json
+const frontmatter_schema_namespaceObject = /*#__PURE__*/JSON.parse('{"yL":[{"title":"Page","description":"This is the shape for files within the `docs/` directory.","$ref":"#/defs/filetype-page"},{"title":"Custom Page","description":"This is the shape for files within the `custom_pages/` directory.","allOf":[{"$ref":"#/defs/common-page"},{"type":"object","properties":{"fullscreen":{"type":["boolean","null"]}}}],"required":["title"],"not":{"type":"object","properties":{"deprecated":{"type":"boolean"}},"description":"Custom pages have everything that a common page has except that they can\'t be deprecated."}},{"title":"API Reference","description":"This is the shape for files within the `reference/` directory.","allOf":[{"$ref":"#/defs/filetype-page"},{"type":"object","properties":{"api":{"anyOf":[{"type":"object","properties":{"file":{"type":"string"},"operationId":{"type":"string"},"webhook":{"type":["boolean","null"]}},"required":["file","operationId"]},{"type":"null"}],"description":"Information about the API operation that this page is documenting. Setting this to `null` will detach it from the API operation and make it a standard page."},"api_config":{"anyOf":[{"type":"string","enum":["authentication","getting-started","my-requests"]},{"type":"null"}],"description":"Describes a Reference config page of a particular type."},"recipes":{"anyOf":[{"type":"array","items":{"type":"string"}},{"type":"null"}],"description":"A collection of recipes that are related to this API operation."}}}]},{"title":"Recipe","description":"This is the shape for files within the `recipes/` directory.","allOf":[{"$ref":"#/defs/core"},{"type":"object","properties":{"description":{"type":["string","null"]},"recipe":{"type":"object","properties":{"color":{"type":"string","pattern":"^#[0-9A-Fa-f]{6}$"},"icon":{"type":"string"}},"required":["color","icon"]}}}],"required":["title","recipe"]},{"title":"Custom Block","description":"This is the shape for custom blocks in the `custom_blocks/` directory.","type":"object","properties":{"name":{"type":["string","null"]}},"required":["name"]}],"$B":{"core":{"title":"Core properties that are available on all file types.","type":"object","properties":{"hidden":{"type":["boolean","null"]},"title":{"type":"string"}}},"metadata":{"title":"Properties that control file metadata.","type":"object","properties":{"description":{"type":["string","null"]},"image":{"type":["string","null"]},"keywords":{"anyOf":[{"type":"array","items":{"type":"string"}},{"type":"null"}]},"robots":{"anyOf":[{"type":"string","enum":["index","noindex"]},{"type":"null"}]},"title":{"type":["string","null"],"description":"This is the title that\'s used for SEO metadata."}}},"common-page":{"allOf":[{"$ref":"#/defs/core"},{"type":"object","properties":{"deprecated":{"type":["boolean","null"]},"excerpt":{"type":["string","null"]},"icon":{"type":["string","null"]},"table_of_contents":{"type":["boolean","null"]},"x-import":{"type":["string","null"],"description":"Set during the docs site import flow. This is a link to the external page that needs to be imported and signifies this page has not yet been imported. It is removed once the page content is imported."},"metadata":{"$ref":"#/defs/metadata"},"next":{"type":"object","properties":{"description":{"type":["string","null"]},"pages":{"anyOf":[{"type":"array","items":{"anyOf":[{"type":"object","properties":{"slug":{"type":"string"},"title":{"type":["string","null"]},"type":{"type":"string","enum":["basic","endpoint","changelog","custom_page"]}},"description":"A page within the developer site. Does not support multiguides and is generally deprecated in favor of `type: page`."},{"type":"object","properties":{"slug":{"type":"string"},"directory":{"type":"string","pattern":"^[a-z0-9][a-z0-9_-]{0,29}$","description":"The section directory of the page."},"title":{"type":["string","null"]},"type":{"type":"string","const":"page"}},"description":"A page within the developer site. Multiguides compatible."},{"type":"object","properties":{"title":{"type":["string","null"]},"type":{"type":"string","const":"link"},"url":{"type":"string"}}}]}},{"type":"null"}]}}}}}]},"filetype-page":{"allOf":[{"$ref":"#/defs/common-page"},{"type":"object","properties":{"link":{"anyOf":[{"type":"object","properties":{"new_tab":{"type":["boolean","null"]},"url":{"type":["string","null"]}}},{"type":"null"}],"description":"Information about where this page should redirect to. Setting this to `null` will make the page a standard page."}}}],"required":["title"]}}}');
 ;// CONCATENATED MODULE: ./src/validators/frontmatter.js
 
 
@@ -52327,9 +52327,6 @@ var ajv = __nccwpck_require__(2463);
 
 
 
-
-
-const frontmatter_require = (0,external_node_module_namespaceObject.createRequire)(import.meta.url);
 
 const frontmatter_name = 'frontmatter';
 
@@ -52400,18 +52397,15 @@ const DIR_SCHEMA_INDEX = {
   custom_blocks: 4,
 };
 
-// Load the schema and compile a validator for each directory type.
-const schemaPath = frontmatter_require.resolve('@readmeio/git-format/frontmatter.schema.json');
-const fullSchema = JSON.parse(external_node_fs_namespaceObject.readFileSync(schemaPath, 'utf-8'));
-
+// Compile a validator for each directory type from the vendored schema.
 const frontmatter_ajv = new ajv({ allErrors: true, strict: false, logger: false, verbose: true });
 
 const validators = {};
 const knownProperties = {};
 for (const [dir, index] of Object.entries(DIR_SCHEMA_INDEX)) {
-  const subSchema = { defs: fullSchema.defs, ...fullSchema.oneOf[index] };
+  const subSchema = { defs: frontmatter_schema_namespaceObject.$B, ...frontmatter_schema_namespaceObject.yL[index] };
   validators[dir] = frontmatter_ajv.compile(subSchema);
-  knownProperties[dir] = collectPropertyNames(subSchema, fullSchema.defs);
+  knownProperties[dir] = collectPropertyNames(subSchema, frontmatter_schema_namespaceObject.$B);
 }
 
 function frontmatter_validate({ content, filePath, relativePath, fix }) {
@@ -52690,6 +52684,8 @@ function nesting_validateAll(files) {
   return results.length > 0 ? results : null;
 }
 
+;// CONCATENATED MODULE: external "node:module"
+const external_node_module_namespaceObject = __WEBPACK_EXTERNAL_createRequire(import.meta.url)("node:module");
 // EXTERNAL MODULE: ./node_modules/chalk/source/index.js + 3 modules
 var source = __nccwpck_require__(6797);
 ;// CONCATENATED MODULE: ./src/utils/styles.js
@@ -69139,9 +69135,6 @@ function getRandomTip(context) {
 
 
 
-
-const reporter_require = (0,external_node_module_namespaceObject.createRequire)(import.meta.url);
-
 const isRunningInClaude = !!process.env.CLAUDECODE;
 
 const CATEGORY_LABELS = {
@@ -69299,7 +69292,7 @@ function createHumanReporter() {
       if (isRunningInClaude && unfixed.length > 0) {
         const cliRoot = external_node_path_namespaceObject.join(external_node_path_namespaceObject.dirname((0,external_node_url_namespaceObject.fileURLToPath)(import.meta.url)), '../..');
 
-        const gitFormatDir = external_node_path_namespaceObject.dirname(reporter_require.resolve('@readmeio/git-format/package.json'));
+        const gitFormatDir = external_node_path_namespaceObject.join(cliRoot, 'vendor/git-format');
         const claudeMdPath = external_node_path_namespaceObject.join(gitFormatDir, 'CLAUDE.md');
         const toolsMdPath = external_node_path_namespaceObject.join(cliRoot, 'vendor/TOOLS.md');
         const schemaPath = external_node_path_namespaceObject.join(gitFormatDir, 'frontmatter.schema.json');
