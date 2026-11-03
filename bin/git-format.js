@@ -6,6 +6,7 @@
 // `schemas:write` refreshes the copies.
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
+import path from 'node:path';
 
 const REPO = 'https://raw.githubusercontent.com/readmeio/git-format/main';
 
@@ -27,6 +28,13 @@ function getHash(data) {
   return createHash('sha1').update(Buffer.from(text, 'utf8')).digest('hex');
 }
 
+// `writeFile` does not create missing parents. `schemas:write` is how those
+// files get restored, so the directory has to be created first.
+async function writeVendored(filePath, contents) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, contents);
+}
+
 async function refresh() {
   const isUpdate = process.argv.includes('--update');
 
@@ -39,7 +47,7 @@ async function refresh() {
         if (file.json) {
           const rawFile = await res.json();
           if (isUpdate) {
-            await fs.writeFile(file.filePath, JSON.stringify(rawFile));
+            await writeVendored(file.filePath, JSON.stringify(rawFile));
           } else {
             const currentData = JSON.parse(await fs.readFile(file.filePath, 'utf-8'));
             if (getHash(currentData) !== getHash(rawFile)) {
@@ -51,7 +59,7 @@ async function refresh() {
 
         const rawFile = await res.text();
         if (isUpdate) {
-          await fs.writeFile(file.filePath, rawFile);
+          await writeVendored(file.filePath, rawFile);
         } else {
           const current = await fs.readFile(file.filePath, 'utf-8');
           if (getHash(current) !== getHash(rawFile)) {
