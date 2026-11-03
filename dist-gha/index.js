@@ -52678,6 +52678,95 @@ function nesting_validateAll(files) {
   return results.length > 0 ? results : null;
 }
 
+;// CONCATENATED MODULE: ./src/utils/containment.js
+
+
+
+/**
+ * A path that would leave `baseDir`, including by following a symlink. `target` is the refused
+ * path (the symlink itself when that is what was hit).
+ */
+class PathEscapeError extends Error {
+  constructor(target, reason) {
+    super(`${target}: ${reason}`);
+    this.name = 'PathEscapeError';
+    this.target = target;
+  }
+}
+
+/**
+ * Guard for "this path stays inside `baseDir`" that does not trust the lexical path.
+ *
+ * `path.relative` only compares strings. A directory symlink committed under the base (git records
+ * it as mode 120000, so a clone recreates it) still looks inside the base, and `mkdir`,
+ * `writeFile`, `rename`, `unlink`, and `rm` all follow it. Walk each segment with `lstat` so a
+ * symlink is refused even when its target is also inside the base, and `realpath` the nearest
+ * existing ancestor so a link that points out of the base cannot hide behind a not-yet-created
+ * child.
+ *
+ * Paths that do not exist yet are allowed when that ancestor is a real directory inside the base —
+ * callers are about to create them.
+ *
+ * @param {string} baseDir Existing directory that bounds every path.
+ * @param {{ label?: string }} [opts] Noun used in the error (`reference directory`).
+ * @returns {(target: string) => void}
+ */
+function makeContainment(baseDir, { label = 'reference directory' } = {}) {
+  const baseReal = external_node_fs_namespaceObject.realpathSync(baseDir);
+  const baseResolved = external_node_path_namespaceObject.resolve(baseDir);
+
+  return function assertContained(target) {
+    const resolved = external_node_path_namespaceObject.resolve(target);
+    const rel = external_node_path_namespaceObject.relative(baseResolved, resolved);
+
+    // '' is the base itself. Callers pass a child, so deleting or writing the base is not a
+    // contained operation.
+    if (rel === '' || escapes(rel)) {
+      throw new PathEscapeError(resolved, `path escapes the ${label}`);
+    }
+
+    let cursor = baseReal;
+    for (const segment of rel.split(external_node_path_namespaceObject.sep)) {
+      if (segment === '' || segment === '.' || segment === '..') {
+        throw new PathEscapeError(resolved, `path escapes the ${label}`);
+      }
+
+      cursor = external_node_path_namespaceObject.join(cursor, segment);
+
+      let st;
+      try {
+        st = external_node_fs_namespaceObject.lstatSync(cursor);
+      } catch (err) {
+        if (err.code !== 'ENOENT') throw err;
+
+        // `cursor` is the first missing segment. Its parent is either the base (relative path '')
+        // or a segment just lstat'd as a real directory. realpath it anyway so a link above the
+        // base cannot hide behind a not-yet-created child.
+        const parentRel = external_node_path_namespaceObject.relative(baseReal, external_node_fs_namespaceObject.realpathSync(external_node_path_namespaceObject.dirname(cursor)));
+        if (escapes(parentRel)) {
+          throw new PathEscapeError(resolved, `path escapes the ${label}`);
+        }
+
+        return;
+      }
+
+      if (st.isSymbolicLink()) {
+        throw new PathEscapeError(cursor, `symbolic links inside the ${label} are not followed`);
+      }
+    }
+
+    const realRel = external_node_path_namespaceObject.relative(baseReal, external_node_fs_namespaceObject.realpathSync(cursor));
+    if (realRel === '' || escapes(realRel)) {
+      throw new PathEscapeError(resolved, `path escapes the ${label}`);
+    }
+  };
+}
+
+/** True when `path.relative(base, candidate)` climbed out of `base`. '' did not. */
+function escapes(rel) {
+  return rel === '..' || rel.startsWith(`..${external_node_path_namespaceObject.sep}`) || external_node_path_namespaceObject.isAbsolute(rel);
+}
+
 ;// CONCATENATED MODULE: external "node:module"
 const external_node_module_namespaceObject = __WEBPACK_EXTERNAL_createRequire(import.meta.url)("node:module");
 // EXTERNAL MODULE: ./node_modules/chalk/source/index.js + 3 modules
@@ -52745,6 +52834,7 @@ function warning(message) {
 
 
 
+
 const command = 'oas:sync';
 const order = 2;
 const category = 'OAS Tooling';
@@ -52760,20 +52850,23 @@ const OAS_YAML_SCHEMA = CORE_SCHEMA.withTags(mergeTag);
  * Find OAS files at the root of reference/ (JSON or YAML).
  */
 function findOasFiles(refDir) {
-  const entries = external_node_fs_namespaceObject.readdirSync(refDir);
+  const entries = external_node_fs_namespaceObject.readdirSync(refDir, { withFileTypes: true });
   const oasFiles = [];
 
   for (const entry of entries) {
-    if (!/\.(json|yaml|yml)$/i.test(entry)) continue;
-    const filePath = external_node_path_namespaceObject.join(refDir, entry);
-    if (!external_node_fs_namespaceObject.statSync(filePath).isFile()) continue;
+    // `stat` follows links. A spec committed as a symlink would be read from
+    // outside the repo; skip it. `syncOas` refuses the link itself, including
+    // when it is the only spec, so this skip cannot turn into a silent success.
+    if (entry.isSymbolicLink() || !entry.isFile()) continue;
+    if (!/\.(json|yaml|yml)$/i.test(entry.name)) continue;
+    const filePath = external_node_path_namespaceObject.join(refDir, entry.name);
 
     try {
       const raw = external_node_fs_namespaceObject.readFileSync(filePath, 'utf-8');
-      const parsed = entry.endsWith('.json') ? JSON.parse(raw) : load(raw, { schema: OAS_YAML_SCHEMA });
+      const parsed = entry.name.endsWith('.json') ? JSON.parse(raw) : load(raw, { schema: OAS_YAML_SCHEMA });
 
       if (parsed && (parsed.openapi || parsed.swagger)) {
-        oasFiles.push({ filename: entry, spec: parsed });
+        oasFiles.push({ filename: entry.name, spec: parsed });
       }
     } catch {
       // Skip files that can't be parsed.
@@ -52965,12 +53058,14 @@ function collectExistingPages(refDir) {
   const pages = [];
 
   function walk(dir) {
-    for (const entry of external_node_fs_namespaceObject.readdirSync(dir)) {
-      const full = external_node_path_namespaceObject.join(dir, entry);
-      const stat = external_node_fs_namespaceObject.statSync(full);
-      if (stat.isDirectory()) {
+    // Dirent, not `stat`: `stat` follows symlinks, so a directory link
+    // committed under reference/ would be walked and its pages later unlinked.
+    for (const entry of external_node_fs_namespaceObject.readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isSymbolicLink()) continue;
+      const full = external_node_path_namespaceObject.join(dir, entry.name);
+      if (entry.isDirectory()) {
         walk(full);
-      } else if (entry.endsWith('.md')) {
+      } else if (entry.isFile() && entry.name.endsWith('.md')) {
         const content = external_node_fs_namespaceObject.readFileSync(full, 'utf-8');
         const { data } = parseFrontmatter(content);
         if (data.api && data.api.file && data.api.operationId) {
@@ -53008,31 +53103,45 @@ function parseOrderYaml(content) {
     );
 }
 
-function writeOrderYaml(filePath, slugs) {
+function writeOrderYaml(filePath, slugs, assertContained) {
+  assertContained(filePath);
   const content = `${slugs.map(s => `- ${yamlSafeSlug(s)}`).join('\n')}\n`;
   external_node_fs_namespaceObject.mkdirSync(external_node_path_namespaceObject.dirname(filePath), { recursive: true });
   external_node_fs_namespaceObject.writeFileSync(filePath, content);
 }
 
-function addToOrder(orderPath, slug) {
+function addToOrder(orderPath, slug, assertContained) {
   if (external_node_fs_namespaceObject.existsSync(orderPath)) {
     const content = external_node_fs_namespaceObject.readFileSync(orderPath, 'utf-8');
     const slugs = parseOrderYaml(content);
     if (!slugs.includes(slug)) {
       slugs.push(slug);
-      writeOrderYaml(orderPath, slugs);
+      writeOrderYaml(orderPath, slugs, assertContained);
     }
   } else {
-    writeOrderYaml(orderPath, [slug]);
+    writeOrderYaml(orderPath, [slug], assertContained);
   }
 }
 
-function removeFromOrder(orderPath, slug) {
-  if (!external_node_fs_namespaceObject.existsSync(orderPath)) return;
+function removeFromOrder(orderPath, slug, assertContained) {
+  // `existsSync` follows links. A dangling link is "missing" and left in
+  // place; a link to a real file must be refused before the rewrite, which
+  // would otherwise truncate the target.
+  let st;
+  try {
+    st = external_node_fs_namespaceObject.lstatSync(orderPath);
+  } catch (err) {
+    if (err.code === 'ENOENT') return;
+    throw err;
+  }
+  if (st.isSymbolicLink()) {
+    throw new PathEscapeError(orderPath, 'symbolic links inside the reference directory are not followed');
+  }
+  assertContained(orderPath);
   const content = external_node_fs_namespaceObject.readFileSync(orderPath, 'utf-8');
   const slugs = parseOrderYaml(content).filter(s => s !== slug);
   if (slugs.length > 0) {
-    writeOrderYaml(orderPath, slugs);
+    writeOrderYaml(orderPath, slugs, assertContained);
   } else {
     external_node_fs_namespaceObject.unlinkSync(orderPath);
   }
@@ -53048,9 +53157,33 @@ function safeSegment(value, fallback) {
   return !segment || segment === '.' || segment === '..' ? fallback : segment;
 }
 
+/**
+ * Lexical "is `target` inside `baseDir`?" for placement decisions about
+ * pages the walk already found without following links. Not a write guard —
+ * writes go through `assertContained`, which refuses symlinks. `path.relative`
+ * alone treats a symlink under reference/ as inside the repo.
+ */
 function isWithin(baseDir, target) {
   const rel = external_node_path_namespaceObject.relative(baseDir, target);
   return rel !== '' && rel !== '..' && !rel.startsWith(`..${external_node_path_namespaceObject.sep}`) && !external_node_path_namespaceObject.isAbsolute(rel);
+}
+
+/**
+ * Throw if any symlink exists under `refDir`. Run before the first mutation:
+ * a link discovered halfway through the sync would otherwise leave the
+ * in-repo half of the run applied. Does not follow links.
+ */
+function refuseSymlinks(refDir) {
+  const walk = dir => {
+    for (const entry of external_node_fs_namespaceObject.readdirSync(dir, { withFileTypes: true })) {
+      const full = external_node_path_namespaceObject.join(dir, entry.name);
+      if (entry.isSymbolicLink()) {
+        throw new PathEscapeError(full, 'symbolic links inside the reference directory are not followed');
+      }
+      if (entry.isDirectory()) walk(full);
+    }
+  };
+  walk(refDir);
 }
 
 function buildPageContent({ oasFilename, operationId, isWebhook, hidden = false }) {
@@ -53134,13 +53267,22 @@ function operationGroup(op) {
  */
 function existingFoldersBySlug(apiDir) {
   const bySlug = new Map();
-  let entries;
+  let lst;
   try {
-    entries = external_node_fs_namespaceObject.readdirSync(apiDir, { withFileTypes: true });
-  } catch {
-    return bySlug; // apiDir doesn't exist yet — nothing to reuse.
+    lst = external_node_fs_namespaceObject.lstatSync(apiDir);
+  } catch (err) {
+    if (err.code === 'ENOENT') return bySlug; // apiDir doesn't exist yet — nothing to reuse.
+    throw err;
   }
+
+  // `readdir` follows a directory symlink. Refuse before listing the target.
+  if (lst.isSymbolicLink()) {
+    throw new PathEscapeError(apiDir, 'symbolic links inside the reference directory are not followed');
+  }
+
+  const entries = external_node_fs_namespaceObject.readdirSync(apiDir, { withFileTypes: true });
   for (const entry of entries) {
+    if (entry.isSymbolicLink()) continue;
     if (entry.isDirectory()) bySlug.set(slugifyFolder(entry.name), entry.name);
   }
   return bySlug;
@@ -53164,20 +53306,16 @@ function collectReferenceSlugs(refDir) {
   const counts = new Map();
 
   function walk(dir) {
-    for (const entry of external_node_fs_namespaceObject.readdirSync(dir)) {
-      const full = external_node_path_namespaceObject.join(dir, entry);
-      let stat;
-      try {
-        stat = external_node_fs_namespaceObject.statSync(full);
-      } catch {
-        continue;
-      }
-      if (stat.isDirectory()) {
+    for (const entry of external_node_fs_namespaceObject.readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isSymbolicLink()) continue;
+
+      const full = external_node_path_namespaceObject.join(dir, entry.name);
+      if (entry.isDirectory()) {
         walk(full);
-      } else if (entry.endsWith('.md')) {
+      } else if (entry.isFile() && entry.name.endsWith('.md')) {
         // A folder's index.md contributes the folder name as a slug; any other
         // page contributes its own filename.
-        const slug = entry === 'index.md' ? external_node_path_namespaceObject.basename(dir) : external_node_path_namespaceObject.basename(entry, '.md');
+        const slug = entry.name === 'index.md' ? external_node_path_namespaceObject.basename(dir) : external_node_path_namespaceObject.basename(entry.name, '.md');
         takeSlug(counts, slug);
       }
     }
@@ -53227,7 +53365,8 @@ function reserveSlug(takenSlugs, base) {
  * a copy of the parsed frontmatter and edits it. Returns true if the file
  * changed.
  */
-function updateFrontmatter(filePath, mutate) {
+function updateFrontmatter(filePath, mutate, assertContained) {
+  assertContained(filePath);
   const content = external_node_fs_namespaceObject.readFileSync(filePath, 'utf-8');
   const parsed = parseFrontmatter(content);
   // Refuse to rewrite from empty `data` when YAML failed to parse.
@@ -53236,6 +53375,7 @@ function updateFrontmatter(filePath, mutate) {
   mutate(data);
   const next = parsed.content.trim() ? toFrontmatter(data, parsed.content) : toFrontmatter(data);
   if (next === content || JSON.stringify(data) === JSON.stringify(parsed.data)) return false;
+  assertContained(filePath);
   external_node_fs_namespaceObject.writeFileSync(filePath, next);
   return true;
 }
@@ -53312,23 +53452,40 @@ function isGeneratedTagIndex(indexPath, specDescriptions) {
  * by flattening `tag/index.md` into a sibling `tag.md` (same slug, so the
  * parent `_order.yaml` entry still applies).
  */
-function cleanupTagFolder(dir, { refDir, specDescriptions, takenSlugs, changes }) {
-  let entries;
+function cleanupTagFolder(dir, { refDir, specDescriptions, takenSlugs, changes, assertContained }) {
+  assertContained(dir);
+  let lst;
   try {
-    entries = external_node_fs_namespaceObject.readdirSync(dir);
+    lst = external_node_fs_namespaceObject.lstatSync(dir);
   } catch {
     return;
   }
-  const others = entries.filter(e => !INDEX_FILES.includes(e) && e !== '_order.yaml');
+
+  if (lst.isSymbolicLink()) {
+    throw new PathEscapeError(dir, 'symbolic links inside the reference directory are not followed');
+  }
+
+  const entries = external_node_fs_namespaceObject.readdirSync(dir, { withFileTypes: true });
+  const link = entries.find(e => e.isSymbolicLink());
+  if (link) {
+    throw new PathEscapeError(
+      external_node_path_namespaceObject.join(dir, link.name),
+      'symbolic links inside the reference directory are not followed',
+    );
+  }
+
+  const names = entries.map(e => e.name);
+  const others = names.filter(e => !INDEX_FILES.includes(e) && e !== '_order.yaml');
   if (others.length) return;
 
   const parentDir = external_node_path_namespaceObject.dirname(dir);
   const slug = external_node_path_namespaceObject.basename(dir);
-  const indexFile = entries.find(e => INDEX_FILES.includes(e));
+  const indexFile = names.find(e => INDEX_FILES.includes(e));
 
   if (!indexFile || isGeneratedTagIndex(external_node_path_namespaceObject.join(dir, indexFile), specDescriptions)) {
+    assertContained(dir);
     external_node_fs_namespaceObject.rmSync(dir, { recursive: true, force: true });
-    removeFromOrder(external_node_path_namespaceObject.join(parentDir, '_order.yaml'), slug);
+    removeFromOrder(external_node_path_namespaceObject.join(parentDir, '_order.yaml'), slug, assertContained);
     if (indexFile) {
       releaseSlug(takenSlugs, slug);
       changes.deleted.push(external_node_path_namespaceObject.relative(refDir, external_node_path_namespaceObject.join(dir, indexFile)));
@@ -53338,8 +53495,11 @@ function cleanupTagFolder(dir, { refDir, specDescriptions, takenSlugs, changes }
 
   const from = external_node_path_namespaceObject.join(dir, indexFile);
   const to = external_node_path_namespaceObject.join(parentDir, `${slug}${external_node_path_namespaceObject.extname(indexFile)}`);
+  assertContained(from);
+  assertContained(to);
   if (external_node_fs_namespaceObject.existsSync(to)) return;
   external_node_fs_namespaceObject.renameSync(from, to);
+  assertContained(dir);
   external_node_fs_namespaceObject.rmSync(dir, { recursive: true, force: true });
   changes.moved.push({ from: external_node_path_namespaceObject.relative(refDir, from), to: external_node_path_namespaceObject.relative(refDir, to) });
 }
@@ -53350,7 +53510,7 @@ function cleanupTagFolder(dir, { refDir, specDescriptions, takenSlugs, changes }
  * `takenSlugs` is the reference-wide set of slugs already in use; it is read and
  * mutated so slugs stay unique across every spec processed in one sync run.
  */
-function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
+function syncOneOas(refDir, oasFilename, spec, takenSlugs, assertContained) {
   const specOps = extractOperations(spec);
   const infoTitle = safeSegment(spec.info?.title || external_node_path_namespaceObject.basename(oasFilename, external_node_path_namespaceObject.extname(oasFilename)), 'api');
 
@@ -53361,6 +53521,10 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
   // folder for this API as an O(1) lookup, rather than walking apiDir again
   // for each distinct tag/group.
   const apiDir = external_node_path_namespaceObject.join(refDir, infoTitle);
+
+  // Before any read of the target or any delete. A title directory committed
+  // as a symlink would otherwise be readdir'd (and later written) through.
+  assertContained(apiDir);
   const foldersBySlug = existingFoldersBySlug(apiDir);
 
   const existingPages = collectExistingPages(refDir).filter(p => p.data.api.file === oasFilename);
@@ -53389,6 +53553,7 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
   // Deletes: pages referencing operations that no longer exist.
   for (const [opId, page] of pagesByOpId) {
     if (!specOps.has(opId)) {
+      assertContained(page.filePath);
       external_node_fs_namespaceObject.unlinkSync(page.filePath);
 
       const pageDir = external_node_path_namespaceObject.dirname(page.filePath);
@@ -53403,7 +53568,7 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
       const isIndexPage = external_node_path_namespaceObject.basename(page.filePath) === 'index.md';
       const pageSlug = external_node_path_namespaceObject.basename(page.filePath, '.md');
       const referenceSlug = isIndexPage ? external_node_path_namespaceObject.basename(pageDir) : pageSlug;
-      removeFromOrder(external_node_path_namespaceObject.join(pageDir, '_order.yaml'), pageSlug);
+      removeFromOrder(external_node_path_namespaceObject.join(pageDir, '_order.yaml'), pageSlug, assertContained);
       releaseSlug(takenSlugs, referenceSlug);
 
       changes.deleted.push(page.relativePath);
@@ -53465,7 +53630,7 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
     const { title, description } = groupsByFolder.get(folder);
     const actualFolder = foldersBySlug.get(folder) || folder;
     const pageDir = external_node_path_namespaceObject.join(refDir, infoTitle, actualFolder);
-    if (!isWithin(refDir, pageDir)) continue;
+    assertContained(pageDir);
 
     const indexPath = external_node_path_namespaceObject.join(pageDir, 'index.md');
     if (!populatedFolders.has(folder) && !external_node_fs_namespaceObject.existsSync(indexPath)) continue;
@@ -53473,6 +53638,7 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
 
     if (!external_node_fs_namespaceObject.existsSync(indexPath)) {
       // Never overwrite an existing index.md — it may be a hand-written category.
+      assertContained(indexPath);
       external_node_fs_namespaceObject.mkdirSync(pageDir, { recursive: true });
       external_node_fs_namespaceObject.writeFileSync(indexPath, buildTagIndexContent(title, description));
       changes.added.push(external_node_path_namespaceObject.relative(refDir, indexPath));
@@ -53485,15 +53651,19 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
       // With `apply-tag-changes`, the spec owns the category page's title and
       // excerpt too (a tag with no description clears the excerpt). Its body
       // and any other frontmatter are the user's and are kept.
-      const updated = updateFrontmatter(indexPath, data => {
-        data.title = title;
-        if (description) data.excerpt = description;
-        else delete data.excerpt;
-      });
+      const updated = updateFrontmatter(
+        indexPath,
+        data => {
+          data.title = title;
+          if (description) data.excerpt = description;
+          else delete data.excerpt;
+        },
+        assertContained,
+      );
       if (updated) changes.updated.push(external_node_path_namespaceObject.relative(refDir, indexPath));
     }
-    addToOrder(external_node_path_namespaceObject.join(refDir, infoTitle, '_order.yaml'), actualFolder);
-    addToOrder(external_node_path_namespaceObject.join(refDir, '_order.yaml'), infoTitle);
+    addToOrder(external_node_path_namespaceObject.join(refDir, infoTitle, '_order.yaml'), actualFolder, assertContained);
+    addToOrder(external_node_path_namespaceObject.join(refDir, '_order.yaml'), infoTitle, assertContained);
   }
 
   // Where each of this spec's operations ends up this run, by operationKey.
@@ -53521,6 +53691,8 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
       external_node_path_namespaceObject.dirname(filePath) !== targetDir
     ) {
       const target = external_node_path_namespaceObject.join(targetDir, external_node_path_namespaceObject.basename(filePath));
+      assertContained(filePath);
+      assertContained(target);
       if (external_node_fs_namespaceObject.existsSync(target)) {
         changes.skipped.push({ path: external_node_path_namespaceObject.relative(refDir, target), operationId: op.operationId });
       } else {
@@ -53528,8 +53700,8 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
         const slug = external_node_path_namespaceObject.basename(filePath, '.md');
         external_node_fs_namespaceObject.mkdirSync(targetDir, { recursive: true });
         external_node_fs_namespaceObject.renameSync(filePath, target);
-        removeFromOrder(external_node_path_namespaceObject.join(fromDir, '_order.yaml'), slug);
-        addToOrder(external_node_path_namespaceObject.join(targetDir, '_order.yaml'), slug);
+        removeFromOrder(external_node_path_namespaceObject.join(fromDir, '_order.yaml'), slug, assertContained);
+        addToOrder(external_node_path_namespaceObject.join(targetDir, '_order.yaml'), slug, assertContained);
         vacatedDirs.add(fromDir);
         changes.moved.push({ from: page.relativePath, to: external_node_path_namespaceObject.relative(refDir, target) });
         filePath = target;
@@ -53541,9 +53713,13 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
     // its own `hidden` — removing the extension never unhides a page.
     if (op.xInternal.present) {
       const hidden = Boolean(op.xInternal.value);
-      const updated = updateFrontmatter(filePath, data => {
-        data.hidden = hidden;
-      });
+      const updated = updateFrontmatter(
+        filePath,
+        data => {
+          data.hidden = hidden;
+        },
+        assertContained,
+      );
       if (updated) changes.updated.push(external_node_path_namespaceObject.relative(refDir, filePath));
     }
 
@@ -53564,9 +53740,12 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
     const slug = reserveSlug(takenSlugs, safeSegment(op.operationId, 'operation').toLowerCase());
     const pagePath = external_node_path_namespaceObject.join(pageDir, `${slug}.md`);
 
-    // Guard against a spec-crafted name escaping reference/, or a stale slug set
-    // vs. disk. reserveSlug already prevents slug collisions.
-    if (!isWithin(refDir, pagePath) || external_node_fs_namespaceObject.existsSync(pagePath)) {
+    // A spec-crafted name that still escapes reference/, or a symlink anywhere
+    // on the way there, fails the sync instead of being skipped quietly.
+    // reserveSlug already prevents slug collisions; an existing real file is
+    // the only skip left.
+    assertContained(pagePath);
+    if (external_node_fs_namespaceObject.existsSync(pagePath)) {
       changes.skipped.push({ path: external_node_path_namespaceObject.relative(refDir, pagePath), operationId: op.operationId });
       continue;
     }
@@ -53580,7 +53759,7 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
     });
     external_node_fs_namespaceObject.writeFileSync(pagePath, content);
 
-    addToOrder(external_node_path_namespaceObject.join(pageDir, '_order.yaml'), slug);
+    addToOrder(external_node_path_namespaceObject.join(pageDir, '_order.yaml'), slug, assertContained);
 
     changes.added.push(external_node_path_namespaceObject.relative(refDir, pagePath));
     opPaths.set(key, pagePath);
@@ -53603,9 +53782,13 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
     const isNew = createdIndexes.has(indexPath);
     const allHidden = children.every(x => x.present && (isNew ? Boolean(x.value) : x.value === true));
     if (!allHidden) continue;
-    const updated = updateFrontmatter(indexPath, data => {
-      data.hidden = true;
-    });
+    const updated = updateFrontmatter(
+      indexPath,
+      data => {
+        data.hidden = true;
+      },
+      assertContained,
+    );
     if (updated && !isNew) changes.updated.push(external_node_path_namespaceObject.relative(refDir, indexPath));
   }
 
@@ -53613,7 +53796,7 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
   // category folder, and never a folder an operation still lives in.
   for (const dir of vacatedDirs) {
     if (!isWithin(apiDir, dir) || childrenByDir.has(dir)) continue;
-    cleanupTagFolder(dir, { refDir, specDescriptions, takenSlugs, changes });
+    cleanupTagFolder(dir, { refDir, specDescriptions, takenSlugs, changes, assertContained });
   }
 
   // `apply-endpoint-order`: reorder each folder's operation pages to match
@@ -53637,7 +53820,7 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
       const current = external_node_fs_namespaceObject.existsSync(orderPath) ? parseOrderYaml(external_node_fs_namespaceObject.readFileSync(orderPath, 'utf-8')) : [];
       const next = applyOASOrder(current, slugs);
       if (next.join('\n') === current.join('\n')) continue;
-      writeOrderYaml(orderPath, next);
+      writeOrderYaml(orderPath, next, assertContained);
       changes.updated.push(external_node_path_namespaceObject.relative(refDir, orderPath));
     }
   }
@@ -53656,7 +53839,9 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs) {
  *
  * Pure programmatic API: returns per-file change descriptors and prints
  * nothing. Used by the CLI command, the lint --fix flow, and external
- * callers.
+ * callers. Throws `PathEscapeError` if `reference/` contains a symlink
+ * (before anything is modified) or a destination would leave it.
+ * Callers report that and exit non-zero.
  *
  * @param {string | { cwd?: string }} input  Repo root path, or `{ cwd }` object.
  * @returns {null | Array<{ filename: string, spec: object, opCount: number,
@@ -53669,8 +53854,17 @@ function syncOas(input) {
   const refDir = external_node_path_namespaceObject.join(gitRoot, 'reference');
   if (!external_node_fs_namespaceObject.existsSync(refDir)) return null;
 
+  // Before the no-spec return and before any write. `findOasFiles` skips
+  // symlink specs, so a reference/ whose only spec is a link would otherwise
+  // report success and leave pages unsynced. Refusing first also keeps a later
+  // real spec from being half-applied, and keeps a link the page walk would
+  // have skipped from being deleted or written through.
+  refuseSymlinks(refDir);
+
   const oasFiles = findOasFiles(refDir);
   if (oasFiles.length === 0) return null;
+
+  const assertContained = makeContainment(refDir);
 
   // Reference slugs share one flat namespace across every spec, so build the set
   // of in-use slugs once and let each spec read/extend it.
@@ -53679,7 +53873,7 @@ function syncOas(input) {
 
   for (const { filename, spec } of oasFiles) {
     const ops = extractOperations(spec);
-    const changes = syncOneOas(refDir, filename, spec, takenSlugs);
+    const changes = syncOneOas(refDir, filename, spec, takenSlugs, assertContained);
     allChanges.push({ filename, spec, opCount: ops.size, changes });
   }
 
@@ -53770,7 +53964,23 @@ async function run(_options, _cmd, ctx) {
     process.exit(1);
   }
 
-  const results = syncOas(gitRoot);
+  let results;
+  try {
+    results = syncOas(gitRoot);
+  } catch (err) {
+    if (!(err instanceof PathEscapeError)) throw err;
+    error(err.message);
+    writeGithubActionsOutputs({
+      'added-count': '0',
+      'deleted-count': '0',
+      'moved-count': '0',
+      'updated-count': '0',
+      'skipped-count': '0',
+      skipped: [],
+      'has-errors': 'true',
+    });
+    process.exit(1);
+  }
 
   if (!results) {
     info('No OpenAPI spec files found in reference/.');
@@ -53828,6 +54038,7 @@ async function run(_options, _cmd, ctx) {
 }
 
 ;// CONCATENATED MODULE: ./src/validators/oas-reference.js
+
 
 
 
@@ -53926,11 +54137,24 @@ function oas_reference_validateAll(files, gitRoot, { fix } = {}) {
   // reference files, which is far too much to do on the strength of an
   // unfixable warning (`x-readme.internal`, a page pointing at a missing spec).
   if (fix && results.some(r => r.fixable)) {
-    const syncResults = syncOas(gitRoot);
-    if (syncResults) {
-      for (const r of results) {
-        if (r.fixable) r.message += ' (fixed)';
+    try {
+      const syncResults = syncOas(gitRoot);
+      if (syncResults) {
+        for (const r of results) {
+          if (r.fixable) r.message += ' (fixed)';
+        }
       }
+    } catch (err) {
+      if (!(err instanceof PathEscapeError)) throw err;
+
+      // Don't mark the other fixes applied — sync stopped before it could.
+      results.push({
+        file: external_node_path_namespaceObject.relative(gitRoot, err.target) || 'reference',
+        rule: oas_reference_name,
+        severity: 'error',
+        message: err.message,
+        fixable: false,
+      });
     }
   }
 
