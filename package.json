@@ -53,7 +53,7 @@
     "commander": "^13.1.0",
     "js-yaml": "^5.5.0",
     "log-update": "^8.0.0",
-    "next": "^15.0.0",
+    "next": "^15.5.29",
     "oas-normalize": "^15.7.1",
     "ora": "^9.3.0",
     "react": "^18.3.1",
@@ -68,6 +68,24 @@
     "oxfmt": "^0.74.0",
     "oxlint": "^1.89.0",
     "vitest": "^5.0.5"
+  },
+  "overrides": {
+    "@graphql-tools/executor-graphql-ws": {
+      "ws": "8.22.1"
+    },
+    "@graphql-tools/executor-legacy-ws": {
+      "ws": "8.22.1"
+    },
+    "cosmiconfig": {
+      "js-yaml": "4.3.2"
+    },
+    "express-rate-limit": {
+      "express": "4.22.3"
+    },
+    "graphql-config": {
+      "minimatch": "4.2.6"
+    },
+    "uuid": "^11.1.1"
   },
   "engines": {
     "node": ">=22"
