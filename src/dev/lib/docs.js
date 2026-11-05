@@ -25,8 +25,8 @@ const SECTIONS = [
 // Max folder nesting per section — anything deeper doesn't render in ReadMe's
 // sidebar, so we mirror the cap here. Keep in sync with src/validators/nesting.js.
 const MAX_DEPTH = {
-  docs: 3,
-  reference: 3,
+  docs: 5,
+  reference: 5,
   recipes: 0,
   custom_pages: 0,
 };
