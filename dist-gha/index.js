@@ -53447,8 +53447,8 @@ const nesting_name = 'nesting';
 //
 // For `docs` and `reference` the category is the first folder and each page
 // level below it adds one, so this is the number of page levels the sidebar
-// renders under a category. It mirrors gitto's `MAX_SIDEBAR_NESTING_LEVELS`,
-// which this public package can't import. Keep in sync with src/dev/lib/docs.js.
+// renders under a category. It mirrors our publicly documented sidebar levels.
+// Keep in sync with src/dev/lib/docs.js.
 const MAX_DEPTH = {
   docs: 5,
   reference: 5,
