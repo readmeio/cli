@@ -53444,9 +53444,14 @@ const nesting_name = 'nesting';
 
 // Max folder nesting per top-level content dir. Anything deeper still syncs
 // but won't appear in the sidebar.
+//
+// For `docs` and `reference` the category is the first folder and each page
+// level below it adds one, so this is the number of page levels the sidebar
+// renders under a category. It mirrors our publicly documented sidebar levels.
+// Keep in sync with src/dev/lib/docs.js.
 const MAX_DEPTH = {
-  docs: 3,
-  reference: 3,
+  docs: 5,
+  reference: 5,
   recipes: 0,
   custom_pages: 0,
   custom_blocks: 0,
@@ -53463,8 +53468,8 @@ function nesting_validateAll(files) {
     if (max === undefined) continue;
 
     // Depth = number of folders between the top dir and the file.
-    // docs/a/b/c/page.md → parts.length 5 → depth 3
-    // docs/a/b/c/d/page.md → parts.length 6 → depth 4
+    // docs/a/b/c/d/e/page.md → parts.length 7 → depth 5
+    // docs/a/b/c/d/e/f/page.md → parts.length 8 → depth 6
     const depth = parts.length - 2;
     if (depth <= max) continue;
 
