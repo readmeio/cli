@@ -48734,7 +48734,7 @@ __nccwpck_require__.d(recipes_namespaceObject, {
 });
 
 ;// CONCATENATED MODULE: ./package.json
-const package_namespaceObject = {"rE":"0.3.0"};
+const package_namespaceObject = {"rE":"0.3.1"};
 // EXTERNAL MODULE: ./src/utils/eyes.js
 var utils_eyes = __nccwpck_require__(9636);
 ;// CONCATENATED MODULE: external "node:crypto"
