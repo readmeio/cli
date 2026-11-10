@@ -3240,7 +3240,7 @@ async function downloadOasSpecs(oasJsonUrls, stagingDir) {
 function makeFirecrawlFetcher(apiKey) {
   return async function fetchHtmlViaFirecrawl(url) {
     try {
-      const res = await fetch('https://api.firecrawl.dev/v1/scrape', {
+      const res = await fetch('https://api.firecrawl.dev/v2/scrape', {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${apiKey}`,
@@ -3253,6 +3253,9 @@ function makeFirecrawlFetcher(apiKey) {
           waitFor: 2000,
           // Block common ad/tracking domains so we don't burn time on them.
           blockAds: true,
+          // v2 serves cached pages up to 2 days old by default; v1 always
+          // scraped fresh. Keep the v1 behavior so a re-import sees nav changes.
+          maxAge: 0,
         }),
       });
       if (!res.ok) {
