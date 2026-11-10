@@ -34,7 +34,7 @@
     "registry": "https://registry.npmjs.org"
   },
   "scripts": {
-    "build:gha": "ncc build src/gha.js -o dist-gha --external @readme/markdown",
+    "build:gha": "node bin/build-gha.js",
     "format": "npx oxlint --fix && npx oxfmt --write",
     "lint": "npx oxlint && npx oxfmt --check . && npm run schemas:check",
     "pretest": "npm run lint",

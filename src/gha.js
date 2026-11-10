@@ -16,10 +16,23 @@
 // GITHUB_ACTIONS-detecting helper — so this file just needs to call run() and
 // let it do what it already does, exit code included.
 
+import * as dnsPromises from 'node:dns/promises';
+
+import * as undici from 'undici';
+
 import * as lint from './commands/lint.js';
 import * as oasSync from './commands/oas-sync.js';
 import * as oasValidate from './commands/oas-validate.js';
 import { writeGithubActionsOutputs } from './utils/gha-output.js';
+
+// json-schema-ref-parser loads these through a variable dynamic import so they
+// stay out of browser bundles. ncc cannot follow that and replaces it with an
+// empty context, so the first public HTTP $ref during lint or oas:validate
+// throws MODULE_NOT_FOUND. bin/build-gha.js points that context here.
+globalThis.__readmeGhaDynamicImport = {
+  'node:dns/promises': dnsPromises,
+  undici,
+};
 
 // Each command's run(options, cmd, ctx) only ever reads specific boolean
 // flags off `options` (confirmed by reading all three) and never uses `cmd`
