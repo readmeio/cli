@@ -69299,7 +69299,7 @@ var external_node_dns_promises_namespaceObject = /*#__PURE__*/__nccwpck_require_
 var undici = __nccwpck_require__(6752);
 var undici_namespaceObject = /*#__PURE__*/__nccwpck_require__.t(undici, 2);
 ;// CONCATENATED MODULE: ./package.json
-const package_namespaceObject = {"rE":"0.3.1"};
+const package_namespaceObject = {"rE":"0.4.0"};
 // EXTERNAL MODULE: ./src/utils/eyes.js
 var utils_eyes = __nccwpck_require__(9636);
 // EXTERNAL MODULE: external "node:crypto"
