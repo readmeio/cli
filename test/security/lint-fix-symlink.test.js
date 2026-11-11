@@ -103,6 +103,67 @@ test('lint --fix does not rewrite frontmatter through a symlinked page', async (
   }
 });
 
+test('lint --fix reports a dangling page symlink instead of throwing', async () => {
+  const root = makeRepo({
+    'docs/ok.md': '---\ntitle: ok\n---\n[missing](doc:nope)\n',
+    'docs/_order.yaml': '- ok\n',
+  });
+  fs.symlinkSync(path.join(root, 'does-not-exist.md'), path.join(root, 'docs/gone.md'));
+  try {
+    const { results, hasErrors } = await lint({ cwd: root, fix: true });
+    expect(hasErrors).toBe(true);
+    expect(results).toContainEqual(
+      expect.objectContaining({
+        file: 'docs/gone.md',
+        rule: 'path',
+        severity: 'error',
+        fixable: false,
+      }),
+    );
+    expect(results.some(r => r.rule === 'links' && r.file === 'docs/ok.md')).toBe(true);
+  } finally {
+    rmRepo(root);
+  }
+});
+
+test('lint reports a symlinked custom_blocks directory and does not rewrite it', async () => {
+  const body = '---\nname: Block\nfoo: 1\n---\nexport const Block = () => null\n\n<Block />\n';
+  const root = makeRepo({});
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'rdme-cli-outside-'));
+  const victim = path.join(outside, 'Block.mdx');
+  fs.writeFileSync(victim, body);
+  fs.symlinkSync(outside, path.join(root, 'custom_blocks'));
+  try {
+    const { results, hasErrors } = await lint({ cwd: root, fix: true });
+    expect(hasErrors).toBe(true);
+    const refusals = results.filter(r => r.message.includes('symbolic links'));
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0]).toMatchObject({
+      file: 'custom_blocks',
+      rule: 'path',
+      severity: 'error',
+      fixable: false,
+    });
+    expect(fs.readFileSync(victim, 'utf-8')).toBe(body);
+  } finally {
+    rmRepo(root);
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test('lint does not flag a real custom_blocks directory', async () => {
+  const root = makeRepo({
+    'custom_blocks/myBlock.md': 'A snippet.\n',
+  });
+  try {
+    const { results } = await lint({ cwd: root });
+    expect(results.some(r => r.file === 'custom_blocks' && r.rule === 'path')).toBe(false);
+    expect(results.some(r => r.file === 'custom_blocks/myBlock.md')).toBe(true);
+  } finally {
+    rmRepo(root);
+  }
+});
+
 test('lint --fix still rewrites a real page', async () => {
   const root = makeRepo({
     'docs/x.md': '---\ntitle: x\nfoo: 1\n---\nbody\n',

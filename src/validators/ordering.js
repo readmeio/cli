@@ -6,7 +6,7 @@ import { makeContainment, PathEscapeError } from '../utils/containment.js';
 export const name = 'ordering';
 
 // Top-level content directories that use _order.yaml.
-const CONTENT_DIRS = ['docs', 'reference', 'recipes', 'custom_pages'];
+export const CONTENT_DIRS = ['docs', 'reference', 'recipes', 'custom_pages'];
 
 // Of those, the dirs that must list every page/folder. reference ordering is
 // OAS-managed, so we never flag pages "missing from" a reference _order.yaml —
