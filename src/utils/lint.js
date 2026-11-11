@@ -12,6 +12,8 @@ import * as oasSchemaValidator from '../validators/oas-schema.js';
 import * as orderingValidator from '../validators/ordering.js';
 import * as recipesValidator from '../validators/recipes.js';
 
+import { makeContainment, PathEscapeError } from './containment.js';
+
 const TARGET_PATTERNS = [
   { dir: 'custom_blocks', ext: ['.mdx', '.md'] },
   { dir: 'docs', ext: '.md' },
@@ -28,7 +30,16 @@ export function collectFiles(gitRoot) {
 
   for (const { dir, ext } of TARGET_PATTERNS) {
     const dirPath = path.join(gitRoot, dir);
-    if (!fs.existsSync(dirPath)) continue;
+    // `readdir` follows a symlink at `dirPath`. A linked content root is not a
+    // directory this walk lists; `lstat` is what sees the link.
+    let st;
+    try {
+      st = fs.lstatSync(dirPath);
+    } catch (err) {
+      if (err.code === 'ENOENT') continue;
+      throw err;
+    }
+    if (!st.isDirectory()) continue;
 
     const exts = Array.isArray(ext) ? ext : [ext];
     const entries = fs.readdirSync(dirPath, { recursive: true });
@@ -76,12 +87,31 @@ function loadValidators() {
 export async function runValidators(files, gitRoot, { onFile, onBeforeCrossFile, fix, nonInteractive } = {}) {
   const validators = await loadValidators();
   const results = [];
+  // A fix rewrites the file it just read. Refuse a symlink here, once, before any
+  // validator sees the path. `pretty` does the same check at its open.
+  const assertContained = fix ? makeContainment(gitRoot, { label: 'repository' }) : null;
 
   // Per-file validators.
   for (const relativePath of files) {
     if (onFile) onFile(relativePath);
 
     const filePath = path.join(gitRoot, relativePath);
+    if (assertContained) {
+      try {
+        assertContained(filePath);
+      } catch (err) {
+        if (!(err instanceof PathEscapeError)) throw err;
+        results.push({
+          file: relativePath,
+          rule: 'path',
+          severity: 'error',
+          message: err.message,
+          fixable: false,
+        });
+        continue;
+      }
+    }
+
     const content = fs.readFileSync(filePath, 'utf-8');
 
     for (const validator of validators) {

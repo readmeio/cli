@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { makeContainment, PathEscapeError } from '../utils/containment.js';
+
 export const name = 'ordering';
 
 // Top-level content directories that use _order.yaml.
@@ -45,7 +47,7 @@ function isIndex(name) {
  * slug set (child pages + child folders) and its _order.yaml entries (or null
  * when absent), so the caller can diff the two in a single pass.
  */
-function collectDirs(gitRoot, topDir) {
+function collectDirs(gitRoot, topDir, assertContained) {
   const base = path.join(gitRoot, topDir);
   if (!fs.existsSync(base)) return [];
 
@@ -55,19 +57,39 @@ function collectDirs(gitRoot, topDir) {
     const cur = stack.pop();
     const onDisk = new Set();
     let orderEntries = null;
+    let refused = null;
 
-    for (const entry of fs.readdirSync(cur, { withFileTypes: true })) {
+    // `readdir` follows a symlink directory. Refuse it before listing, so a
+    // linked `docs/` cannot supply slugs or an order file from outside the repo.
+    let listing;
+    try {
+      assertContained(cur);
+      listing = fs.readdirSync(cur, { withFileTypes: true });
+    } catch (err) {
+      if (!(err instanceof PathEscapeError)) throw err;
+      dirs.push({ dir: cur, onDisk, orderEntries, refused: err });
+      continue;
+    }
+
+    for (const entry of listing) {
+      const entryPath = path.join(cur, entry.name);
       if (entry.isDirectory()) {
         onDisk.add(entry.name);
-        stack.push(path.join(cur, entry.name));
+        stack.push(entryPath);
       } else if (entry.name === '_order.yaml') {
-        orderEntries = parseOrderYaml(fs.readFileSync(path.join(cur, entry.name), 'utf-8'));
+        try {
+          assertContained(entryPath);
+          orderEntries = parseOrderYaml(fs.readFileSync(entryPath, 'utf-8'));
+        } catch (err) {
+          if (!(err instanceof PathEscapeError)) throw err;
+          refused = err;
+        }
       } else if (/\.(md|mdx)$/.test(entry.name) && !isIndex(entry.name)) {
         onDisk.add(entry.name.replace(/\.(md|mdx)$/, ''));
       }
     }
 
-    dirs.push({ dir: cur, onDisk, orderEntries });
+    dirs.push({ dir: cur, onDisk, orderEntries, refused });
   }
   return dirs;
 }
@@ -79,14 +101,26 @@ function collectDirs(gitRoot, topDir) {
  *   - an index entry that shouldn't be listed → "Invalid entry"
  */
 export function validateAll(files, gitRoot, { fix } = {}) {
+  const assertContained = makeContainment(gitRoot, { label: 'repository' });
   const results = [];
 
   for (const topDir of CONTENT_DIRS) {
     const requireOrder = REQUIRE_ORDER.has(topDir);
 
-    for (const { dir, onDisk, orderEntries } of collectDirs(gitRoot, topDir)) {
+    for (const { dir, onDisk, orderEntries, refused } of collectDirs(gitRoot, topDir, assertContained)) {
       const orderPath = path.join(dir, '_order.yaml');
       const relOrder = path.relative(gitRoot, orderPath);
+
+      if (refused) {
+        results.push({
+          file: path.relative(gitRoot, refused.target),
+          rule: name,
+          severity: 'error',
+          message: refused.message,
+          fixable: false,
+        });
+        continue;
+      }
 
       // No _order.yaml at all: only required dirs need one.
       if (orderEntries === null) {
@@ -148,7 +182,8 @@ export function validateAll(files, gitRoot, { fix } = {}) {
 
   if (!fix) return strip(results);
 
-  // Additions: append missing slugs to the _order.yaml.
+  // Additions: append missing slugs to the _order.yaml. A path only reaches
+  // here after collectDirs admitted it, so the write stays inside the repo.
   for (const r of results) {
     if (!r._fixAdd) continue;
     const { orderPath, missing } = r._fixAdd;

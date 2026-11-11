@@ -17,6 +17,22 @@ test('containment allows a path that does not exist yet under a real directory',
   }
 });
 
+test('a symlink refusal names the path under the base the caller passed', () => {
+  const root = makeRepo({ 'reference/Real/pets/listpets.md': 'keep' });
+  const viaLink = path.join(path.dirname(root), `rdme-cli-link-${path.basename(root)}`);
+  fs.symlinkSync(root, viaLink);
+  fs.symlinkSync(path.join(root, 'reference/Real'), path.join(root, 'reference/Pets'));
+  try {
+    const base = path.join(viaLink, 'reference');
+    const assertContained = makeContainment(base);
+    const symlink = path.join(base, 'Pets');
+    expect(() => assertContained(path.join(symlink, 'pets/listpets.md'))).toThrow(symlink);
+  } finally {
+    fs.unlinkSync(viaLink);
+    rmRepo(root);
+  }
+});
+
 test('containment refuses a symlink even when its target is inside the base', () => {
   const root = makeRepo({
     'reference/Real/pets/listpets.md': 'keep',
