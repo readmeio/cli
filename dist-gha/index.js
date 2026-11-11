@@ -69279,6 +69279,7 @@ __nccwpck_require__.d(oas_schema_namespaceObject, {
 var ordering_namespaceObject = {};
 __nccwpck_require__.r(ordering_namespaceObject);
 __nccwpck_require__.d(ordering_namespaceObject, {
+  CONTENT_DIRS: () => (ordering_CONTENT_DIRS),
   name: () => (ordering_name),
   validateAll: () => (ordering_validateAll)
 });
@@ -73906,6 +73907,8 @@ function frontmatter_validate({ content, filePath, relativePath, fix }) {
   }
 
   // Step 5: Apply fixes — rename unknown (non-typo) properties to x- prefixed.
+  // Symlinks are refused in runValidators before this runs, so the write stays
+  // inside the repository.
   if (fix && filePath) {
     const typoKeys = new Set([...consumed].map(r => r._key));
     const keysToFix = unknownKeys.filter(key => !typoKeys.has(key) && !suggestedTypos.has(key));
@@ -74064,7 +74067,9 @@ function nesting_validateAll(files) {
 
 /**
  * A path that would leave `baseDir`, including by following a symlink. `target` is the refused
- * path (the symlink itself when that is what was hit).
+ * path under `baseDir` (the symlink itself when that is what was hit). It is not that path's
+ * realpath: `baseDir` may sit behind a symlink such as `/var` → `/private/var`, and callers
+ * use `path.relative(baseDir, target)`.
  */
 class PathEscapeError extends Error {
   constructor(target, reason) {
@@ -74106,12 +74111,17 @@ function makeContainment(baseDir, { label = 'reference directory' } = {}) {
     }
 
     let cursor = baseReal;
+    const walked = [];
     for (const segment of rel.split(external_node_path_namespaceObject.sep)) {
       if (segment === '' || segment === '.' || segment === '..') {
         throw new PathEscapeError(resolved, `path escapes the ${label}`);
       }
 
+      walked.push(segment);
       cursor = external_node_path_namespaceObject.join(cursor, segment);
+      // `cursor` follows the realpath of the base. The error names the same segment under the
+      // base the caller passed, so path.relative(baseDir, target) stays inside it.
+      const lexical = external_node_path_namespaceObject.join(baseResolved, ...walked);
 
       let st;
       try {
@@ -74131,7 +74141,7 @@ function makeContainment(baseDir, { label = 'reference directory' } = {}) {
       }
 
       if (st.isSymbolicLink()) {
-        throw new PathEscapeError(cursor, `symbolic links inside the ${label} are not followed`);
+        throw new PathEscapeError(lexical, `symbolic links inside the ${label} are not followed`);
       }
     }
 
@@ -92115,6 +92125,8 @@ async function oas_schema_validateAll(files, gitRoot) {
 
 
 
+
+
 const ordering_name = 'ordering';
 
 // Top-level content directories that use _order.yaml.
@@ -92159,7 +92171,7 @@ function isIndex(name) {
  * slug set (child pages + child folders) and its _order.yaml entries (or null
  * when absent), so the caller can diff the two in a single pass.
  */
-function collectDirs(gitRoot, topDir) {
+function collectDirs(gitRoot, topDir, assertContained) {
   const base = external_node_path_namespaceObject.join(gitRoot, topDir);
   if (!external_node_fs_namespaceObject.existsSync(base)) return [];
 
@@ -92169,19 +92181,39 @@ function collectDirs(gitRoot, topDir) {
     const cur = stack.pop();
     const onDisk = new Set();
     let orderEntries = null;
+    let refused = null;
 
-    for (const entry of external_node_fs_namespaceObject.readdirSync(cur, { withFileTypes: true })) {
+    // `readdir` follows a symlink directory. Refuse it before listing, so a
+    // linked `docs/` cannot supply slugs or an order file from outside the repo.
+    let listing;
+    try {
+      assertContained(cur);
+      listing = external_node_fs_namespaceObject.readdirSync(cur, { withFileTypes: true });
+    } catch (err) {
+      if (!(err instanceof PathEscapeError)) throw err;
+      dirs.push({ dir: cur, onDisk, orderEntries, refused: err });
+      continue;
+    }
+
+    for (const entry of listing) {
+      const entryPath = external_node_path_namespaceObject.join(cur, entry.name);
       if (entry.isDirectory()) {
         onDisk.add(entry.name);
-        stack.push(external_node_path_namespaceObject.join(cur, entry.name));
+        stack.push(entryPath);
       } else if (entry.name === '_order.yaml') {
-        orderEntries = ordering_parseOrderYaml(external_node_fs_namespaceObject.readFileSync(external_node_path_namespaceObject.join(cur, entry.name), 'utf-8'));
+        try {
+          assertContained(entryPath);
+          orderEntries = ordering_parseOrderYaml(external_node_fs_namespaceObject.readFileSync(entryPath, 'utf-8'));
+        } catch (err) {
+          if (!(err instanceof PathEscapeError)) throw err;
+          refused = err;
+        }
       } else if (/\.(md|mdx)$/.test(entry.name) && !isIndex(entry.name)) {
         onDisk.add(entry.name.replace(/\.(md|mdx)$/, ''));
       }
     }
 
-    dirs.push({ dir: cur, onDisk, orderEntries });
+    dirs.push({ dir: cur, onDisk, orderEntries, refused });
   }
   return dirs;
 }
@@ -92193,14 +92225,26 @@ function collectDirs(gitRoot, topDir) {
  *   - an index entry that shouldn't be listed → "Invalid entry"
  */
 function ordering_validateAll(files, gitRoot, { fix } = {}) {
+  const assertContained = makeContainment(gitRoot, { label: 'repository' });
   const results = [];
 
   for (const topDir of ordering_CONTENT_DIRS) {
     const requireOrder = REQUIRE_ORDER.has(topDir);
 
-    for (const { dir, onDisk, orderEntries } of collectDirs(gitRoot, topDir)) {
+    for (const { dir, onDisk, orderEntries, refused } of collectDirs(gitRoot, topDir, assertContained)) {
       const orderPath = external_node_path_namespaceObject.join(dir, '_order.yaml');
       const relOrder = external_node_path_namespaceObject.relative(gitRoot, orderPath);
+
+      if (refused) {
+        results.push({
+          file: external_node_path_namespaceObject.relative(gitRoot, refused.target),
+          rule: ordering_name,
+          severity: 'error',
+          message: refused.message,
+          fixable: false,
+        });
+        continue;
+      }
 
       // No _order.yaml at all: only required dirs need one.
       if (orderEntries === null) {
@@ -92262,7 +92306,8 @@ function ordering_validateAll(files, gitRoot, { fix } = {}) {
 
   if (!fix) return strip(results);
 
-  // Additions: append missing slugs to the _order.yaml.
+  // Additions: append missing slugs to the _order.yaml. A path only reaches
+  // here after collectDirs admitted it, so the write stays inside the repo.
   for (const r of results) {
     if (!r._fixAdd) continue;
     const { orderPath, missing } = r._fixAdd;
@@ -92471,6 +92516,8 @@ function recipes_validate({ content, relativePath }) {
 
 
 
+
+
 const TARGET_PATTERNS = [
   { dir: 'custom_blocks', ext: ['.mdx', '.md'] },
   { dir: 'docs', ext: '.md' },
@@ -92487,7 +92534,17 @@ function collectFiles(gitRoot) {
 
   for (const { dir, ext } of TARGET_PATTERNS) {
     const dirPath = external_node_path_namespaceObject.join(gitRoot, dir);
-    if (!external_node_fs_namespaceObject.existsSync(dirPath)) continue;
+    // `readdir` follows a symlink at `dirPath`. A linked content root is not a
+    // directory this walk lists; `lstat` is what sees the link. ordering
+    // reports the roots it walks; runValidators reports every other one.
+    let st;
+    try {
+      st = external_node_fs_namespaceObject.lstatSync(dirPath);
+    } catch (err) {
+      if (err.code === 'ENOENT') continue;
+      throw err;
+    }
+    if (!st.isDirectory()) continue;
 
     const exts = Array.isArray(ext) ? ext : [ext];
     const entries = external_node_fs_namespaceObject.readdirSync(dirPath, { recursive: true });
@@ -92535,12 +92592,55 @@ function loadValidators() {
 async function runValidators(files, gitRoot, { onFile, onBeforeCrossFile, fix, nonInteractive } = {}) {
   const validators = await loadValidators();
   const results = [];
+  const assertContained = makeContainment(gitRoot, { label: 'repository' });
+  // ordering refuses a linked docs/reference/recipes/custom_pages root.
+  // collectFiles skips every linked root, so a root ordering does not walk
+  // (custom_blocks) would otherwise lint as a clean repository.
+  const orderedRoots = new Set(ordering_CONTENT_DIRS);
+  for (const { dir } of TARGET_PATTERNS) {
+    if (orderedRoots.has(dir)) continue;
+    try {
+      assertContained(external_node_path_namespaceObject.join(gitRoot, dir));
+    } catch (err) {
+      if (!(err instanceof PathEscapeError)) throw err;
+      results.push({
+        file: dir,
+        rule: 'path',
+        severity: 'error',
+        message: err.message,
+        fixable: false,
+      });
+    }
+  }
+
+  // A fix rewrites the file it just read. Refuse a symlink here, once, before any
+  // validator sees the path. `pretty` does the same check at its open.
+  // Cross-file checks read the list again, and links does that with no guard,
+  // so a refused path stays out of the list they receive.
+  const admitted = [];
 
   // Per-file validators.
   for (const relativePath of files) {
     if (onFile) onFile(relativePath);
 
     const filePath = external_node_path_namespaceObject.join(gitRoot, relativePath);
+    if (fix) {
+      try {
+        assertContained(filePath);
+      } catch (err) {
+        if (!(err instanceof PathEscapeError)) throw err;
+        results.push({
+          file: relativePath,
+          rule: 'path',
+          severity: 'error',
+          message: err.message,
+          fixable: false,
+        });
+        continue;
+      }
+    }
+
+    admitted.push(relativePath);
     const content = external_node_fs_namespaceObject.readFileSync(filePath, 'utf-8');
 
     for (const validator of validators) {
@@ -92560,7 +92660,7 @@ async function runValidators(files, gitRoot, { onFile, onBeforeCrossFile, fix, n
   if (onBeforeCrossFile) onBeforeCrossFile();
   for (const validator of validators) {
     if (!validator.validateAll) continue;
-    const result = await validator.validateAll(files, gitRoot, { fix, nonInteractive });
+    const result = await validator.validateAll(admitted, gitRoot, { fix, nonInteractive });
     if (result) {
       if (Array.isArray(result)) {
         results.push(...result);
