@@ -3,7 +3,9 @@ import path from 'node:path';
 
 /**
  * A path that would leave `baseDir`, including by following a symlink. `target` is the refused
- * path (the symlink itself when that is what was hit).
+ * path under `baseDir` (the symlink itself when that is what was hit). It is not that path's
+ * realpath: `baseDir` may sit behind a symlink such as `/var` → `/private/var`, and callers
+ * use `path.relative(baseDir, target)`.
  */
 export class PathEscapeError extends Error {
   constructor(target, reason) {
@@ -45,12 +47,17 @@ export function makeContainment(baseDir, { label = 'reference directory' } = {})
     }
 
     let cursor = baseReal;
+    const walked = [];
     for (const segment of rel.split(path.sep)) {
       if (segment === '' || segment === '.' || segment === '..') {
         throw new PathEscapeError(resolved, `path escapes the ${label}`);
       }
 
+      walked.push(segment);
       cursor = path.join(cursor, segment);
+      // `cursor` follows the realpath of the base. The error names the same segment under the
+      // base the caller passed, so path.relative(baseDir, target) stays inside it.
+      const lexical = path.join(baseResolved, ...walked);
 
       let st;
       try {
@@ -70,7 +77,7 @@ export function makeContainment(baseDir, { label = 'reference directory' } = {})
       }
 
       if (st.isSymbolicLink()) {
-        throw new PathEscapeError(cursor, `symbolic links inside the ${label} are not followed`);
+        throw new PathEscapeError(lexical, `symbolic links inside the ${label} are not followed`);
       }
     }
 

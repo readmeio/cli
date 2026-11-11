@@ -214,6 +214,8 @@ export function validate({ content, filePath, relativePath, fix }) {
   }
 
   // Step 5: Apply fixes — rename unknown (non-typo) properties to x- prefixed.
+  // Symlinks are refused in runValidators before this runs, so the write stays
+  // inside the repository.
   if (fix && filePath) {
     const typoKeys = new Set([...consumed].map(r => r._key));
     const keysToFix = unknownKeys.filter(key => !typoKeys.has(key) && !suggestedTypos.has(key));

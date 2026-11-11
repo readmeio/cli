@@ -12,6 +12,8 @@ import * as oasSchemaValidator from '../validators/oas-schema.js';
 import * as orderingValidator from '../validators/ordering.js';
 import * as recipesValidator from '../validators/recipes.js';
 
+import { makeContainment, PathEscapeError } from './containment.js';
+
 const TARGET_PATTERNS = [
   { dir: 'custom_blocks', ext: ['.mdx', '.md'] },
   { dir: 'docs', ext: '.md' },
@@ -28,7 +30,17 @@ export function collectFiles(gitRoot) {
 
   for (const { dir, ext } of TARGET_PATTERNS) {
     const dirPath = path.join(gitRoot, dir);
-    if (!fs.existsSync(dirPath)) continue;
+    // `readdir` follows a symlink at `dirPath`. A linked content root is not a
+    // directory this walk lists; `lstat` is what sees the link. ordering
+    // reports the roots it walks; runValidators reports every other one.
+    let st;
+    try {
+      st = fs.lstatSync(dirPath);
+    } catch (err) {
+      if (err.code === 'ENOENT') continue;
+      throw err;
+    }
+    if (!st.isDirectory()) continue;
 
     const exts = Array.isArray(ext) ? ext : [ext];
     const entries = fs.readdirSync(dirPath, { recursive: true });
@@ -76,12 +88,55 @@ function loadValidators() {
 export async function runValidators(files, gitRoot, { onFile, onBeforeCrossFile, fix, nonInteractive } = {}) {
   const validators = await loadValidators();
   const results = [];
+  const assertContained = makeContainment(gitRoot, { label: 'repository' });
+  // ordering refuses a linked docs/reference/recipes/custom_pages root.
+  // collectFiles skips every linked root, so a root ordering does not walk
+  // (custom_blocks) would otherwise lint as a clean repository.
+  const orderedRoots = new Set(orderingValidator.CONTENT_DIRS);
+  for (const { dir } of TARGET_PATTERNS) {
+    if (orderedRoots.has(dir)) continue;
+    try {
+      assertContained(path.join(gitRoot, dir));
+    } catch (err) {
+      if (!(err instanceof PathEscapeError)) throw err;
+      results.push({
+        file: dir,
+        rule: 'path',
+        severity: 'error',
+        message: err.message,
+        fixable: false,
+      });
+    }
+  }
+
+  // A fix rewrites the file it just read. Refuse a symlink here, once, before any
+  // validator sees the path. `pretty` does the same check at its open.
+  // Cross-file checks read the list again, and links does that with no guard,
+  // so a refused path stays out of the list they receive.
+  const admitted = [];
 
   // Per-file validators.
   for (const relativePath of files) {
     if (onFile) onFile(relativePath);
 
     const filePath = path.join(gitRoot, relativePath);
+    if (fix) {
+      try {
+        assertContained(filePath);
+      } catch (err) {
+        if (!(err instanceof PathEscapeError)) throw err;
+        results.push({
+          file: relativePath,
+          rule: 'path',
+          severity: 'error',
+          message: err.message,
+          fixable: false,
+        });
+        continue;
+      }
+    }
+
+    admitted.push(relativePath);
     const content = fs.readFileSync(filePath, 'utf-8');
 
     for (const validator of validators) {
@@ -101,7 +156,7 @@ export async function runValidators(files, gitRoot, { onFile, onBeforeCrossFile,
   if (onBeforeCrossFile) onBeforeCrossFile();
   for (const validator of validators) {
     if (!validator.validateAll) continue;
-    const result = await validator.validateAll(files, gitRoot, { fix, nonInteractive });
+    const result = await validator.validateAll(admitted, gitRoot, { fix, nonInteractive });
     if (result) {
       if (Array.isArray(result)) {
         results.push(...result);
