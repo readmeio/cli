@@ -3,9 +3,10 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { Command } from 'commander';
-import { afterEach, test, expect } from 'vitest';
+import { afterEach, expect, test, vi } from 'vitest';
 
 import { args, __test__ } from '../../../src/commands/import.js';
+import { PathEscapeError } from '../../../src/utils/containment.js';
 import { parseFrontmatter, toFrontmatter } from '../../../src/utils/markdown.js';
 
 const { stageOrganized, finalizeChangelogs, allocateChangelogFilenames } = __test__;
@@ -28,6 +29,38 @@ function withStaging(fn) {
 function readFm(filePath) {
   return parseFrontmatter(fs.readFileSync(filePath, 'utf8')).data;
 }
+
+function listFiles(dir) {
+  const out = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...listFiles(full));
+    else out.push(full);
+  }
+  return out;
+}
+
+/** Re-join staged paths with Windows path semantics and require they stay put. */
+// oxlint-disable vitest/no-standalone-expect -- expects belong to the helper's caller
+const expectContainedOnWin32 = vi.defineHelper(stagingDir => {
+  const winRoot = 'C:\\Users\\dev\\AppData\\Local\\Temp\\readme-import-abc123';
+  const rootReal = fs.realpathSync(stagingDir);
+  const files = listFiles(stagingDir);
+  expect(files.length).toBeGreaterThan(0);
+  for (const file of files) {
+    const rel = path.relative(rootReal, fs.realpathSync(file));
+    expect(rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)).toBe(false);
+    for (const part of rel.split(path.sep)) {
+      expect(part).not.toBe('..');
+      expect(part).not.toBe('.');
+      expect(part).not.toContain('\\');
+    }
+    const winAbs = path.win32.join(winRoot, rel.split(path.sep).join(path.win32.sep));
+    const winRel = path.win32.relative(winRoot, winAbs);
+    expect(winRel === '..' || winRel.startsWith(`..${path.win32.sep}`) || path.win32.isAbsolute(winRel)).toBe(false);
+  }
+});
+// oxlint-enable vitest/no-standalone-expect
 
 test('stageOrganized writes parent pages as index.md and leaves as slug.md', () => {
   withStaging(stagingDir => {
@@ -203,6 +236,143 @@ test('import command has no conditional changelog layout option', () => {
   args(cmd);
 
   expect(cmd.options.some(option => option.long === '--separate-changelog')).toBe(false);
+});
+
+test('stageOrganized keeps hostile category titles inside staging on win32', () => {
+  withStaging(stagingDir => {
+    const backslash = '..\\..\\..\\..\\..\\..\\..\\Users\\Public\\poc';
+    const pages = n =>
+      Array.from({ length: n }, (_, i) => ({
+        title: `Page ${i + 1}`,
+        url: `https://example.com/docs/bs-${i + 1}`,
+      }));
+
+    stageOrganized(
+      {
+        categories: [
+          { title: 'Guides', pages: [{ title: 'Pricing', url: 'https://example.com/docs/pricing' }] },
+          { title: backslash, pages: pages(5) },
+          { title: '..\\poc', pages: [{ title: 'Near', url: 'https://example.com/docs/near' }] },
+          { title: '..\\..\\poc', pages: [{ title: 'Far', url: 'https://example.com/docs/far' }] },
+          {
+            title: 'C:\\Users\\Public\\poc-drive',
+            pages: [{ title: 'Drive', url: 'https://example.com/docs/drive' }],
+          },
+          {
+            title: '\\\\server\\share\\poc',
+            pages: [{ title: 'Unc', url: 'https://example.com/docs/unc' }],
+          },
+          {
+            title: '../../../../../../../../tmp/rm19530-slash-escape',
+            pages: [
+              { title: 'Slash', url: 'https://example.com/docs/slash-1' },
+              { title: 'Slash 2', url: 'https://example.com/docs/slash-2' },
+            ],
+          },
+          {
+            title: '..\\..\\..\\outside/Nested group',
+            pages: [{ title: 'Mixed', url: 'https://example.com/docs/mixed' }],
+          },
+          { title: 'v2.', pages: [{ title: 'Release', url: 'https://example.com/docs/v2-notes' }] },
+        ],
+      },
+      stagingDir,
+    );
+
+    expect(fs.existsSync(path.join(stagingDir, 'docs', 'Guides', 'pricing.md'))).toBe(true);
+    expect(fs.existsSync(path.join(stagingDir, 'docs', 'users-public-poc', 'bs-1.md'))).toBe(true);
+    expect(fs.existsSync(path.join(stagingDir, 'docs', 'users-public-poc', 'bs-5.md'))).toBe(true);
+    expect(fs.existsSync(path.join(stagingDir, 'docs', 'users-public-poc', '_order.yaml'))).toBe(true);
+    expect(fs.existsSync(path.join(stagingDir, 'docs', 'poc', 'near.md'))).toBe(true);
+    expect(fs.existsSync(path.join(stagingDir, 'docs', 'poc-2', 'far.md'))).toBe(true);
+    expect(fs.existsSync(path.join(stagingDir, 'docs', 'c-users-public-poc-drive', 'drive.md'))).toBe(true);
+    expect(fs.existsSync(path.join(stagingDir, 'docs', 'server-share-poc', 'unc.md'))).toBe(true);
+    expect(fs.existsSync(path.join(stagingDir, 'docs', 'outside', 'outside-nested-group', 'mixed.md'))).toBe(true);
+    expect(fs.existsSync(path.join(stagingDir, 'docs', 'v2.', 'v2-notes.md'))).toBe(true);
+    expect(fs.existsSync(path.join(stagingDir, 'docs', 'page'))).toBe(true);
+
+    const names = fs.readdirSync(path.join(stagingDir, 'docs'));
+    expect(names.some(name => name.includes('\\') || name === '..' || name === '.')).toBe(false);
+    expect(fs.readFileSync(path.join(stagingDir, 'docs', '_order.yaml'), 'utf8')).toContain('users-public-poc');
+    expect(readFm(path.join(stagingDir, 'docs', 'users-public-poc', 'bs-1.md'))['x-import']).toBe(
+      'https://example.com/docs/bs-1',
+    );
+
+    expectContainedOnWin32(stagingDir);
+  });
+});
+
+test('stageOrganized rewrites a parent segment that trims to empty', () => {
+  withStaging(stagingDir => {
+    stageOrganized(
+      {
+        categories: [
+          { title: '.', pages: [{ title: 'Dot', url: 'https://example.com/docs/dot' }] },
+          { title: '..', pages: [{ title: 'Up', url: 'https://example.com/docs/up' }] },
+          // routeCategory trims the whole title, so the trailing space has to
+          // sit on an earlier segment to survive until the folder name.
+          { title: '.. /Notes', pages: [{ title: 'Note', url: 'https://example.com/docs/note' }] },
+        ],
+      },
+      stagingDir,
+    );
+
+    expect(fs.existsSync(path.join(stagingDir, 'docs', 'page', 'dot.md'))).toBe(true);
+    expect(fs.existsSync(path.join(stagingDir, 'docs', 'page-2', 'up.md'))).toBe(true);
+    expect(fs.existsSync(path.join(stagingDir, 'docs', 'page-3', 'notes', 'note.md'))).toBe(true);
+    const names = fs.readdirSync(path.join(stagingDir, 'docs'));
+    expect(names).not.toContain('.');
+    expect(names).not.toContain('..');
+    expect(names).not.toContain('.. ');
+    expectContainedOnWin32(stagingDir);
+  });
+});
+
+test('stageOrganized keeps one folder for a shared rewritten category root', () => {
+  withStaging(stagingDir => {
+    stageOrganized(
+      {
+        categories: [
+          {
+            title: 'SDK: Java/Setup/Windows',
+            pages: [{ title: 'Win', url: 'https://example.com/docs/sdk-win' }],
+          },
+          {
+            title: 'SDK: Java/Setup/Linux',
+            pages: [{ title: 'Lin', url: 'https://example.com/docs/sdk-lin' }],
+          },
+        ],
+      },
+      stagingDir,
+    );
+
+    const setup = path.join(stagingDir, 'docs', 'sdk-java', 'sdk-java-setup');
+    expect(fs.existsSync(path.join(setup, 'sdk-java-setup-windows', 'sdk-win.md'))).toBe(true);
+    expect(fs.existsSync(path.join(setup, 'sdk-java-setup-linux', 'sdk-lin.md'))).toBe(true);
+    expect(fs.existsSync(path.join(stagingDir, 'docs', 'sdk-java-2'))).toBe(false);
+    expect(readFm(path.join(setup, 'index.md')).title).toBe('Setup');
+    expect(readFm(path.join(setup, 'sdk-java-setup-windows', 'index.md')).title).toBe('Windows');
+    expect(readFm(path.join(setup, 'sdk-java-setup-linux', 'index.md')).title).toBe('Linux');
+    expectContainedOnWin32(stagingDir);
+  });
+});
+
+test('stageOrganized refuses a slug that resolves outside staging', () => {
+  withStaging(stagingDir => {
+    const probe = path.join(path.dirname(stagingDir), 'rm19530-escape-probe.md');
+    fs.rmSync(probe, { force: true });
+    const page = { title: 'Escape', url: 'https://example.com/docs/escape' };
+    try {
+      expect(() =>
+        stageOrganized({ categories: [{ title: 'Guides', pages: [page] }] }, stagingDir, {
+          slugFor: new Map([[page, '../../../rm19530-escape-probe']]),
+        }),
+      ).toThrow(PathEscapeError);
+      expect(fs.existsSync(probe)).toBe(false);
+    } finally {
+      fs.rmSync(probe, { force: true });
+    }
+  });
 });
 
 test('stageOrganized quotes YAML-unsafe slugs in _order.yaml', () => {
