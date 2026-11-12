@@ -4898,6 +4898,14 @@ function filterUrlPagesTree(pages, predicate) {
  * Writes _order.yaml per directory so sidebar order matches input order.
  */
 function stageOrganized(organized, stagingDir, opts = {}) {
+  // Category titles become directory names. Reject any resolved path that leaves
+  // this temp dir (Windows `path.join` treats `\` as a separator and collapses `..`).
+  const assertContained = makeContainment(stagingDir, { label: 'staging directory' });
+  const writeContained = (absPath, contents) => {
+    assertContained(absPath);
+    fs.mkdirSync(path.dirname(absPath), { recursive: true });
+    fs.writeFileSync(absPath, contents);
+  };
   const pickIcon = makeIconPicker();
   const byDir = new Map();
   const subDirsByTopDir = new Map();
@@ -4988,8 +4996,7 @@ function stageOrganized(organized, stagingDir, opts = {}) {
       }
 
       const absPath = path.join(stagingDir, relFilePath);
-      fs.mkdirSync(path.dirname(absPath), { recursive: true });
-      fs.writeFileSync(absPath, toFrontmatter(frontmatter));
+      writeContained(absPath, toFrontmatter(frontmatter));
       counts.fileCount++;
 
       // The sidebar entry is `slug` for both leaves (`<slug>.md`) and parents
@@ -5011,7 +5018,9 @@ function stageOrganized(organized, stagingDir, opts = {}) {
   // Namespace every NESTED category folder by its ancestor path so its basename
   // (and thus slug) is globally unique, and back it with an `index.md` so it's a
   // real titled parent. Top-level categories are matched by title, not slug, so
-  // their folders are left untouched.
+  // a safe display title is left untouched. Separators, `..`, drive prefixes, and
+  // Windows device names are rewritten first — on win32 a raw `..\` title would
+  // otherwise resolve outside this staging directory.
   const usedContainerSlugs = new Set(slugFor.values());
   const segRename = new Map(); // original path prefix -> unique folder name
   const nestedContainers = new Map(); // renamed dir (rel to stagingDir) -> display title
@@ -5030,7 +5039,13 @@ function stageOrganized(organized, stagingDir, opts = {}) {
     const out = [];
     for (let i = 0; i < segs.length; i++) {
       if (i === 0) {
-        out.push(segs[0]);
+        const safe = safeCategorySegment(segs[0]);
+        // A rewritten name can collide with a real category or a page slug.
+        // A display title that needed no rewrite keeps its spelling, including
+        // when two categories share it.
+        const name = safe === segs[0] ? safe : uniqueContainerName(safe);
+        if (name === segs[0] && !usedContainerSlugs.has(name)) usedContainerSlugs.add(name);
+        out.push(name);
         continue;
       }
       const origPrefix = segs.slice(0, i + 1).join('/');
@@ -5062,10 +5077,10 @@ function stageOrganized(organized, stagingDir, opts = {}) {
   // these are pure nav containers, so the body stays empty and format skips them.
   for (const [relDir, title] of nestedContainers) {
     const idxPath = path.join(stagingDir, relDir, 'index.md');
+    assertContained(idxPath);
     if (fs.existsSync(idxPath)) continue;
-    fs.mkdirSync(path.dirname(idxPath), { recursive: true });
     const fm = { title, icon: formatIconClass(pickIcon(path.basename(relDir), title)) };
-    fs.writeFileSync(idxPath, toFrontmatter(fm));
+    writeContained(idxPath, toFrontmatter(fm));
     counts.fileCount++;
   }
 
@@ -5073,14 +5088,14 @@ function stageOrganized(organized, stagingDir, opts = {}) {
   for (const [dir, slugs] of byDir) {
     const orderPath = path.join(stagingDir, dir, '_order.yaml');
     const body = `${slugs.map(s => `- ${yamlSafeSlug(s)}`).join('\n')}\n`;
-    fs.writeFileSync(orderPath, body);
+    writeContained(orderPath, body);
   }
 
   // Top-level _order.yaml (e.g. docs/_order.yaml) lists category subfolders.
   for (const [topDir, subs] of subDirsByTopDir) {
     const orderPath = path.join(stagingDir, topDir, '_order.yaml');
     const body = `${subs.map(s => `- ${yamlSafeSlug(s)}`).join('\n')}\n`;
-    fs.writeFileSync(orderPath, body);
+    writeContained(orderPath, body);
   }
 
   return { fileCount: counts.fileCount, dirCount: byDir.size, skippedApiRef: counts.skippedApiRef };
@@ -5405,6 +5420,33 @@ function kebabCase(s) {
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-+|-+$/g, '') || 'page'
   );
+}
+
+// Windows device names are paths, not directories (`CON`, `NUL`, `COM1`, …).
+const WINDOWS_RESERVED_SEGMENT = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i;
+
+/**
+ * Folder name for one category-title segment.
+ *
+ * Display titles stay as authored (`Guides`, `API Docs`). Anything `path.win32`
+ * would treat as a separator, a parent segment, a drive prefix, or a device
+ * name is folded to kebab-case so `path.join(stagingDir, …)` cannot leave the
+ * staging directory. Trailing dots and spaces are stripped because Windows
+ * ignores them and can turn `.. ` into `..`.
+ *
+ * @param {string} segment A single `/`-separated piece of a category title.
+ * @returns {string}
+ */
+function safeCategorySegment(segment) {
+  const seg = String(segment);
+  // Strip trailing dots and spaces first: Windows drops them, so `.. ` is `..`.
+  const stripped = seg.replace(/[.\s]+$/g, '');
+  const reserved = WINDOWS_RESERVED_SEGMENT.test(stripped);
+  const traverses = stripped === '' || /[\\/\0-\x1f:]/.test(seg);
+  if (!traverses && !reserved) return stripped;
+
+  const slug = kebabCase(seg);
+  return WINDOWS_RESERVED_SEGMENT.test(slug) ? `${slug}-section` : slug;
 }
 
 // Keyword → FontAwesome icon. Ported from v1 (most-specific entries first).
