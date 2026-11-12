@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { Command } from 'commander';
-import { afterEach, test, expect } from 'vitest';
+import { afterEach, expect, test, vi } from 'vitest';
 
 import { args, __test__ } from '../../../src/commands/import.js';
 import { PathEscapeError } from '../../../src/utils/containment.js';
@@ -41,7 +41,8 @@ function listFiles(dir) {
 }
 
 /** Re-join staged paths with Windows path semantics and require they stay put. */
-function expectContainedOnWin32(stagingDir) {
+// oxlint-disable vitest/no-standalone-expect -- expects belong to the helper's caller
+const expectContainedOnWin32 = vi.defineHelper(stagingDir => {
   const winRoot = 'C:\\Users\\dev\\AppData\\Local\\Temp\\readme-import-abc123';
   const rootReal = fs.realpathSync(stagingDir);
   const files = listFiles(stagingDir);
@@ -58,7 +59,8 @@ function expectContainedOnWin32(stagingDir) {
     const winRel = path.win32.relative(winRoot, winAbs);
     expect(winRel === '..' || winRel.startsWith(`..${path.win32.sep}`) || path.win32.isAbsolute(winRel)).toBe(false);
   }
-}
+});
+// oxlint-enable vitest/no-standalone-expect
 
 test('stageOrganized writes parent pages as index.md and leaves as slug.md', () => {
   withStaging(stagingDir => {
