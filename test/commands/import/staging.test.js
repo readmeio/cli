@@ -300,6 +300,32 @@ test('stageOrganized keeps hostile category titles inside staging on win32', () 
   });
 });
 
+test('stageOrganized rewrites a parent segment that trims to empty', () => {
+  withStaging(stagingDir => {
+    stageOrganized(
+      {
+        categories: [
+          { title: '.', pages: [{ title: 'Dot', url: 'https://example.com/docs/dot' }] },
+          { title: '..', pages: [{ title: 'Up', url: 'https://example.com/docs/up' }] },
+          // routeCategory trims the whole title, so the trailing space has to
+          // sit on an earlier segment to survive until the folder name.
+          { title: '.. /Notes', pages: [{ title: 'Note', url: 'https://example.com/docs/note' }] },
+        ],
+      },
+      stagingDir,
+    );
+
+    expect(fs.existsSync(path.join(stagingDir, 'docs', 'page', 'dot.md'))).toBe(true);
+    expect(fs.existsSync(path.join(stagingDir, 'docs', 'page-2', 'up.md'))).toBe(true);
+    expect(fs.existsSync(path.join(stagingDir, 'docs', 'page-3', 'notes', 'note.md'))).toBe(true);
+    const names = fs.readdirSync(path.join(stagingDir, 'docs'));
+    expect(names).not.toContain('.');
+    expect(names).not.toContain('..');
+    expect(names).not.toContain('.. ');
+    expectContainedOnWin32(stagingDir);
+  });
+});
+
 test('stageOrganized keeps one folder for a shared rewritten category root', () => {
   withStaging(stagingDir => {
     stageOrganized(

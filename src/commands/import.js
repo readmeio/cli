@@ -5434,9 +5434,9 @@ function kebabCase(s) {
  *
  * Returns `segment` unchanged when it is safe to use as a path segment, so
  * callers can treat equality with the input as "display title, not rewritten".
- * Windows drops trailing dots and spaces, which turns `.. ` into `..`, and
- * `path.win32` treats `\`, `/`, and `:` as separators. Those become a kebab
- * slug. `Guides` and `API Docs` stay as authored.
+ * Windows drops trailing dots and spaces, so `.`, `..`, and `.. ` all trim to
+ * empty and are rewritten. `path.win32` also treats `\`, `/`, and `:` as
+ * separators. `Guides` and `API Docs` stay as authored.
  *
  * @param {string} segment A single `/`-separated piece of a category title.
  * @returns {string}
@@ -5444,7 +5444,7 @@ function kebabCase(s) {
 function safeCategorySegment(segment) {
   const seg = String(segment);
   const trimmed = seg.replace(/[.\s]+$/g, '');
-  const escapes = trimmed === '' || trimmed === '.' || trimmed === '..' || /[\\/\0-\x1f:]/.test(seg);
+  const escapes = trimmed === '' || /[\\/\0-\x1f:]/.test(seg);
   return escapes ? kebabCase(seg) : seg;
 }
 
