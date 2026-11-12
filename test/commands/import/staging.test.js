@@ -271,7 +271,7 @@ test('stageOrganized keeps hostile category titles inside staging on win32', () 
             title: '..\\..\\..\\outside/Nested group',
             pages: [{ title: 'Mixed', url: 'https://example.com/docs/mixed' }],
           },
-          { title: 'CON', pages: [{ title: 'Device', url: 'https://example.com/docs/device' }] },
+          { title: 'v2.', pages: [{ title: 'Release', url: 'https://example.com/docs/v2-notes' }] },
         ],
       },
       stagingDir,
@@ -286,7 +286,7 @@ test('stageOrganized keeps hostile category titles inside staging on win32', () 
     expect(fs.existsSync(path.join(stagingDir, 'docs', 'c-users-public-poc-drive', 'drive.md'))).toBe(true);
     expect(fs.existsSync(path.join(stagingDir, 'docs', 'server-share-poc', 'unc.md'))).toBe(true);
     expect(fs.existsSync(path.join(stagingDir, 'docs', 'outside', 'outside-nested-group', 'mixed.md'))).toBe(true);
-    expect(fs.existsSync(path.join(stagingDir, 'docs', 'con-section', 'device.md'))).toBe(true);
+    expect(fs.existsSync(path.join(stagingDir, 'docs', 'v2.', 'v2-notes.md'))).toBe(true);
     expect(fs.existsSync(path.join(stagingDir, 'docs', 'page'))).toBe(true);
 
     const names = fs.readdirSync(path.join(stagingDir, 'docs'));
@@ -296,6 +296,35 @@ test('stageOrganized keeps hostile category titles inside staging on win32', () 
       'https://example.com/docs/bs-1',
     );
 
+    expectContainedOnWin32(stagingDir);
+  });
+});
+
+test('stageOrganized keeps one folder for a shared rewritten category root', () => {
+  withStaging(stagingDir => {
+    stageOrganized(
+      {
+        categories: [
+          {
+            title: 'SDK: Java/Setup/Windows',
+            pages: [{ title: 'Win', url: 'https://example.com/docs/sdk-win' }],
+          },
+          {
+            title: 'SDK: Java/Setup/Linux',
+            pages: [{ title: 'Lin', url: 'https://example.com/docs/sdk-lin' }],
+          },
+        ],
+      },
+      stagingDir,
+    );
+
+    const setup = path.join(stagingDir, 'docs', 'sdk-java', 'sdk-java-setup');
+    expect(fs.existsSync(path.join(setup, 'sdk-java-setup-windows', 'sdk-win.md'))).toBe(true);
+    expect(fs.existsSync(path.join(setup, 'sdk-java-setup-linux', 'sdk-lin.md'))).toBe(true);
+    expect(fs.existsSync(path.join(stagingDir, 'docs', 'sdk-java-2'))).toBe(false);
+    expect(readFm(path.join(setup, 'index.md')).title).toBe('Setup');
+    expect(readFm(path.join(setup, 'sdk-java-setup-windows', 'index.md')).title).toBe('Windows');
+    expect(readFm(path.join(setup, 'sdk-java-setup-linux', 'index.md')).title).toBe('Linux');
     expectContainedOnWin32(stagingDir);
   });
 });

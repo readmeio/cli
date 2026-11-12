@@ -5018,11 +5018,11 @@ function stageOrganized(organized, stagingDir, opts = {}) {
   // Namespace every NESTED category folder by its ancestor path so its basename
   // (and thus slug) is globally unique, and back it with an `index.md` so it's a
   // real titled parent. Top-level categories are matched by title, not slug, so
-  // a safe display title is left untouched. Separators, `..`, drive prefixes, and
-  // Windows device names are rewritten first — on win32 a raw `..\` title would
-  // otherwise resolve outside this staging directory.
+  // a safe display title is left untouched. A segment Windows would treat as
+  // `..` or as a separator is rewritten first, or a raw `..\` title would
+  // resolve outside this staging directory.
   const usedContainerSlugs = new Set(slugFor.values());
-  const segRename = new Map(); // original path prefix -> unique folder name
+  const segRename = new Map(); // original path prefix -> folder name
   const nestedContainers = new Map(); // renamed dir (rel to stagingDir) -> display title
   const uniqueContainerName = base => {
     let name = base || 'section';
@@ -5039,12 +5039,19 @@ function stageOrganized(organized, stagingDir, opts = {}) {
     const out = [];
     for (let i = 0; i < segs.length; i++) {
       if (i === 0) {
-        const safe = safeCategorySegment(segs[0]);
-        // A rewritten name can collide with a real category or a page slug.
-        // A display title that needed no rewrite keeps its spelling, including
-        // when two categories share it.
-        const name = safe === segs[0] ? safe : uniqueContainerName(safe);
-        if (name === segs[0] && !usedContainerSlugs.has(name)) usedContainerSlugs.add(name);
+        // Same original root must stay one folder. `SDK: Java/Setup/Windows`
+        // and `SDK: Java/Setup/Linux` both rewrite to `sdk-java`; allocating
+        // the second call would split the tree and reuse the child slug.
+        let name = segRename.get(segs[0]);
+        if (!name) {
+          const folder = safeCategorySegment(segs[0]);
+          // Equality with the raw segment means "display title, unchanged".
+          // Two categories may share that spelling. A rewritten name is
+          // suffixed when it collides with a different title or a page slug.
+          name = folder === segs[0] ? folder : uniqueContainerName(folder);
+          if (name === segs[0]) usedContainerSlugs.add(name);
+          segRename.set(segs[0], name);
+        }
         out.push(name);
         continue;
       }
@@ -5422,31 +5429,23 @@ function kebabCase(s) {
   );
 }
 
-// Windows device names are paths, not directories (`CON`, `NUL`, `COM1`, …).
-const WINDOWS_RESERVED_SEGMENT = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i;
-
 /**
  * Folder name for one category-title segment.
  *
- * Display titles stay as authored (`Guides`, `API Docs`). Anything `path.win32`
- * would treat as a separator, a parent segment, a drive prefix, or a device
- * name is folded to kebab-case so `path.join(stagingDir, …)` cannot leave the
- * staging directory. Trailing dots and spaces are stripped because Windows
- * ignores them and can turn `.. ` into `..`.
+ * Returns `segment` unchanged when it is safe to use as a path segment, so
+ * callers can treat equality with the input as "display title, not rewritten".
+ * Windows drops trailing dots and spaces, which turns `.. ` into `..`, and
+ * `path.win32` treats `\`, `/`, and `:` as separators. Those become a kebab
+ * slug. `Guides` and `API Docs` stay as authored.
  *
  * @param {string} segment A single `/`-separated piece of a category title.
  * @returns {string}
  */
 function safeCategorySegment(segment) {
   const seg = String(segment);
-  // Strip trailing dots and spaces first: Windows drops them, so `.. ` is `..`.
-  const stripped = seg.replace(/[.\s]+$/g, '');
-  const reserved = WINDOWS_RESERVED_SEGMENT.test(stripped);
-  const traverses = stripped === '' || /[\\/\0-\x1f:]/.test(seg);
-  if (!traverses && !reserved) return stripped;
-
-  const slug = kebabCase(seg);
-  return WINDOWS_RESERVED_SEGMENT.test(slug) ? `${slug}-section` : slug;
+  const trimmed = seg.replace(/[.\s]+$/g, '');
+  const escapes = trimmed === '' || trimmed === '.' || trimmed === '..' || /[\\/\0-\x1f:]/.test(seg);
+  return escapes ? kebabCase(seg) : seg;
 }
 
 // Keyword → FontAwesome icon. Ported from v1 (most-specific entries first).
