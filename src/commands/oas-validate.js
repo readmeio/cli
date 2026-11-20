@@ -4,9 +4,10 @@ import path from 'node:path';
 import OASNormalize from 'oas-normalize';
 
 import { writeGithubActionsOutputs } from '../utils/gha-output.js';
+import { findReferenceDirs } from '../utils/sections.js';
 import * as styles from '../utils/styles.js';
 
-import { findOasFiles, extractOperations } from './oas-sync.js';
+import { findAllOasFiles, extractOperations } from './oas-sync.js';
 
 export const command = 'oas:validate';
 export const order = 3;
@@ -60,8 +61,9 @@ const RULES = {
 };
 
 /**
- * Validate all OAS files under `<gitRoot>/reference/`. Pure programmatic API:
- * returns per-file results without printing or exiting.
+ * Validate all OAS files under `<gitRoot>/reference/`, and under any other
+ * reference section the repo declares in `_readme.yaml`. Pure programmatic
+ * API: returns per-file results without printing or exiting.
  *
  * @param {object}  [opts]
  * @param {string}  [opts.cwd]          Repo root (defaults to process.cwd()).
@@ -72,6 +74,7 @@ const RULES = {
  *   totalWarnings: number,
  *   totalValid: number,
  *   results: Array<{
+ *     section: string,
  *     filename: string,
  *     title: string,
  *     version: string,
@@ -81,14 +84,12 @@ const RULES = {
  *     valid: boolean,
  *   }>,
  * }>}
- *   Returns null if there's no reference/ dir or no spec files.
+ *   `section` is the directory the spec lives in. Returns null if there's no
+ *   reference dir or no spec files.
  */
 export async function validateOas({ cwd, dereference = false } = {}) {
   const gitRoot = cwd || process.cwd();
-  const refDir = path.join(gitRoot, 'reference');
-  if (!fs.existsSync(refDir)) return null;
-
-  const oasFiles = findOasFiles(refDir);
+  const oasFiles = findAllOasFiles(gitRoot);
   if (oasFiles.length === 0) return null;
 
   const results = [];
@@ -96,7 +97,7 @@ export async function validateOas({ cwd, dereference = false } = {}) {
   let totalWarnings = 0;
   let totalValid = 0;
 
-  for (const { filename, spec } of oasFiles) {
+  for (const { section, refDir, filename, spec } of oasFiles) {
     const filePath = path.join(refDir, filename);
     const raw = fs.readFileSync(filePath, 'utf-8');
     const title = spec.info?.title || filename;
@@ -112,7 +113,7 @@ export async function validateOas({ cwd, dereference = false } = {}) {
       });
     } catch (err) {
       const errors = [{ message: err.message || String(err) }];
-      results.push({ filename, title, version, opCount, errors, warnings: [], valid: false });
+      results.push({ section, filename, title, version, opCount, errors, warnings: [], valid: false });
       totalErrors += 1;
       continue;
     }
@@ -142,7 +143,7 @@ export async function validateOas({ cwd, dereference = false } = {}) {
     const valid = errors.length === 0;
     if (valid) totalValid += 1;
 
-    results.push({ filename, title, version, opCount, errors, warnings, valid });
+    results.push({ section, filename, title, version, opCount, errors, warnings, valid });
   }
 
   return { fileCount: oasFiles.length, totalErrors, totalWarnings, totalValid, results };
@@ -160,7 +161,9 @@ export async function validateOasFiles(gitRoot, { dereference = false } = {}) {
   if (!summary) return null;
 
   for (const r of summary.results) {
-    const meta = `${r.filename} · ${r.version} · ${r.opCount} ${r.opCount === 1 ? 'endpoint' : 'endpoints'}`;
+    // Only name the directory when it isn't the one everybody has.
+    const specPath = r.section === 'reference' ? r.filename : `${r.section}/${r.filename}`;
+    const meta = `${specPath} · ${r.version} · ${r.opCount} ${r.opCount === 1 ? 'endpoint' : 'endpoints'}`;
     const dot = r.errors.length > 0 ? styles.err('●') : r.warnings.length > 0 ? styles.warn('●') : styles.success('●');
 
     console.log();
@@ -180,9 +183,9 @@ export async function validateOasFiles(gitRoot, { dereference = false } = {}) {
 
 export async function run(options, _cmd, ctx) {
   const { gitRoot } = ctx;
-  const refDir = path.join(gitRoot, 'reference');
+  const refDirs = findReferenceDirs(gitRoot);
 
-  if (!fs.existsSync(refDir)) {
+  if (refDirs.length === 0) {
     styles.error('No reference/ directory found.');
     writeGithubActionsOutputs({
       'has-errors': 'true',
@@ -197,7 +200,7 @@ export async function run(options, _cmd, ctx) {
   const result = await validateOasFiles(gitRoot, { dereference: options.dereference });
 
   if (!result) {
-    styles.info('No OpenAPI spec files found in reference/.');
+    styles.info(`No OpenAPI spec files found in ${refDirs.map(dir => `${dir}/`).join(', ')}.`);
     writeGithubActionsOutputs({
       'has-errors': 'false',
       'total-errors': '0',

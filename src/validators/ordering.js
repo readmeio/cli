@@ -2,16 +2,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { makeContainment, PathEscapeError } from '../utils/containment.js';
+import { loadSections } from '../utils/sections.js';
 
 export const name = 'ordering';
 
-// Top-level content directories that use _order.yaml.
-export const CONTENT_DIRS = ['docs', 'reference', 'recipes', 'custom_pages'];
-
-// Of those, the dirs that must list every page/folder. reference ordering is
-// OAS-managed, so we never flag pages "missing from" a reference _order.yaml —
-// but stale entries are flagged everywhere.
-const REQUIRE_ORDER = new Set(['docs', 'recipes', 'custom_pages']);
+// Every section uses _order.yaml, but not every kind has to list each
+// page/folder: reference ordering is OAS-managed, so we never flag pages
+// "missing from" a reference _order.yaml — stale entries are flagged everywhere.
+const REQUIRE_ORDER = new Set(['guide', 'recipes', 'custom_pages']);
 
 // Values that YAML interprets as non-strings and need quoting in _order.yaml.
 const YAML_UNSAFE = /^(?:\d+\.?\d*|true|false|yes|no|on|off|null|~)$/i;
@@ -100,12 +98,12 @@ function collectDirs(gitRoot, topDir, assertContained) {
  *   - in _order.yaml but missing on disk     → "Stale entry"
  *   - an index entry that shouldn't be listed → "Invalid entry"
  */
-export function validateAll(files, gitRoot, { fix } = {}) {
+export function validateAll(files, gitRoot, { fix, sections = loadSections(gitRoot) } = {}) {
   const assertContained = makeContainment(gitRoot, { label: 'repository' });
   const results = [];
 
-  for (const topDir of CONTENT_DIRS) {
-    const requireOrder = REQUIRE_ORDER.has(topDir);
+  for (const topDir of sections.directories()) {
+    const requireOrder = REQUIRE_ORDER.has(sections.kindOf(topDir));
 
     for (const { dir, onDisk, orderEntries, refused } of collectDirs(gitRoot, topDir, assertContained)) {
       const orderPath = path.join(dir, '_order.yaml');

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import * as componentsValidator from '../validators/components.js';
+import * as configValidator from '../validators/config.js';
 import * as contentValidator from '../validators/content.js';
 import * as duplicatesValidator from '../validators/duplicates.js';
 import * as frontmatterValidator from '../validators/frontmatter.js';
@@ -13,22 +14,23 @@ import * as orderingValidator from '../validators/ordering.js';
 import * as recipesValidator from '../validators/recipes.js';
 
 import { makeContainment, PathEscapeError } from './containment.js';
+import { loadSections } from './sections.js';
 
-const TARGET_PATTERNS = [
-  { dir: 'custom_blocks', ext: ['.mdx', '.md'] },
-  { dir: 'docs', ext: '.md' },
-  { dir: 'reference', ext: '.md' },
-  { dir: 'custom_pages', ext: '.md' },
-  { dir: 'recipes', ext: '.md' },
-];
+/**
+ * The directories lint reads: custom blocks, the built-in sections, and any
+ * section the repo declares in `_readme.yaml`.
+ */
+function targetPatterns(sections) {
+  return [{ dir: 'custom_blocks', ext: ['.mdx', '.md'] }, ...sections.directories().map(dir => ({ dir, ext: '.md' }))];
+}
 
 /**
  * Collect all target files from the repo root.
  */
-export function collectFiles(gitRoot) {
+export function collectFiles(gitRoot, sections = loadSections(gitRoot)) {
   const files = [];
 
-  for (const { dir, ext } of TARGET_PATTERNS) {
+  for (const { dir, ext } of targetPatterns(sections)) {
     const dirPath = path.join(gitRoot, dir);
     // `readdir` follows a symlink at `dirPath`. A linked content root is not a
     // directory this walk lists; `lstat` is what sees the link. ordering
@@ -61,6 +63,7 @@ export function collectFiles(gitRoot) {
 // import above and its module here.
 const ALL_VALIDATORS = [
   componentsValidator,
+  configValidator,
   contentValidator,
   duplicatesValidator,
   frontmatterValidator,
@@ -87,13 +90,14 @@ function loadValidators() {
  */
 export async function runValidators(files, gitRoot, { onFile, onBeforeCrossFile, fix, nonInteractive } = {}) {
   const validators = await loadValidators();
+  const sections = loadSections(gitRoot);
   const results = [];
   const assertContained = makeContainment(gitRoot, { label: 'repository' });
-  // ordering refuses a linked docs/reference/recipes/custom_pages root.
-  // collectFiles skips every linked root, so a root ordering does not walk
-  // (custom_blocks) would otherwise lint as a clean repository.
-  const orderedRoots = new Set(orderingValidator.CONTENT_DIRS);
-  for (const { dir } of TARGET_PATTERNS) {
+  // ordering refuses a linked section root (docs, reference, a declared
+  // section, ...). collectFiles skips every linked root, so a root ordering
+  // does not walk (custom_blocks) would otherwise lint as a clean repository.
+  const orderedRoots = new Set(sections.directories());
+  for (const { dir } of targetPatterns(sections)) {
     if (orderedRoots.has(dir)) continue;
     try {
       assertContained(path.join(gitRoot, dir));
@@ -141,7 +145,7 @@ export async function runValidators(files, gitRoot, { onFile, onBeforeCrossFile,
 
     for (const validator of validators) {
       if (!validator.validate) continue;
-      const result = validator.validate({ filePath, content, relativePath, fix });
+      const result = validator.validate({ filePath, content, relativePath, fix, sections });
       if (result) {
         if (Array.isArray(result)) {
           results.push(...result);
@@ -156,7 +160,7 @@ export async function runValidators(files, gitRoot, { onFile, onBeforeCrossFile,
   if (onBeforeCrossFile) onBeforeCrossFile();
   for (const validator of validators) {
     if (!validator.validateAll) continue;
-    const result = await validator.validateAll(admitted, gitRoot, { fix, nonInteractive });
+    const result = await validator.validateAll(admitted, gitRoot, { fix, nonInteractive, sections });
     if (result) {
       if (Array.isArray(result)) {
         results.push(...result);

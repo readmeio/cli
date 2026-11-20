@@ -15,6 +15,7 @@ import {
   hasReadmeWorkflow,
   PLATFORMS,
 } from './git.js';
+import { findReferenceDirs } from './sections.js';
 import * as styles from './styles.js';
 import { getRandomTip } from './tips.js';
 
@@ -32,7 +33,8 @@ function categorize(files) {
   const counts = new Map();
   for (const file of files) {
     const dir = file.split('/')[0];
-    const label = CATEGORY_LABELS[dir] || dir;
+    // `hasOwn`, not a bare lookup: a declared section can be called `constructor`.
+    const label = Object.hasOwn(CATEGORY_LABELS, dir) ? CATEGORY_LABELS[dir] : dir;
     counts.set(label, (counts.get(label) || 0) + 1);
   }
   return [...counts.entries()];
@@ -257,10 +259,19 @@ export function createGithubReporter() {
       const baseSha = process.env.GITHUB_BASE_SHA;
       if (baseSha && gitRoot) {
         try {
-          const changed = execSync(
-            `git diff --name-only ${baseSha}..HEAD -- 'reference/*.json' 'reference/*.yaml' 'reference/*.yml'`,
-            { cwd: gitRoot, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
-          ).trim();
+          // Section directories are limited to [a-z0-9_-], so they're safe to
+          // interpolate into the command.
+          const pathspecs = findReferenceDirs(gitRoot)
+            .flatMap(dir => ['json', 'yaml', 'yml'].map(ext => `'${dir}/*.${ext}'`))
+            .join(' ');
+          // With no pathspec git would list every changed file, so skip the diff.
+          const changed = pathspecs
+            ? execSync(`git diff --name-only ${baseSha}..HEAD -- ${pathspecs}`, {
+                cwd: gitRoot,
+                encoding: 'utf-8',
+                stdio: ['pipe', 'pipe', 'pipe'],
+              }).trim()
+            : '';
 
           if (changed) {
             const files = changed.split('\n');

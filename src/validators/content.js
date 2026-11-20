@@ -2,12 +2,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { parseFrontmatter } from '../utils/markdown.js';
+import { DEFAULT_SECTIONS } from '../utils/sections.js';
 
 export const name = 'content';
 
-export function validate({ filePath, content, relativePath }) {
-  const dir = relativePath.split('/')[0];
-  if (!['docs', 'reference', 'custom_pages'].includes(dir)) return null;
+// Kinds of section whose pages are expected to have a body.
+const CHECKED_KINDS = ['guide', 'reference', 'custom_pages'];
+
+export function validate({ filePath, content, relativePath, sections = DEFAULT_SECTIONS }) {
+  const topDir = relativePath.split('/')[0];
+  if (!CHECKED_KINDS.includes(sections.kindOf(topDir))) return null;
   if (!relativePath.endsWith('.md')) return null;
 
   const { data, content: body } = parseFrontmatter(content);

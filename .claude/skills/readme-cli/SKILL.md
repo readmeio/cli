@@ -18,7 +18,7 @@ npx @readme/cli lint --fix    # Automatically fix common issues
 npx @readme/cli lint --json   # Machine-readable output (good for CI)
 ```
 
-Validates: frontmatter, ordering, duplicates, OAS references, OAS schema, MDX components, and recipes.
+Validates: frontmatter, ordering, duplicates, OAS references, OAS schema, MDX components, recipes, and the `_readme.yaml` config.
 
 Always try `lint --fix` before attempting manual fixes.
 
@@ -28,7 +28,7 @@ Always try `lint --fix` before attempting manual fixes.
 npx @readme/cli oas:sync
 ```
 
-Syncs `reference/` directory with OpenAPI specs. Creates, updates, or removes pages based on spec operations. Run this when you see `oas-reference` errors.
+Syncs `reference/` directory (and any other reference section declared in `_readme.yaml`) with OpenAPI specs. Creates, updates, or removes pages based on spec operations. Run this when you see `oas-reference` errors.
 
 ### OpenAPI Bundle
 
@@ -67,9 +67,25 @@ Starts a local dev server to preview docs with live reload.
 The CLI expects to be run inside a git repo that has:
 
 - A version branch matching `v[0-9]*` (e.g., `v1`, `v2.0`)
-- A `docs/` and/or `reference/` directory at the repo root
+- A `docs/` and/or `reference/` directory at the repo root (or a section declared in `_readme.yaml`)
 
 Use `--no-check` to skip this validation if needed.
+
+## Sections and `_readme.yaml`
+
+Every repo has the built-in sections: `docs/`, `reference/`, `recipes/`, `custom_pages/`. A project with multiple guides declares extra sections in an optional `_readme.yaml` at the repo root:
+
+```yaml
+navigation:
+  - kind: guide # guide or reference
+    directory: sdks # top-level folder; lowercase letters, numbers, - and _
+    name: SDKs
+```
+
+- A declared `guide` section is linted like `docs/`; a declared `reference` section like `reference/`, including `oas:sync` and `oas:validate`.
+- Repos without `_readme.yaml` are fine: only the built-in sections apply.
+- A new top-level folder of pages is ignored by ReadMe until it's declared here. `lint` warns about a folder that has an `_order.yaml` but isn't declared.
+- `lint` reports problems in the file under the `config` rule. These have no `--fix`; edit `_readme.yaml` by hand.
 
 ## Typical Workflow
 

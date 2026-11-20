@@ -4,6 +4,7 @@ import Ajv from 'ajv';
 
 import frontmatterSchema from '../../vendor/git-format/frontmatter.schema.json' with { type: 'json' };
 import { parseFrontmatter } from '../utils/markdown.js';
+import { DEFAULT_SECTIONS } from '../utils/sections.js';
 
 export const name = 'frontmatter';
 
@@ -65,27 +66,28 @@ function collectPropertyNames(schema, defs) {
   return props;
 }
 
-// Map directory names to their index in the schema's oneOf array.
-const DIR_SCHEMA_INDEX = {
-  docs: 0,
+// Map each kind of section to its index in the schema's oneOf array. A declared
+// section's pages use the same frontmatter as the built-in section of its kind.
+const KIND_SCHEMA_INDEX = {
+  guide: 0,
   custom_pages: 1,
   reference: 2,
   recipes: 3,
   custom_blocks: 4,
 };
 
-// Compile a validator for each directory type from the vendored schema.
+// Compile a validator for each kind from the vendored schema.
 const ajv = new Ajv({ allErrors: true, strict: false, logger: false, verbose: true });
 
 const validators = {};
 const knownProperties = {};
-for (const [dir, index] of Object.entries(DIR_SCHEMA_INDEX)) {
+for (const [kind, index] of Object.entries(KIND_SCHEMA_INDEX)) {
   const subSchema = { defs: frontmatterSchema.defs, ...frontmatterSchema.oneOf[index] };
-  validators[dir] = ajv.compile(subSchema);
-  knownProperties[dir] = collectPropertyNames(subSchema, frontmatterSchema.defs);
+  validators[kind] = ajv.compile(subSchema);
+  knownProperties[kind] = collectPropertyNames(subSchema, frontmatterSchema.defs);
 }
 
-export function validate({ content, filePath, relativePath, fix }) {
+export function validate({ content, filePath, relativePath, fix, sections = DEFAULT_SECTIONS }) {
   // Step 1: Parse the frontmatter YAML.
   const { data, error } = parseFrontmatter(content);
   if (error) {
@@ -97,10 +99,10 @@ export function validate({ content, filePath, relativePath, fix }) {
   }
 
   const results = [];
-  const dir = relativePath.split('/')[0];
+  const kind = sections.kindOf(relativePath.split('/')[0]);
 
   // Step 2: Validate the parsed frontmatter against the schema.
-  const validateFn = validators[dir];
+  const validateFn = validators[kind];
   if (validateFn) {
     const valid = validateFn(data);
     if (!valid) {
@@ -108,7 +110,7 @@ export function validate({ content, filePath, relativePath, fix }) {
         // Reference pages are OAS-backed: title/excerpt come from the spec, so a
         // missing title is not an error for pages that declare an api.file.
         if (
-          dir === 'reference' &&
+          kind === 'reference' &&
           data?.api?.file &&
           err.keyword === 'required' &&
           err.params?.missingProperty === 'title'
@@ -141,7 +143,7 @@ export function validate({ content, filePath, relativePath, fix }) {
   }
 
   // Step 3: Warn about unknown properties (allow x- prefix for custom metadata).
-  const allowed = knownProperties[dir];
+  const allowed = knownProperties[kind];
   const unknownKeys = [];
   if (allowed && data && typeof data === 'object') {
     for (const key of Object.keys(data)) {

@@ -2,19 +2,18 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { parseFrontmatter } from '../utils/markdown.js';
+import { loadSections } from '../utils/sections.js';
 import { slugForEntry } from '../utils/slug-for-entry.js';
 
 export const name = 'links';
 
-const CHECKED_DIRS = ['docs', 'reference', 'custom_pages', 'recipes'];
-
 // Match doc:slug and ref:slug links, e.g. [text](doc:my-page) or [text](ref:my-op#anchor)
 const DOC_LINK_RE = /\((?:doc|ref):([a-zA-Z0-9_-]+)(?:#[^)]*)?\)/g;
 
-function collectSlugs(gitRoot) {
+function collectSlugs(gitRoot, dirs) {
   const slugs = new Set();
 
-  for (const dir of CHECKED_DIRS) {
+  for (const dir of dirs) {
     const dirPath = path.join(gitRoot, dir);
     if (!fs.existsSync(dirPath)) continue;
 
@@ -28,13 +27,14 @@ function collectSlugs(gitRoot) {
   return slugs;
 }
 
-export function validateAll(files, gitRoot) {
-  const validSlugs = collectSlugs(gitRoot);
+export function validateAll(files, gitRoot, { sections = loadSections(gitRoot) } = {}) {
+  const checkedDirs = sections.directories();
+  const validSlugs = collectSlugs(gitRoot, checkedDirs);
   const results = [];
 
   for (const relPath of files) {
     const topDir = relPath.split('/')[0];
-    if (!CHECKED_DIRS.includes(topDir)) continue;
+    if (!checkedDirs.includes(topDir)) continue;
     if (!/\.(md|mdx)$/.test(relPath)) continue;
 
     const raw = fs.readFileSync(path.join(gitRoot, relPath), 'utf-8');
