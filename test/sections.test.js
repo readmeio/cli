@@ -352,3 +352,14 @@ test('oas:sync refuses a symlink in a declared reference section before touching
     rmRepo(outside);
   }
 });
+
+test('a section named after an Object.prototype property is an ordinary section', async () => {
+  const { files, results, hasErrors } = await lintRepo({
+    '_readme.yaml': 'navigation:\n  - kind: guide\n    directory: constructor\n',
+    'constructor/a.md': PAGE,
+    'constructor/_order.yaml': '- a\n',
+  });
+  expect(files).toStrictEqual(['constructor/a.md']);
+  expect(hasErrors).toBe(false);
+  expect(results).toStrictEqual([]);
+});

@@ -33,7 +33,8 @@ function categorize(files) {
   const counts = new Map();
   for (const file of files) {
     const dir = file.split('/')[0];
-    const label = CATEGORY_LABELS[dir] || dir;
+    // `hasOwn`, not a bare lookup: a declared section can be called `constructor`.
+    const label = Object.hasOwn(CATEGORY_LABELS, dir) ? CATEGORY_LABELS[dir] : dir;
     counts.set(label, (counts.get(label) || 0) + 1);
   }
   return [...counts.entries()];

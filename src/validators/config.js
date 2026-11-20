@@ -230,7 +230,8 @@ export function validateAll(_files, gitRoot, { sections = loadSections(gitRoot) 
       return;
     }
 
-    const builtInKind = BUILT_IN_KINDS[directory];
+    // `hasOwn`, not a bare lookup: `constructor` is a valid directory name.
+    const builtInKind = isBuiltInDirectory(directory) ? BUILT_IN_KINDS[directory] : undefined;
     if (builtInKind !== undefined) {
       if (kind !== builtInKind) {
         error(`Invalid kind: the "${directory}" directory must use the "${builtInKind}" kind, not "${kind}"`);
