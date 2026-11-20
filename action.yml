@@ -40,7 +40,7 @@ outputs:
   skipped-count:
     description: Reference pages skipped because the destination filename already exists (oas:sync only)
   skipped:
-    description: JSON array of skipped pages, each { filename, path, operationId } (oas:sync only)
+    description: JSON array of skipped pages, each { section, filename, path, operationId } (oas:sync only)
 runs:
   using: node24
   pre: src/gha-pre.js

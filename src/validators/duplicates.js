@@ -1,20 +1,21 @@
 import path from 'node:path';
 
+import { DEFAULT_SECTIONS } from '../utils/sections.js';
 import { slugForEntry } from '../utils/slug-for-entry.js';
 
 export const name = 'duplicates';
 
-// Only docs and reference require unique slugs.
-const CHECKED_DIRS = ['docs', 'reference'];
+// Only guide and reference sections require unique slugs.
+const CHECKED_KINDS = ['guide', 'reference'];
 
-export function validateAll(files) {
+export function validateAll(files, _gitRoot, { sections = DEFAULT_SECTIONS } = {}) {
   const results = [];
 
   // Group files by "<topDir>:<slug>" so slugs only collide within the same section.
   const slugMap = new Map();
   for (const relPath of files) {
     const topDir = relPath.split('/')[0];
-    if (!CHECKED_DIRS.includes(topDir)) continue;
+    if (!CHECKED_KINDS.includes(sections.kindOf(topDir))) continue;
 
     const slug = slugForEntry(relPath);
     const key = `${topDir}:${slug}`;

@@ -6,6 +6,7 @@ import { compile, run } from '@readme/markdown';
 import { load as loadYAML } from 'js-yaml';
 
 import { parseFrontmatter } from '../../utils/markdown.js';
+import { loadSections } from '../../utils/sections.js';
 
 // Use createRequire to load react-dom/server at runtime,
 // bypassing Next.js App Router's static import restriction.
@@ -15,23 +16,17 @@ const { renderToStaticMarkup } = _require('react-dom/server');
 
 const DOCS_ROOT = process.env.DOCS_ROOT;
 
-const SECTIONS = [
-  { dir: 'docs', label: 'Docs' },
-  { dir: 'reference', label: 'Reference' },
-  { dir: 'custom_pages', label: 'Custom Pages' },
-  { dir: 'recipes', label: 'Recipes' },
-];
-
-// Max folder nesting per section — anything deeper doesn't render in ReadMe's
-// sidebar, so we mirror the cap here. Keep in sync with src/validators/nesting.js.
+// Max folder nesting per kind of section — anything deeper doesn't render in
+// ReadMe's sidebar, so we mirror the cap here. Keep in sync with
+// src/validators/nesting.js.
 const MAX_DEPTH = {
-  docs: 5,
+  guide: 5,
   reference: 5,
   recipes: 0,
   custom_pages: 0,
 };
 
-function walkDir(dirPath, sectionDir, depth = 0) {
+function walkDir(dirPath, sectionDir, maxDepth, depth = 0) {
   if (!fs.existsSync(dirPath)) return [];
 
   // Read _order.yaml for ordering
@@ -69,10 +64,9 @@ function walkDir(dirPath, sectionDir, depth = 0) {
     if (isDir) {
       // Skip folders whose contents would exceed ReadMe's sidebar nesting
       // cap — they won't render in production, so don't show them here either.
-      const maxDepth = MAX_DEPTH[sectionDir];
       if (maxDepth !== undefined && depth + 1 > maxDepth) continue;
 
-      const children = walkDir(path.join(dirPath, name), sectionDir, depth + 1);
+      const children = walkDir(path.join(dirPath, name), sectionDir, maxDepth, depth + 1);
 
       // ReadMeConfig pages are internal — show them without a group header
       if (name === 'ReadMeConfig') {
@@ -130,11 +124,15 @@ function walkDir(dirPath, sectionDir, depth = 0) {
 
 export function collectSidebar() {
   const sections = [];
-  for (const { dir, label } of SECTIONS) {
+  // The built-in sections, plus any the repo declares in _readme.yaml — read
+  // on every request so edits to the file show up on reload.
+  const declared = loadSections(DOCS_ROOT);
+  for (const dir of declared.order) {
+    const { label, kind } = declared.byDirectory.get(dir);
     const fullPath = path.join(DOCS_ROOT, dir);
     if (!fs.existsSync(fullPath)) continue;
 
-    const children = walkDir(fullPath, dir);
+    const children = walkDir(fullPath, dir, MAX_DEPTH[kind]);
     if (children.length > 0) {
       sections.push({ title: label, dir, firstHref: findFirstHref(children), children });
     }
@@ -212,7 +210,7 @@ export function getPage(slugArray) {
   // used to show a blank page. If we see `api.file` + `api.operationId`,
   // render a minimal preview from the spec so the page isn't empty.
   if (data.api?.file && data.api?.operationId && !content.trim()) {
-    html = renderOasOperationPreview(data.api.file, data.api.operationId);
+    html = renderOasOperationPreview(section, data.api.file, data.api.operationId);
   } else {
     try {
       const { sources, modules } = loadCustomBlocks(DOCS_ROOT);
@@ -245,10 +243,10 @@ export function getPage(slugArray) {
  * (production ReadMe handles that); just enough so dev server pages show
  * something meaningful instead of a blank body.
  */
-function renderOasOperationPreview(specFile, operationId) {
-  const specPath = path.join(DOCS_ROOT, 'reference', specFile);
+function renderOasOperationPreview(section, specFile, operationId) {
+  const specPath = path.join(DOCS_ROOT, section, specFile);
   if (!fs.existsSync(specPath)) {
-    return `<p><em>OAS spec not found: <code>reference/${specFile}</code></em></p>`;
+    return `<p><em>OAS spec not found: <code>${escapeHtml(section)}/${escapeHtml(specFile)}</code></em></p>`;
   }
 
   let spec;
@@ -256,7 +254,7 @@ function renderOasOperationPreview(specFile, operationId) {
     const rawSpec = fs.readFileSync(specPath, 'utf-8');
     spec = specFile.toLowerCase().endsWith('.json') ? JSON.parse(rawSpec) : loadYAML(rawSpec);
   } catch (e) {
-    return `<p><em>Couldn't parse <code>reference/${specFile}</code>: ${escapeHtml(e.message)}</em></p>`;
+    return `<p><em>Couldn't parse <code>${escapeHtml(section)}/${escapeHtml(specFile)}</code>: ${escapeHtml(e.message)}</em></p>`;
   }
 
   let found = null;

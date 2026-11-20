@@ -11,13 +11,21 @@ import {
 } from '../commands/oas-sync.js';
 import { PathEscapeError } from '../utils/containment.js';
 import { parseFrontmatter } from '../utils/markdown.js';
+import { findReferenceDirs } from '../utils/sections.js';
 
 export const name = 'oas-reference';
 
-export function validateAll(files, gitRoot, { fix } = {}) {
-  const refDir = path.join(gitRoot, 'reference');
-  if (!fs.existsSync(refDir)) return [];
+export function validateAll(files, gitRoot, { fix, sections } = {}) {
+  // Each reference section is checked on its own: a page can only point at a
+  // spec that lives in the same section as it does.
+  const results = findReferenceDirs(gitRoot, sections).flatMap(section => validateSection(files, gitRoot, section));
 
+  applyFixes(results, gitRoot, { fix });
+  return results;
+}
+
+function validateSection(files, gitRoot, section) {
+  const refDir = path.join(gitRoot, section);
   const oasFiles = findOasFiles(refDir);
   const results = [];
 
@@ -29,7 +37,7 @@ export function validateAll(files, gitRoot, { fix } = {}) {
     // Check: `x-readme.internal`, which ReadMe ignores for page visibility.
     for (const location of findIgnoredInternalExtensions(spec)) {
       results.push({
-        file: `reference/${filename}`,
+        file: `${section}/${filename}`,
         rule: name,
         severity: 'warning',
         message: `"x-readme.internal" is ignored by ReadMe (${location}); use "x-internal" instead to hide pages`,
@@ -39,7 +47,7 @@ export function validateAll(files, gitRoot, { fix } = {}) {
   }
 
   // Collect all reference pages with api frontmatter.
-  const refPages = files.filter(f => f.startsWith('reference/') && f.endsWith('.md'));
+  const refPages = files.filter(f => f.startsWith(`${section}/`) && f.endsWith('.md'));
 
   for (const relPath of refPages) {
     const filePath = path.join(gitRoot, relPath);
@@ -56,7 +64,7 @@ export function validateAll(files, gitRoot, { fix } = {}) {
       results.push({
         file: relPath,
         rule: name,
-        message: `OAS file not found: "${oasFilename}" does not exist in reference/`,
+        message: `OAS file not found: "${oasFilename}" does not exist in ${section}/`,
         fixable: false,
       });
       continue;
@@ -89,7 +97,7 @@ export function validateAll(files, gitRoot, { fix } = {}) {
     for (const op of ops.values()) {
       if (!coveredOps.has(operationKey(op))) {
         results.push({
-          file: `reference/${oasFilename}`,
+          file: `${section}/${oasFilename}`,
           rule: name,
           severity: 'warning',
           message: `Missing page: no reference page found for operation "${op.operationId}"`,
@@ -99,6 +107,10 @@ export function validateAll(files, gitRoot, { fix } = {}) {
     }
   }
 
+  return results;
+}
+
+function applyFixes(results, gitRoot, { fix }) {
   // Apply fixes by running the full sync — but only when something reported
   // is actually fixable. The sync adds, deletes, moves, hides and reorders
   // reference files, which is far too much to do on the strength of an
@@ -124,6 +136,4 @@ export function validateAll(files, gitRoot, { fix } = {}) {
       });
     }
   }
-
-  return results;
 }

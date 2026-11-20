@@ -4,6 +4,7 @@ import path from 'node:path';
 import markdown from '@readme/markdown';
 
 import { parseFrontmatter } from '../utils/markdown.js';
+import { loadSections } from '../utils/sections.js';
 
 const { mdxishTags } = markdown;
 
@@ -38,9 +39,6 @@ const BUILTIN_COMPONENTS = new Set([
   'TailwindStyle',
   'TutorialTile',
 ]);
-
-// Directories that can contain MDXish content with component references.
-const CONTENT_DIRS = new Set(['docs', 'reference', 'custom_pages', 'recipes']);
 
 /**
  * Extract component tag names from MDXish content.
@@ -190,14 +188,16 @@ export function validate({ content, relativePath }) {
 /**
  * Cross-file: check that all component references in content files resolve.
  */
-export function validateAll(files, gitRoot) {
+export function validateAll(files, gitRoot, { sections = loadSections(gitRoot) } = {}) {
   const results = [];
+  // Every section can contain MDXish content with component references.
+  const contentDirs = new Set(sections.directories());
   const customBlocks = collectCustomBlockNames(gitRoot);
   const available = new Set([...BUILTIN_COMPONENTS, ...customBlocks]);
 
   for (const relPath of files) {
     const dir = relPath.split('/')[0];
-    if (!CONTENT_DIRS.has(dir)) continue;
+    if (!contentDirs.has(dir)) continue;
     if (!relPath.endsWith('.md')) continue;
 
     const filePath = path.join(gitRoot, relPath);

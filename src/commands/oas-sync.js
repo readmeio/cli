@@ -6,6 +6,7 @@ import { CORE_SCHEMA, load as loadYAML, mergeTag } from 'js-yaml';
 import { makeContainment, PathEscapeError } from '../utils/containment.js';
 import { writeGithubActionsOutputs } from '../utils/gha-output.js';
 import { parseFrontmatter, toFrontmatter, frontmatterWriteError } from '../utils/markdown.js';
+import { findReferenceDirs } from '../utils/sections.js';
 import * as styles from '../utils/styles.js';
 
 export const command = 'oas:sync';
@@ -47,6 +48,19 @@ export function findOasFiles(refDir) {
   }
 
   return oasFiles;
+}
+
+/**
+ * Find the OAS files in every reference section of a repo: `reference/`, plus
+ * any section `_readme.yaml` declares with the `reference` kind.
+ *
+ * @returns {Array<{ section: string, refDir: string, filename: string, spec: object }>}
+ */
+export function findAllOasFiles(gitRoot, sections) {
+  return findReferenceDirs(gitRoot, sections).flatMap(section => {
+    const refDir = path.join(gitRoot, section);
+    return findOasFiles(refDir).map(oasFile => ({ section, refDir, ...oasFile }));
+  });
 }
 
 /**
@@ -994,49 +1008,55 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs, assertContained) {
 }
 
 /**
- * Sync reference pages with the OpenAPI spec(s) under `<gitRoot>/reference/`.
+ * Sync reference pages with the OpenAPI spec(s) under `<gitRoot>/reference/`,
+ * and under any other reference section the repo declares in `_readme.yaml`.
  *
  * Pure programmatic API: returns per-file change descriptors and prints
  * nothing. Used by the CLI command, the lint --fix flow, and external
- * callers. Throws `PathEscapeError` if `reference/` contains a symlink
+ * callers. Throws `PathEscapeError` if a reference section contains a symlink
  * (before anything is modified) or a destination would leave it.
  * Callers report that and exit non-zero.
  *
  * @param {string | { cwd?: string }} input  Repo root path, or `{ cwd }` object.
- * @returns {null | Array<{ filename: string, spec: object, opCount: number,
- *   changes: { added: string[], deleted: string[], moved: { from, to }[],
- *   updated: string[], skipped: { path, operationId }[] } }>}
- *   Returns null if there's no reference/ dir or no specs.
+ * @returns {null | Array<{ section: string, filename: string, spec: object,
+ *   opCount: number, changes: { added: string[], deleted: string[],
+ *   moved: { from, to }[], updated: string[], skipped: { path, operationId }[] } }>}
+ *   `section` is the directory the spec lives in, and the paths in `changes`
+ *   are relative to it. Returns null if there's no reference dir or no specs.
  */
 export function syncOas(input) {
   const gitRoot = typeof input === 'string' ? input : input?.cwd || process.cwd();
-  const refDir = path.join(gitRoot, 'reference');
-  if (!fs.existsSync(refDir)) return null;
+  const sections = findReferenceDirs(gitRoot);
 
   // Before the no-spec return and before any write. `findOasFiles` skips
   // symlink specs, so a reference/ whose only spec is a link would otherwise
   // report success and leave pages unsynced. Refusing first also keeps a later
   // real spec from being half-applied, and keeps a link the page walk would
-  // have skipped from being deleted or written through.
-  refuseSymlinks(refDir);
+  // have skipped from being deleted or written through. Every section is
+  // checked before any of them is synced, for the same reason.
+  for (const section of sections) refuseSymlinks(path.join(gitRoot, section));
 
-  const oasFiles = findOasFiles(refDir);
-  if (oasFiles.length === 0) return null;
-
-  const assertContained = makeContainment(refDir);
-
-  // Reference slugs share one flat namespace across every spec, so build the set
-  // of in-use slugs once and let each spec read/extend it.
-  const takenSlugs = collectReferenceSlugs(refDir);
   const allChanges = [];
 
-  for (const { filename, spec } of oasFiles) {
-    const ops = extractOperations(spec);
-    const changes = syncOneOas(refDir, filename, spec, takenSlugs, assertContained);
-    allChanges.push({ filename, spec, opCount: ops.size, changes });
+  for (const section of sections) {
+    const refDir = path.join(gitRoot, section);
+    const oasFiles = findOasFiles(refDir);
+    if (oasFiles.length === 0) continue;
+
+    const assertContained = makeContainment(refDir);
+
+    // Reference slugs share one flat namespace across every spec in a section,
+    // so build the set of in-use slugs once and let each spec read/extend it.
+    const takenSlugs = collectReferenceSlugs(refDir);
+
+    for (const { filename, spec } of oasFiles) {
+      const ops = extractOperations(spec);
+      const changes = syncOneOas(refDir, filename, spec, takenSlugs, assertContained);
+      allChanges.push({ section, filename, spec, opCount: ops.size, changes });
+    }
   }
 
-  return allChanges;
+  return allChanges.length > 0 ? allChanges : null;
 }
 
 /**
@@ -1048,7 +1068,7 @@ export function syncOas(input) {
  * @param {ReturnType<typeof syncOas>} results
  * @returns {{ totalAdded: number, totalDeleted: number, totalMoved: number,
  *   totalUpdated: number, totalSkipped: number,
- *   skipped: Array<{ filename: string, path: string, operationId: string }> }}
+ *   skipped: Array<{ section: string, filename: string, path: string, operationId: string }> }}
  */
 export function printSyncResults(results) {
   let totalAdded = 0;
@@ -1058,8 +1078,10 @@ export function printSyncResults(results) {
   let totalSkipped = 0;
   const skipped = [];
 
-  for (const { filename, spec, opCount, changes } of results) {
+  for (const { section = 'reference', filename, spec, opCount, changes } of results) {
     const title = spec.info?.title || filename;
+    // Only name the directory when it isn't the one everybody has.
+    const specPath = section === 'reference' ? filename : `${section}/${filename}`;
     const hasChanges =
       changes.added.length +
         changes.deleted.length +
@@ -1071,7 +1093,7 @@ export function printSyncResults(results) {
     const dot = hasChanges ? styles.warn('●') : styles.success('●');
     console.log();
     console.log(
-      `  ${dot} ${styles.bold(title)} ${styles.dim(`(${filename} · ${opCount} ${opCount === 1 ? 'endpoint' : 'endpoints'})`)}`,
+      `  ${dot} ${styles.bold(title)} ${styles.dim(`(${specPath} · ${opCount} ${opCount === 1 ? 'endpoint' : 'endpoints'})`)}`,
     );
 
     if (!hasChanges) {
@@ -1092,7 +1114,7 @@ export function printSyncResults(results) {
     }
     for (const { path: file, operationId } of changes.skipped) {
       console.log(`    ${styles.warn('!')} Skipped ${file} for "${operationId}" (destination already exists)`);
-      skipped.push({ filename, path: file, operationId });
+      skipped.push({ section, filename, path: file, operationId });
     }
 
     totalAdded += changes.added.length;
@@ -1107,9 +1129,9 @@ export function printSyncResults(results) {
 
 export async function run(_options, _cmd, ctx) {
   const { gitRoot } = ctx;
-  const refDir = path.join(gitRoot, 'reference');
+  const refDirs = findReferenceDirs(gitRoot);
 
-  if (!fs.existsSync(refDir)) {
+  if (refDirs.length === 0) {
     styles.error('No reference/ directory found.');
     writeGithubActionsOutputs({
       'added-count': '0',
@@ -1142,7 +1164,7 @@ export async function run(_options, _cmd, ctx) {
   }
 
   if (!results) {
-    styles.info('No OpenAPI spec files found in reference/.');
+    styles.info(`No OpenAPI spec files found in ${refDirs.map(dir => `${dir}/`).join(', ')}.`);
     writeGithubActionsOutputs({
       'added-count': '0',
       'deleted-count': '0',

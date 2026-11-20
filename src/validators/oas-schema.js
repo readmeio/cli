@@ -3,7 +3,7 @@ import path from 'node:path';
 
 import OASNormalize from 'oas-normalize';
 
-import { findOasFiles } from '../commands/oas-sync.js';
+import { findAllOasFiles } from '../commands/oas-sync.js';
 
 export const name = 'oas-schema';
 
@@ -28,14 +28,11 @@ function findBadRefs(obj, pointer = '') {
   return issues;
 }
 
-export async function validateAll(files, gitRoot) {
-  const refDir = path.join(gitRoot, 'reference');
-  if (!fs.existsSync(refDir)) return [];
-
-  const oasFiles = findOasFiles(refDir);
+export async function validateAll(files, gitRoot, { sections } = {}) {
+  const oasFiles = findAllOasFiles(gitRoot, sections);
   const results = [];
 
-  for (const { filename, spec } of oasFiles) {
+  for (const { section, refDir, filename, spec } of oasFiles) {
     const filePath = path.join(refDir, filename);
     const raw = fs.readFileSync(filePath, 'utf-8');
 
@@ -71,7 +68,7 @@ export async function validateAll(files, gitRoot) {
       if (!result.valid) {
         for (const err of result.errors) {
           results.push({
-            file: `reference/${filename}`,
+            file: `${section}/${filename}`,
             rule: name,
             message: err.message,
           });
@@ -80,7 +77,7 @@ export async function validateAll(files, gitRoot) {
 
       for (const warn of result.warnings) {
         results.push({
-          file: `reference/${filename}`,
+          file: `${section}/${filename}`,
           rule: name,
           severity: 'warning',
           message: warn.message,
@@ -88,7 +85,7 @@ export async function validateAll(files, gitRoot) {
       }
     } catch (err) {
       results.push({
-        file: `reference/${filename}`,
+        file: `${section}/${filename}`,
         rule: name,
         message: err.message || String(err),
       });
@@ -97,7 +94,7 @@ export async function validateAll(files, gitRoot) {
     // Check for malformed $ref pointers (oas-normalize doesn't catch these).
     for (const { path: refPath, ref } of findBadRefs(spec)) {
       results.push({
-        file: `reference/${filename}`,
+        file: `${section}/${filename}`,
         rule: name,
         message: `Malformed $ref: "${ref}" at ${refPath} (should start with "#/")`,
       });

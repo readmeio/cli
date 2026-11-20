@@ -34,6 +34,29 @@ npx @readme/cli oas:bundle path/to/openapi.yaml --out reference/api.json
 
 Without `--out`, the bundled spec is printed to stdout. The output format follows the `--out` extension (`.yaml`/`.yml` for YAML, JSON otherwise). This command works from any directory, so you can run it in your API's source repo.
 
+### Multiple guides (`_readme.yaml`)
+
+Every project has the built-in sections: `docs/`, `reference/`, `recipes/` and `custom_pages/`. If your project has more than one guide or API reference, they're declared in a `_readme.yaml` file at the root of the repo, each with its own directory:
+
+```yaml
+navigation:
+  - kind: guide
+    directory: docs
+    name: Guides
+  - kind: guide
+    directory: sdks
+    name: SDKs
+  - kind: reference
+    directory: reference
+  - kind: reference
+    directory: partner-api
+    name: Partner API
+```
+
+The CLI reads this file and treats each declared section like the built-in one of its kind: `lint` checks `sdks/` the way it checks `docs/`, and `oas:sync` and `oas:validate` cover the specs in `partner-api/` as well as `reference/`. `lint` also checks the file itself.
+
+The file is optional. If your repo doesn't have one, nothing changes: the CLI works with the built-in sections, same as always.
+
 ### Import
 
 Imports content from an external folder and converts it into ReadMe's format using Claude. Great for migrating existing docs.

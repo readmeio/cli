@@ -5,6 +5,7 @@ import path from 'node:path';
 
 import updateNotifier from 'update-notifier';
 
+import { loadSections } from './utils/sections.js';
 import * as styles from './utils/styles.js';
 
 const require = createRequire(import.meta.url);
@@ -71,17 +72,19 @@ function validateReadMeRepo(gitRoot) {
 
   const hasVersionBranch = branches.split('\n').some(b => /^(origin\/)?v[0-9]/.test(b.trim()));
 
-  // Check for /docs or /reference at the repo root
-  const hasDocs = fs.existsSync(path.join(gitRoot, 'docs'));
-  const hasReference = fs.existsSync(path.join(gitRoot, 'reference'));
+  // Check for /docs or /reference at the repo root, or a section the repo
+  // declares in _readme.yaml (a project doesn't have to use the built-in ones)
+  const hasContent = ['docs', 'reference', ...loadSections(gitRoot).declaredDirectories()].some(dir =>
+    fs.existsSync(path.join(gitRoot, dir)),
+  );
 
-  if (!hasVersionBranch || (!hasDocs && !hasReference)) {
+  if (!hasVersionBranch || !hasContent) {
     styles.error("This doesn't look like a ReadMe docs repo.");
 
     if (!hasVersionBranch) {
       styles.info(`We couldn't find a version branch (e.g. ${styles.bold('v1')}, ${styles.bold('v2')}).`);
     }
-    if (!hasDocs && !hasReference) {
+    if (!hasContent) {
       styles.info(`We couldn't find a ${styles.bold('/docs')} or ${styles.bold('/reference')} folder.`);
     }
 

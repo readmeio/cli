@@ -1,30 +1,30 @@
-import path from 'node:path';
+import { DEFAULT_SECTIONS } from '../utils/sections.js';
 
 export const name = 'nesting';
 
-// Max folder nesting per top-level content dir. Anything deeper still syncs
-// but won't appear in the sidebar.
+// Max folder nesting per kind of section. Anything deeper still syncs but
+// won't appear in the sidebar.
 //
-// For `docs` and `reference` the category is the first folder and each page
+// For guide and reference sections the category is the first folder and each page
 // level below it adds one, so this is the number of page levels the sidebar
 // renders under a category. It mirrors our publicly documented sidebar levels.
 // Keep in sync with src/dev/lib/docs.js.
 const MAX_DEPTH = {
-  docs: 5,
+  guide: 5,
   reference: 5,
   recipes: 0,
   custom_pages: 0,
   custom_blocks: 0,
 };
 
-export function validateAll(files) {
+export function validateAll(files, _gitRoot, { sections = DEFAULT_SECTIONS } = {}) {
   const results = [];
   const seen = new Set();
 
   for (const relPath of files) {
     const parts = relPath.split('/');
     const topDir = parts[0];
-    const max = MAX_DEPTH[topDir];
+    const max = MAX_DEPTH[sections.kindOf(topDir)];
     if (max === undefined) continue;
 
     // Depth = number of folders between the top dir and the file.

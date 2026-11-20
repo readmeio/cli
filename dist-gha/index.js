@@ -69219,6 +69219,14 @@ __nccwpck_require__.d(components_namespaceObject, {
   validateAll: () => (validateAll)
 });
 
+// NAMESPACE OBJECT: ./src/validators/config.js
+var config_namespaceObject = {};
+__nccwpck_require__.r(config_namespaceObject);
+__nccwpck_require__.d(config_namespaceObject, {
+  name: () => (config_name),
+  validateAll: () => (config_validateAll)
+});
+
 // NAMESPACE OBJECT: ./src/validators/content.js
 var content_namespaceObject = {};
 __nccwpck_require__.r(content_namespaceObject);
@@ -69279,7 +69287,6 @@ __nccwpck_require__.d(oas_schema_namespaceObject, {
 var ordering_namespaceObject = {};
 __nccwpck_require__.r(ordering_namespaceObject);
 __nccwpck_require__.d(ordering_namespaceObject, {
-  CONTENT_DIRS: () => (ordering_CONTENT_DIRS),
   name: () => (ordering_name),
   validateAll: () => (ordering_validateAll)
 });
@@ -73333,7 +73340,267 @@ function toFrontmatter(data, body = '') {
   return body ? `${fence}\n${body}` : fence;
 }
 
+;// CONCATENATED MODULE: ./src/utils/sections.js
+
+
+
+
+
+/**
+ * Sections are the top-level content directories of a ReadMe repo.
+ *
+ * Every project has the built-in ones (`docs`, `reference`, `recipes`,
+ * `custom_pages`). Projects with multiple guides declare more in a
+ * `_readme.yaml` file at the repo root:
+ *
+ *   navigation:
+ *     - kind: guide
+ *       directory: docs
+ *       name: Guides
+ *     - kind: guide
+ *       directory: sdks
+ *       name: SDKs
+ *     - kind: reference
+ *       directory: apis
+ *
+ * The file is optional. A repo without one (every repo from before the
+ * feature) resolves to just the built-ins, exactly as ReadMe itself does.
+ * The rules here mirror the ones ReadMe applies when it reads the file.
+ */
+
+const CONFIG_FILE = '_readme.yaml';
+
+/** Allowed shape for a section `directory`. */
+const SECTION_DIRECTORY_REGEX = /^[a-z0-9][a-z0-9_-]{0,29}$/;
+
+/** Built-in directories, and the one kind each is locked to. */
+const BUILT_IN_KINDS = {
+  changelogs: 'changelog',
+  custom_pages: 'custom_pages',
+  docs: 'guide',
+  recipes: 'recipes',
+  reference: 'reference',
+  skills: 'skill',
+};
+
+/** Kinds a non-built-in directory may declare. */
+const DECLARABLE_KINDS = ['guide', 'reference'];
+
+/** Kinds whose `navigation` entry owns a top-level directory. */
+const DIRECTORY_KINDS = ['guide', 'recipes', 'reference', 'skill'];
+
+/** Kinds that may appear only once, and point at nothing. */
+const SINGLETON_KINDS = ['changelog', 'discuss', 'home', 'version'];
+
+/** Directories that can never be declared as a section. */
+const RESERVED_DIRECTORIES = new Set([
+  // Owned by ReadMe's storage.
+  'custom_blocks',
+  'llms_txt',
+  'apidefinition',
+  'api_config',
+  // `docs` is served at /guides, so a directory of that name would collide.
+  'guides',
+  // URL segments the hub routes itself.
+  'admin',
+  'api',
+  'auth',
+  'blog',
+  'chatgpt',
+  'comments',
+  'custom-login',
+  'dash',
+  'discuss',
+  'discuss-new',
+  'edit',
+  'graphql',
+  'inactive',
+  'login',
+  'login-webhook',
+  'logout',
+  'logs',
+  'mcp',
+  'oauth',
+  'oauth2-redirect',
+  'og-image',
+  'openapi',
+  'password',
+  'reference-link',
+  'suggested-edits',
+  'throw-error',
+  'unvalidated',
+]);
+
+// The sections the CLI has always handled, in the order it lists them.
+const BUILT_IN_SECTIONS = [
+  { directory: 'docs', kind: 'guide', label: 'Docs' },
+  { directory: 'reference', kind: 'reference', label: 'Reference' },
+  { directory: 'custom_pages', kind: 'custom_pages', label: 'Custom Pages' },
+  { directory: 'recipes', kind: 'recipes', label: 'Recipes' },
+];
+
+// What ReadMe calls a built-in section that `_readme.yaml` lists without a name.
+const DEFAULT_SECTION_NAMES = {
+  docs: 'Guides',
+  reference: 'API Reference',
+  recipes: 'Recipes',
+  custom_pages: 'Custom Pages',
+};
+
+function isBuiltInDirectory(directory) {
+  return Object.hasOwn(BUILT_IN_KINDS, directory);
+}
+
+/** Whether a directory could be declared as a section of its own. */
+function isDeclarableDirectory(directory) {
+  return (
+    typeof directory === 'string' &&
+    SECTION_DIRECTORY_REGEX.test(directory) &&
+    !isBuiltInDirectory(directory) &&
+    !RESERVED_DIRECTORIES.has(directory)
+  );
+}
+
+/**
+ * Parse `_readme.yaml` content the way ReadMe does: core YAML types only, so a
+ * directory called `2026-07-31` stays a string rather than becoming a date.
+ *
+ * @returns {{ config: object | null, error: string | null }}
+ */
+function parseConfig(content) {
+  let parsed;
+  try {
+    parsed = load(content, { json: true, schema: CORE_SCHEMA });
+  } catch (err) {
+    return { config: null, error: err.reason || err.message || 'invalid YAML' };
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { config: null, error: 'must be a YAML object' };
+  }
+  return { config: parsed, error: null };
+}
+
+class Sections {
+  constructor({ exists, config, error, list, order }) {
+    /** Whether the repo has a `_readme.yaml`. */
+    this.exists = exists;
+    /** The parsed file, or null when it's missing or unreadable. */
+    this.config = config;
+    /** Why the file couldn't be parsed, or null. */
+    this.error = error;
+    this.list = list;
+    /** Directories in the order `_readme.yaml` lists them, the rest after. */
+    this.order = [...new Set([...(order || []), ...list.map(section => section.directory)])];
+    this.byDirectory = new Map(list.map(section => [section.directory, section]));
+  }
+
+  /** The kind of a top-level directory, or undefined when it isn't a section. */
+  kindOf(directory) {
+    if (directory === 'custom_blocks') return 'custom_blocks';
+    return this.byDirectory.get(directory)?.kind;
+  }
+
+  /** Every directory that holds pages: the built-ins plus the declared ones. */
+  directories() {
+    return this.list.map(section => section.directory);
+  }
+
+  /** The directories of the given kind(s), e.g. every API reference. */
+  directoriesOfKind(...kinds) {
+    return this.list.filter(section => kinds.includes(section.kind)).map(section => section.directory);
+  }
+
+  /** The directories declared in `_readme.yaml` on top of the built-ins. */
+  declaredDirectories() {
+    return this.list.filter(section => !section.builtIn).map(section => section.directory);
+  }
+}
+
+/**
+ * The API reference directories that exist in a repo: `reference`, plus any
+ * section `_readme.yaml` declares with the `reference` kind.
+ */
+function findReferenceDirs(gitRoot, sections = loadSections(gitRoot)) {
+  return sections.directoriesOfKind('reference').filter(directory => {
+    try {
+      return external_node_fs_namespaceObject.statSync(external_node_path_namespaceObject.join(gitRoot, directory)).isDirectory();
+    } catch {
+      return false;
+    }
+  });
+}
+
+/** The sections of a repo with no `_readme.yaml`. */
+const DEFAULT_SECTIONS = new Sections({
+  exists: false,
+  config: null,
+  error: null,
+  list: BUILT_IN_SECTIONS.map(section => ({ ...section, builtIn: true, hidden: false })),
+});
+
+/**
+ * Resolve a repo's sections from its `_readme.yaml`.
+ *
+ * Never throws: a missing, unparseable, or partly invalid file still resolves
+ * (to the built-ins, plus whichever declared sections are usable), so one bad
+ * entry doesn't stop the rest of the repo from being linted. Reporting what's
+ * wrong with the file is the `config` validator's job.
+ */
+function loadSections(gitRoot) {
+  const configPath = external_node_path_namespaceObject.join(gitRoot, CONFIG_FILE);
+
+  let content;
+  try {
+    // `readFile` follows a symlink, and a linked config could declare sections
+    // from a file outside the repo. Like every other linked path, it's refused.
+    if (external_node_fs_namespaceObject.lstatSync(configPath).isSymbolicLink()) {
+      return new Sections({
+        exists: true,
+        config: null,
+        error: 'symbolic links are not followed',
+        list: BUILT_IN_SECTIONS.map(section => ({ ...section, builtIn: true, hidden: false })),
+      });
+    }
+    content = external_node_fs_namespaceObject.readFileSync(configPath, 'utf-8');
+  } catch {
+    return DEFAULT_SECTIONS;
+  }
+
+  const { config, error } = parseConfig(content);
+  const navigation = Array.isArray(config?.navigation) ? config.navigation : [];
+
+  const list = BUILT_IN_SECTIONS.map(section => ({ ...section, builtIn: true, hidden: false }));
+  const byDirectory = new Map(list.map(section => [section.directory, section]));
+  const order = [];
+
+  for (const entry of navigation) {
+    if (!entry || typeof entry !== 'object' || typeof entry.directory !== 'string') continue;
+    const { directory, kind } = entry;
+    const name = typeof entry.name === 'string' && entry.name ? entry.name : null;
+
+    const builtIn = byDirectory.get(directory);
+    if (builtIn?.builtIn) {
+      // A built-in keeps its kind whatever the file says; only its label and
+      // visibility are the file's to set.
+      builtIn.label = name || DEFAULT_SECTION_NAMES[directory];
+      builtIn.hidden = entry.hidden === true;
+      if (!order.includes(directory)) order.push(directory);
+      continue;
+    }
+
+    if (builtIn || !isDeclarableDirectory(directory) || !DECLARABLE_KINDS.includes(kind)) continue;
+
+    const section = { directory, kind, label: name || directory, builtIn: false, hidden: entry.hidden === true };
+    list.push(section);
+    byDirectory.set(directory, section);
+    order.push(directory);
+  }
+
+  return new Sections({ exists: true, config, error, list, order });
+}
+
 ;// CONCATENATED MODULE: ./src/validators/components.js
+
 
 
 
@@ -73374,9 +73641,6 @@ const BUILTIN_COMPONENTS = new Set([
   'TailwindStyle',
   'TutorialTile',
 ]);
-
-// Directories that can contain MDXish content with component references.
-const CONTENT_DIRS = new Set(['docs', 'reference', 'custom_pages', 'recipes']);
 
 /**
  * Extract component tag names from MDXish content.
@@ -73526,14 +73790,16 @@ function validate({ content, relativePath }) {
 /**
  * Cross-file: check that all component references in content files resolve.
  */
-function validateAll(files, gitRoot) {
+function validateAll(files, gitRoot, { sections = loadSections(gitRoot) } = {}) {
   const results = [];
+  // Every section can contain MDXish content with component references.
+  const contentDirs = new Set(sections.directories());
   const customBlocks = collectCustomBlockNames(gitRoot);
   const available = new Set([...BUILTIN_COMPONENTS, ...customBlocks]);
 
   for (const relPath of files) {
     const dir = relPath.split('/')[0];
-    if (!CONTENT_DIRS.has(dir)) continue;
+    if (!contentDirs.has(dir)) continue;
     if (!relPath.endsWith('.md')) continue;
 
     const filePath = external_node_path_namespaceObject.join(gitRoot, relPath);
@@ -73561,7 +73827,246 @@ function validateAll(files, gitRoot) {
   return results;
 }
 
+;// CONCATENATED MODULE: ./src/validators/config.js
+
+
+
+
+
+const config_name = 'config';
+
+// Fields every `navigation` entry may carry, plus the one its kind points at.
+const COMMON_KEYS = ['kind', 'name', 'hidden', 'icon'];
+// The fields that say what an entry points at. Each belongs to certain kinds.
+const TARGET_KEYS = ['directory', 'slug', 'url'];
+// Custom pages are markdown or raw HTML.
+const CUSTOM_PAGE_EXTENSIONS = ['md', 'mdx', 'html'];
+const KNOWN_KINDS = [...DIRECTORY_KINDS, ...SINGLETON_KINDS, 'custom_pages', 'url'];
+
+function targetKeyFor(kind) {
+  if (DIRECTORY_KINDS.includes(kind)) return 'directory';
+  if (kind === 'custom_pages') return 'slug';
+  if (kind === 'url') return 'url';
+  return null;
+}
+
+function isAbsoluteUrl(value) {
+  try {
+    return Boolean(new URL(value).protocol);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Top-level folders that are laid out like a section (they have an
+ * `_order.yaml`) but that ReadMe doesn't know about, because nothing in
+ * `_readme.yaml` declares them.
+ */
+function findUndeclaredSections(gitRoot, sections) {
+  let entries;
+  try {
+    entries = external_node_fs_namespaceObject.readdirSync(gitRoot, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const known = new Set(sections.directories());
+  return entries
+    .filter(entry => entry.isDirectory())
+    .map(entry => entry.name)
+    .filter(directory => !known.has(directory) && !isBuiltInDirectory(directory))
+    .filter(directory => !RESERVED_DIRECTORIES.has(directory) && SECTION_DIRECTORY_REGEX.test(directory))
+    .filter(directory => external_node_fs_namespaceObject.existsSync(external_node_path_namespaceObject.join(gitRoot, directory, '_order.yaml')))
+    .sort();
+}
+
+/**
+ * Validate `_readme.yaml`, the optional file that declares a project's
+ * navigation and any sections beyond the built-in ones.
+ *
+ * A repo without the file is fine: it's how every repo looked before multiple
+ * guides, and ReadMe falls back to the built-in sections.
+ *
+ * The checks mirror the ones ReadMe runs when the file is saved from the
+ * dashboard. A file that arrives through git sync skips some of those (a
+ * reserved or duplicated directory, a built-in declared as the wrong kind), so
+ * this is the only place they get caught.
+ *
+ * One deliberate difference: ReadMe ignores the whole file when it holds a
+ * property or kind it doesn't recognize, but the format can grow ahead of this
+ * CLI, so anything this version merely doesn't know is a warning, not an error.
+ */
+function config_validateAll(_files, gitRoot, { sections = loadSections(gitRoot) } = {}) {
+  const results = [];
+  const error = message => results.push({ file: CONFIG_FILE, rule: config_name, severity: 'error', message });
+  const warning = message => results.push({ file: CONFIG_FILE, rule: config_name, severity: 'warning', message });
+
+  for (const directory of findUndeclaredSections(gitRoot, sections)) {
+    results.push({
+      file: directory,
+      rule: config_name,
+      severity: 'warning',
+      message: sections.exists
+        ? `Undeclared section: "${directory}" has an _order.yaml but isn't declared in ${CONFIG_FILE}, so ReadMe will ignore it`
+        : `Undeclared section: "${directory}" has an _order.yaml but there's no ${CONFIG_FILE} declaring it, so ReadMe will ignore it`,
+    });
+  }
+
+  if (!sections.exists) return results;
+
+  if (sections.error) {
+    error(`Invalid ${CONFIG_FILE}: ${sections.error}`);
+    return results;
+  }
+
+  const { config } = sections;
+
+  for (const key of Object.keys(config)) {
+    if (key !== 'navigation') {
+      warning(
+        `Unknown property: "${key}" isn't recognized by this version of the CLI (if ReadMe doesn't recognize it either, it ignores the whole file)`,
+      );
+    }
+  }
+
+  // ReadMe reads a file with no `navigation` as an empty one.
+  if (config.navigation === undefined || config.navigation === null) return results;
+
+  // ...and one whose `navigation` isn't a list the same way, which is never
+  // what was meant.
+  if (!Array.isArray(config.navigation)) {
+    warning('Invalid navigation: "navigation" must be a list (ReadMe treats anything else as empty)');
+    return results;
+  }
+
+  const directories = new Set();
+  const customPageSlugs = new Set();
+  const singletons = new Set();
+
+  config.navigation.forEach((entry, index) => {
+    const where = `navigation[${index}]`;
+
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      error(`Invalid entry: ${where} must be an object with a "kind"`);
+      return;
+    }
+
+    const { kind } = entry;
+    if (typeof kind !== 'string' || !kind) {
+      error(`Invalid entry: ${where} is missing a "kind"`);
+      return;
+    }
+    if (!KNOWN_KINDS.includes(kind)) {
+      warning(
+        `Unknown kind: "${kind}" (${where}) isn't recognized by this version of the CLI (if ReadMe doesn't recognize it either, it ignores the whole file)`,
+      );
+      return;
+    }
+
+    const targetKey = targetKeyFor(kind);
+    const allowed = targetKey ? [...COMMON_KEYS, targetKey] : COMMON_KEYS;
+    for (const key of Object.keys(entry)) {
+      if (allowed.includes(key)) continue;
+      if (TARGET_KEYS.includes(key)) {
+        // A real field, on a kind that can't carry it. ReadMe rejects the file.
+        error(`Invalid entry: a "${kind}" entry can't have a "${key}" (${where})`);
+      } else {
+        warning(
+          `Unknown property: "${key}" on a "${kind}" entry (${where}) isn't recognized by this version of the CLI (if ReadMe doesn't recognize it either, it ignores the whole file)`,
+        );
+      }
+    }
+
+    if (entry.name !== undefined && entry.name !== null && (typeof entry.name !== 'string' || !entry.name)) {
+      error(`Invalid entry: "name" must be a non-empty string (${where})`);
+    }
+    if (entry.hidden !== undefined && entry.hidden !== null && typeof entry.hidden !== 'boolean') {
+      error(`Invalid entry: "hidden" must be true or false (${where})`);
+    }
+    if (entry.icon !== undefined && entry.icon !== null && typeof entry.icon !== 'string') {
+      error(`Invalid entry: "icon" must be a string (${where})`);
+    }
+
+    if (kind === 'custom_pages') {
+      const { slug } = entry;
+      if (typeof slug === 'number' || typeof slug === 'boolean') {
+        // YAML reads a bare `404` or `true` as a number or boolean, not a slug.
+        error(`Invalid entry: ${slug} must be wrapped in quotes to be used as a slug (${where})`);
+      } else if (typeof slug !== 'string' || !slug) {
+        error(`Invalid entry: a "custom_pages" entry needs a "slug" (${where})`);
+      } else if (customPageSlugs.has(slug)) {
+        error(`Duplicate entry: the "${slug}" custom page is listed more than once`);
+      } else {
+        customPageSlugs.add(slug);
+        const exists = CUSTOM_PAGE_EXTENSIONS.some(ext =>
+          external_node_fs_namespaceObject.existsSync(external_node_path_namespaceObject.join(gitRoot, 'custom_pages', `${slug}.${ext}`)),
+        );
+        if (!exists) {
+          warning(`Missing page: "${slug}" is in the navigation but there's no custom_pages/${slug}.md (or .html)`);
+        }
+      }
+      return;
+    }
+
+    if (kind === 'url') {
+      if (typeof entry.url !== 'string' || !isAbsoluteUrl(entry.url)) {
+        error(`Invalid entry: a "url" entry needs an absolute "url" (${where})`);
+      }
+      return;
+    }
+
+    if (SINGLETON_KINDS.includes(kind)) {
+      if (singletons.has(kind)) error(`Duplicate entry: a "${kind}" entry may only appear once`);
+      singletons.add(kind);
+      return;
+    }
+
+    // What's left owns a top-level directory.
+    const { directory } = entry;
+    if (typeof directory === 'number' || typeof directory === 'boolean') {
+      // YAML reads a bare `2026` or `true` as a number or boolean, not a name.
+      error(`Invalid directory: ${directory} must be wrapped in quotes to be used as a directory (${where})`);
+      return;
+    }
+    if (typeof directory !== 'string' || !directory) {
+      error(`Invalid entry: a "${kind}" entry needs a "directory" (${where})`);
+      return;
+    }
+    if (directories.has(directory)) {
+      error(`Duplicate section: the "${directory}" directory is declared more than once`);
+      return;
+    }
+    directories.add(directory);
+
+    if (!SECTION_DIRECTORY_REGEX.test(directory)) {
+      error(
+        `Invalid directory: "${directory}" must be 1-30 characters of lowercase letters, numbers, "-" or "_", and start with a letter or number`,
+      );
+      return;
+    }
+    if (RESERVED_DIRECTORIES.has(directory)) {
+      error(`Reserved directory: "${directory}" can't be used as a section`);
+      return;
+    }
+
+    const builtInKind = BUILT_IN_KINDS[directory];
+    if (builtInKind !== undefined) {
+      if (kind !== builtInKind) {
+        error(`Invalid kind: the "${directory}" directory must use the "${builtInKind}" kind, not "${kind}"`);
+      }
+      return;
+    }
+    if (!DECLARABLE_KINDS.includes(kind)) {
+      error(`Invalid kind: "${directory}" must be one of ${DECLARABLE_KINDS.join(' or ')}, not "${kind}"`);
+    }
+  });
+
+  return results;
+}
+
 ;// CONCATENATED MODULE: ./src/validators/content.js
+
 
 
 
@@ -73569,9 +74074,12 @@ function validateAll(files, gitRoot) {
 
 const content_name = 'content';
 
-function content_validate({ filePath, content, relativePath }) {
-  const dir = relativePath.split('/')[0];
-  if (!['docs', 'reference', 'custom_pages'].includes(dir)) return null;
+// Kinds of section whose pages are expected to have a body.
+const CHECKED_KINDS = ['guide', 'reference', 'custom_pages'];
+
+function content_validate({ filePath, content, relativePath, sections = DEFAULT_SECTIONS }) {
+  const topDir = relativePath.split('/')[0];
+  if (!CHECKED_KINDS.includes(sections.kindOf(topDir))) return null;
   if (!relativePath.endsWith('.md')) return null;
 
   const { data, content: body } = parseFrontmatter(content);
@@ -73640,19 +74148,20 @@ function slugForEntry(relPath) {
 
 
 
+
 const duplicates_name = 'duplicates';
 
-// Only docs and reference require unique slugs.
-const CHECKED_DIRS = ['docs', 'reference'];
+// Only guide and reference sections require unique slugs.
+const duplicates_CHECKED_KINDS = ['guide', 'reference'];
 
-function duplicates_validateAll(files) {
+function duplicates_validateAll(files, _gitRoot, { sections = DEFAULT_SECTIONS } = {}) {
   const results = [];
 
   // Group files by "<topDir>:<slug>" so slugs only collide within the same section.
   const slugMap = new Map();
   for (const relPath of files) {
     const topDir = relPath.split('/')[0];
-    if (!CHECKED_DIRS.includes(topDir)) continue;
+    if (!duplicates_CHECKED_KINDS.includes(sections.kindOf(topDir))) continue;
 
     const slug = slugForEntry(relPath);
     const key = `${topDir}:${slug}`;
@@ -73691,6 +74200,7 @@ var ajv = __nccwpck_require__(2463);
 ;// CONCATENATED MODULE: ./vendor/git-format/frontmatter.schema.json
 const frontmatter_schema_namespaceObject = /*#__PURE__*/JSON.parse('{"yL":[{"title":"Page","description":"This is the shape for files within the `docs/` directory.","$ref":"#/defs/filetype-page"},{"title":"Custom Page","description":"This is the shape for files within the `custom_pages/` directory.","allOf":[{"$ref":"#/defs/common-page"},{"type":"object","properties":{"fullscreen":{"type":["boolean","null"]}}}],"required":["title"],"not":{"type":"object","properties":{"deprecated":{"type":"boolean"}},"description":"Custom pages have everything that a common page has except that they can\'t be deprecated."}},{"title":"API Reference","description":"This is the shape for files within the `reference/` directory.","allOf":[{"$ref":"#/defs/filetype-page"},{"type":"object","properties":{"api":{"anyOf":[{"type":"object","properties":{"file":{"type":"string"},"operationId":{"type":"string"},"webhook":{"type":["boolean","null"]}},"required":["file","operationId"]},{"type":"null"}],"description":"Information about the API operation that this page is documenting. Setting this to `null` will detach it from the API operation and make it a standard page."},"api_config":{"anyOf":[{"type":"string","enum":["authentication","getting-started","my-requests"]},{"type":"null"}],"description":"Describes a Reference config page of a particular type."},"recipes":{"anyOf":[{"type":"array","items":{"type":"string"}},{"type":"null"}],"description":"A collection of recipes that are related to this API operation."}}}]},{"title":"Recipe","description":"This is the shape for files within the `recipes/` directory.","allOf":[{"$ref":"#/defs/core"},{"type":"object","properties":{"description":{"type":["string","null"]},"recipe":{"type":"object","properties":{"color":{"type":"string","pattern":"^#[0-9A-Fa-f]{6}$"},"icon":{"type":"string"}},"required":["color","icon"]}}}],"required":["title","recipe"]},{"title":"Custom Block","description":"This is the shape for custom blocks in the `custom_blocks/` directory.","type":"object","properties":{"name":{"type":["string","null"]}},"required":["name"]}],"$B":{"core":{"title":"Core properties that are available on all file types.","type":"object","properties":{"hidden":{"type":["boolean","null"]},"title":{"type":"string"}}},"metadata":{"title":"Properties that control file metadata.","type":"object","properties":{"description":{"type":["string","null"]},"image":{"type":["string","null"]},"keywords":{"anyOf":[{"type":"array","items":{"type":"string"}},{"type":"null"}]},"robots":{"anyOf":[{"type":"string","enum":["index","noindex"]},{"type":"null"}]},"title":{"type":["string","null"],"description":"This is the title that\'s used for SEO metadata."}}},"common-page":{"allOf":[{"$ref":"#/defs/core"},{"type":"object","properties":{"deprecated":{"type":["boolean","null"]},"excerpt":{"type":["string","null"]},"icon":{"type":["string","null"]},"table_of_contents":{"type":["boolean","null"]},"x-import":{"type":["string","null"],"description":"Set during the docs site import flow. This is a link to the external page that needs to be imported and signifies this page has not yet been imported. It is removed once the page content is imported."},"metadata":{"$ref":"#/defs/metadata"},"next":{"type":"object","properties":{"description":{"type":["string","null"]},"pages":{"anyOf":[{"type":"array","items":{"anyOf":[{"type":"object","properties":{"slug":{"type":"string"},"title":{"type":["string","null"]},"type":{"type":"string","enum":["basic","endpoint","changelog","custom_page"]}},"description":"A page within the developer site. Does not support multiguides and is generally deprecated in favor of `type: page`."},{"type":"object","properties":{"slug":{"type":"string"},"directory":{"type":"string","pattern":"^[a-z0-9][a-z0-9_-]{0,29}$","description":"The section directory of the page."},"title":{"type":["string","null"]},"type":{"type":"string","const":"page"}},"description":"A page within the developer site. Multiguides compatible."},{"type":"object","properties":{"title":{"type":["string","null"]},"type":{"type":"string","const":"link"},"url":{"type":"string"}}}]}},{"type":"null"}]}}}}}]},"filetype-page":{"allOf":[{"$ref":"#/defs/common-page"},{"type":"object","properties":{"link":{"anyOf":[{"type":"object","properties":{"new_tab":{"type":["boolean","null"]},"url":{"type":["string","null"]}}},{"type":"null"}],"description":"Information about where this page should redirect to. Setting this to `null` will make the page a standard page."}}}],"required":["title"]}}}');
 ;// CONCATENATED MODULE: ./src/validators/frontmatter.js
+
 
 
 
@@ -73758,27 +74268,28 @@ function collectPropertyNames(schema, defs) {
   return props;
 }
 
-// Map directory names to their index in the schema's oneOf array.
-const DIR_SCHEMA_INDEX = {
-  docs: 0,
+// Map each kind of section to its index in the schema's oneOf array. A declared
+// section's pages use the same frontmatter as the built-in section of its kind.
+const KIND_SCHEMA_INDEX = {
+  guide: 0,
   custom_pages: 1,
   reference: 2,
   recipes: 3,
   custom_blocks: 4,
 };
 
-// Compile a validator for each directory type from the vendored schema.
+// Compile a validator for each kind from the vendored schema.
 const frontmatter_ajv = new ajv({ allErrors: true, strict: false, logger: false, verbose: true });
 
 const validators = {};
 const knownProperties = {};
-for (const [dir, index] of Object.entries(DIR_SCHEMA_INDEX)) {
+for (const [kind, index] of Object.entries(KIND_SCHEMA_INDEX)) {
   const subSchema = { defs: frontmatter_schema_namespaceObject.$B, ...frontmatter_schema_namespaceObject.yL[index] };
-  validators[dir] = frontmatter_ajv.compile(subSchema);
-  knownProperties[dir] = collectPropertyNames(subSchema, frontmatter_schema_namespaceObject.$B);
+  validators[kind] = frontmatter_ajv.compile(subSchema);
+  knownProperties[kind] = collectPropertyNames(subSchema, frontmatter_schema_namespaceObject.$B);
 }
 
-function frontmatter_validate({ content, filePath, relativePath, fix }) {
+function frontmatter_validate({ content, filePath, relativePath, fix, sections = DEFAULT_SECTIONS }) {
   // Step 1: Parse the frontmatter YAML.
   const { data, error } = parseFrontmatter(content);
   if (error) {
@@ -73790,10 +74301,10 @@ function frontmatter_validate({ content, filePath, relativePath, fix }) {
   }
 
   const results = [];
-  const dir = relativePath.split('/')[0];
+  const kind = sections.kindOf(relativePath.split('/')[0]);
 
   // Step 2: Validate the parsed frontmatter against the schema.
-  const validateFn = validators[dir];
+  const validateFn = validators[kind];
   if (validateFn) {
     const valid = validateFn(data);
     if (!valid) {
@@ -73801,7 +74312,7 @@ function frontmatter_validate({ content, filePath, relativePath, fix }) {
         // Reference pages are OAS-backed: title/excerpt come from the spec, so a
         // missing title is not an error for pages that declare an api.file.
         if (
-          dir === 'reference' &&
+          kind === 'reference' &&
           data?.api?.file &&
           err.keyword === 'required' &&
           err.params?.missingProperty === 'title'
@@ -73834,7 +74345,7 @@ function frontmatter_validate({ content, filePath, relativePath, fix }) {
   }
 
   // Step 3: Warn about unknown properties (allow x- prefix for custom metadata).
-  const allowed = knownProperties[dir];
+  const allowed = knownProperties[kind];
   const unknownKeys = [];
   if (allowed && data && typeof data === 'object') {
     for (const key of Object.keys(data)) {
@@ -73951,17 +74462,16 @@ function frontmatter_validate({ content, filePath, relativePath, fix }) {
 
 
 
-const links_name = 'links';
 
-const links_CHECKED_DIRS = ['docs', 'reference', 'custom_pages', 'recipes'];
+const links_name = 'links';
 
 // Match doc:slug and ref:slug links, e.g. [text](doc:my-page) or [text](ref:my-op#anchor)
 const DOC_LINK_RE = /\((?:doc|ref):([a-zA-Z0-9_-]+)(?:#[^)]*)?\)/g;
 
-function collectSlugs(gitRoot) {
+function collectSlugs(gitRoot, dirs) {
   const slugs = new Set();
 
-  for (const dir of links_CHECKED_DIRS) {
+  for (const dir of dirs) {
     const dirPath = external_node_path_namespaceObject.join(gitRoot, dir);
     if (!external_node_fs_namespaceObject.existsSync(dirPath)) continue;
 
@@ -73975,13 +74485,14 @@ function collectSlugs(gitRoot) {
   return slugs;
 }
 
-function links_validateAll(files, gitRoot) {
-  const validSlugs = collectSlugs(gitRoot);
+function links_validateAll(files, gitRoot, { sections = loadSections(gitRoot) } = {}) {
+  const checkedDirs = sections.directories();
+  const validSlugs = collectSlugs(gitRoot, checkedDirs);
   const results = [];
 
   for (const relPath of files) {
     const topDir = relPath.split('/')[0];
-    if (!links_CHECKED_DIRS.includes(topDir)) continue;
+    if (!checkedDirs.includes(topDir)) continue;
     if (!/\.(md|mdx)$/.test(relPath)) continue;
 
     const raw = external_node_fs_namespaceObject.readFileSync(external_node_path_namespaceObject.join(gitRoot, relPath), 'utf-8');
@@ -74009,29 +74520,29 @@ function links_validateAll(files, gitRoot) {
 
 const nesting_name = 'nesting';
 
-// Max folder nesting per top-level content dir. Anything deeper still syncs
-// but won't appear in the sidebar.
+// Max folder nesting per kind of section. Anything deeper still syncs but
+// won't appear in the sidebar.
 //
-// For `docs` and `reference` the category is the first folder and each page
+// For guide and reference sections the category is the first folder and each page
 // level below it adds one, so this is the number of page levels the sidebar
 // renders under a category. It mirrors our publicly documented sidebar levels.
 // Keep in sync with src/dev/lib/docs.js.
 const MAX_DEPTH = {
-  docs: 5,
+  guide: 5,
   reference: 5,
   recipes: 0,
   custom_pages: 0,
   custom_blocks: 0,
 };
 
-function nesting_validateAll(files) {
+function nesting_validateAll(files, _gitRoot, { sections = DEFAULT_SECTIONS } = {}) {
   const results = [];
   const seen = new Set();
 
   for (const relPath of files) {
     const parts = relPath.split('/');
     const topDir = parts[0];
-    const max = MAX_DEPTH[topDir];
+    const max = MAX_DEPTH[sections.kindOf(topDir)];
     if (max === undefined) continue;
 
     // Depth = number of folders between the top dir and the file.
@@ -74225,6 +74736,7 @@ function warning(message) {
 
 
 
+
 const command = 'oas:sync';
 const order = 2;
 const category = 'OAS Tooling';
@@ -74264,6 +74776,19 @@ function findOasFiles(refDir) {
   }
 
   return oasFiles;
+}
+
+/**
+ * Find the OAS files in every reference section of a repo: `reference/`, plus
+ * any section `_readme.yaml` declares with the `reference` kind.
+ *
+ * @returns {Array<{ section: string, refDir: string, filename: string, spec: object }>}
+ */
+function findAllOasFiles(gitRoot, sections) {
+  return findReferenceDirs(gitRoot, sections).flatMap(section => {
+    const refDir = external_node_path_namespaceObject.join(gitRoot, section);
+    return findOasFiles(refDir).map(oasFile => ({ section, refDir, ...oasFile }));
+  });
 }
 
 /**
@@ -75211,49 +75736,55 @@ function syncOneOas(refDir, oasFilename, spec, takenSlugs, assertContained) {
 }
 
 /**
- * Sync reference pages with the OpenAPI spec(s) under `<gitRoot>/reference/`.
+ * Sync reference pages with the OpenAPI spec(s) under `<gitRoot>/reference/`,
+ * and under any other reference section the repo declares in `_readme.yaml`.
  *
  * Pure programmatic API: returns per-file change descriptors and prints
  * nothing. Used by the CLI command, the lint --fix flow, and external
- * callers. Throws `PathEscapeError` if `reference/` contains a symlink
+ * callers. Throws `PathEscapeError` if a reference section contains a symlink
  * (before anything is modified) or a destination would leave it.
  * Callers report that and exit non-zero.
  *
  * @param {string | { cwd?: string }} input  Repo root path, or `{ cwd }` object.
- * @returns {null | Array<{ filename: string, spec: object, opCount: number,
- *   changes: { added: string[], deleted: string[], moved: { from, to }[],
- *   updated: string[], skipped: { path, operationId }[] } }>}
- *   Returns null if there's no reference/ dir or no specs.
+ * @returns {null | Array<{ section: string, filename: string, spec: object,
+ *   opCount: number, changes: { added: string[], deleted: string[],
+ *   moved: { from, to }[], updated: string[], skipped: { path, operationId }[] } }>}
+ *   `section` is the directory the spec lives in, and the paths in `changes`
+ *   are relative to it. Returns null if there's no reference dir or no specs.
  */
 function syncOas(input) {
   const gitRoot = typeof input === 'string' ? input : input?.cwd || process.cwd();
-  const refDir = external_node_path_namespaceObject.join(gitRoot, 'reference');
-  if (!external_node_fs_namespaceObject.existsSync(refDir)) return null;
+  const sections = findReferenceDirs(gitRoot);
 
   // Before the no-spec return and before any write. `findOasFiles` skips
   // symlink specs, so a reference/ whose only spec is a link would otherwise
   // report success and leave pages unsynced. Refusing first also keeps a later
   // real spec from being half-applied, and keeps a link the page walk would
-  // have skipped from being deleted or written through.
-  refuseSymlinks(refDir);
+  // have skipped from being deleted or written through. Every section is
+  // checked before any of them is synced, for the same reason.
+  for (const section of sections) refuseSymlinks(external_node_path_namespaceObject.join(gitRoot, section));
 
-  const oasFiles = findOasFiles(refDir);
-  if (oasFiles.length === 0) return null;
-
-  const assertContained = makeContainment(refDir);
-
-  // Reference slugs share one flat namespace across every spec, so build the set
-  // of in-use slugs once and let each spec read/extend it.
-  const takenSlugs = collectReferenceSlugs(refDir);
   const allChanges = [];
 
-  for (const { filename, spec } of oasFiles) {
-    const ops = extractOperations(spec);
-    const changes = syncOneOas(refDir, filename, spec, takenSlugs, assertContained);
-    allChanges.push({ filename, spec, opCount: ops.size, changes });
+  for (const section of sections) {
+    const refDir = external_node_path_namespaceObject.join(gitRoot, section);
+    const oasFiles = findOasFiles(refDir);
+    if (oasFiles.length === 0) continue;
+
+    const assertContained = makeContainment(refDir);
+
+    // Reference slugs share one flat namespace across every spec in a section,
+    // so build the set of in-use slugs once and let each spec read/extend it.
+    const takenSlugs = collectReferenceSlugs(refDir);
+
+    for (const { filename, spec } of oasFiles) {
+      const ops = extractOperations(spec);
+      const changes = syncOneOas(refDir, filename, spec, takenSlugs, assertContained);
+      allChanges.push({ section, filename, spec, opCount: ops.size, changes });
+    }
   }
 
-  return allChanges;
+  return allChanges.length > 0 ? allChanges : null;
 }
 
 /**
@@ -75265,7 +75796,7 @@ function syncOas(input) {
  * @param {ReturnType<typeof syncOas>} results
  * @returns {{ totalAdded: number, totalDeleted: number, totalMoved: number,
  *   totalUpdated: number, totalSkipped: number,
- *   skipped: Array<{ filename: string, path: string, operationId: string }> }}
+ *   skipped: Array<{ section: string, filename: string, path: string, operationId: string }> }}
  */
 function printSyncResults(results) {
   let totalAdded = 0;
@@ -75275,8 +75806,10 @@ function printSyncResults(results) {
   let totalSkipped = 0;
   const skipped = [];
 
-  for (const { filename, spec, opCount, changes } of results) {
+  for (const { section = 'reference', filename, spec, opCount, changes } of results) {
     const title = spec.info?.title || filename;
+    // Only name the directory when it isn't the one everybody has.
+    const specPath = section === 'reference' ? filename : `${section}/${filename}`;
     const hasChanges =
       changes.added.length +
         changes.deleted.length +
@@ -75288,7 +75821,7 @@ function printSyncResults(results) {
     const dot = hasChanges ? warn('●') : success('●');
     console.log();
     console.log(
-      `  ${dot} ${bold(title)} ${dim(`(${filename} · ${opCount} ${opCount === 1 ? 'endpoint' : 'endpoints'})`)}`,
+      `  ${dot} ${bold(title)} ${dim(`(${specPath} · ${opCount} ${opCount === 1 ? 'endpoint' : 'endpoints'})`)}`,
     );
 
     if (!hasChanges) {
@@ -75309,7 +75842,7 @@ function printSyncResults(results) {
     }
     for (const { path: file, operationId } of changes.skipped) {
       console.log(`    ${warn('!')} Skipped ${file} for "${operationId}" (destination already exists)`);
-      skipped.push({ filename, path: file, operationId });
+      skipped.push({ section, filename, path: file, operationId });
     }
 
     totalAdded += changes.added.length;
@@ -75324,9 +75857,9 @@ function printSyncResults(results) {
 
 async function run(_options, _cmd, ctx) {
   const { gitRoot } = ctx;
-  const refDir = external_node_path_namespaceObject.join(gitRoot, 'reference');
+  const refDirs = findReferenceDirs(gitRoot);
 
-  if (!external_node_fs_namespaceObject.existsSync(refDir)) {
+  if (refDirs.length === 0) {
     error('No reference/ directory found.');
     writeGithubActionsOutputs({
       'added-count': '0',
@@ -75359,7 +75892,7 @@ async function run(_options, _cmd, ctx) {
   }
 
   if (!results) {
-    info('No OpenAPI spec files found in reference/.');
+    info(`No OpenAPI spec files found in ${refDirs.map(dir => `${dir}/`).join(', ')}.`);
     writeGithubActionsOutputs({
       'added-count': '0',
       'deleted-count': '0',
@@ -75421,12 +75954,20 @@ async function run(_options, _cmd, ctx) {
 
 
 
+
 const oas_reference_name = 'oas-reference';
 
-function oas_reference_validateAll(files, gitRoot, { fix } = {}) {
-  const refDir = external_node_path_namespaceObject.join(gitRoot, 'reference');
-  if (!external_node_fs_namespaceObject.existsSync(refDir)) return [];
+function oas_reference_validateAll(files, gitRoot, { fix, sections } = {}) {
+  // Each reference section is checked on its own: a page can only point at a
+  // spec that lives in the same section as it does.
+  const results = findReferenceDirs(gitRoot, sections).flatMap(section => validateSection(files, gitRoot, section));
 
+  applyFixes(results, gitRoot, { fix });
+  return results;
+}
+
+function validateSection(files, gitRoot, section) {
+  const refDir = external_node_path_namespaceObject.join(gitRoot, section);
   const oasFiles = findOasFiles(refDir);
   const results = [];
 
@@ -75438,7 +75979,7 @@ function oas_reference_validateAll(files, gitRoot, { fix } = {}) {
     // Check: `x-readme.internal`, which ReadMe ignores for page visibility.
     for (const location of findIgnoredInternalExtensions(spec)) {
       results.push({
-        file: `reference/${filename}`,
+        file: `${section}/${filename}`,
         rule: oas_reference_name,
         severity: 'warning',
         message: `"x-readme.internal" is ignored by ReadMe (${location}); use "x-internal" instead to hide pages`,
@@ -75448,7 +75989,7 @@ function oas_reference_validateAll(files, gitRoot, { fix } = {}) {
   }
 
   // Collect all reference pages with api frontmatter.
-  const refPages = files.filter(f => f.startsWith('reference/') && f.endsWith('.md'));
+  const refPages = files.filter(f => f.startsWith(`${section}/`) && f.endsWith('.md'));
 
   for (const relPath of refPages) {
     const filePath = external_node_path_namespaceObject.join(gitRoot, relPath);
@@ -75465,7 +76006,7 @@ function oas_reference_validateAll(files, gitRoot, { fix } = {}) {
       results.push({
         file: relPath,
         rule: oas_reference_name,
-        message: `OAS file not found: "${oasFilename}" does not exist in reference/`,
+        message: `OAS file not found: "${oasFilename}" does not exist in ${section}/`,
         fixable: false,
       });
       continue;
@@ -75498,7 +76039,7 @@ function oas_reference_validateAll(files, gitRoot, { fix } = {}) {
     for (const op of ops.values()) {
       if (!coveredOps.has(operationKey(op))) {
         results.push({
-          file: `reference/${oasFilename}`,
+          file: `${section}/${oasFilename}`,
           rule: oas_reference_name,
           severity: 'warning',
           message: `Missing page: no reference page found for operation "${op.operationId}"`,
@@ -75508,6 +76049,10 @@ function oas_reference_validateAll(files, gitRoot, { fix } = {}) {
     }
   }
 
+  return results;
+}
+
+function applyFixes(results, gitRoot, { fix }) {
   // Apply fixes by running the full sync — but only when something reported
   // is actually fixable. The sync adds, deletes, moves, hides and reorders
   // reference files, which is far too much to do on the strength of an
@@ -75533,8 +76078,6 @@ function oas_reference_validateAll(files, gitRoot, { fix } = {}) {
       });
     }
   }
-
-  return results;
 }
 
 ;// CONCATENATED MODULE: ./node_modules/oas-normalize/dist/chunk-45XXAYDL.js
@@ -92042,14 +92585,11 @@ function findBadRefs(obj, pointer = '') {
   return issues;
 }
 
-async function oas_schema_validateAll(files, gitRoot) {
-  const refDir = external_node_path_namespaceObject.join(gitRoot, 'reference');
-  if (!external_node_fs_namespaceObject.existsSync(refDir)) return [];
-
-  const oasFiles = findOasFiles(refDir);
+async function oas_schema_validateAll(files, gitRoot, { sections } = {}) {
+  const oasFiles = findAllOasFiles(gitRoot, sections);
   const results = [];
 
-  for (const { filename, spec } of oasFiles) {
+  for (const { section, refDir, filename, spec } of oasFiles) {
     const filePath = external_node_path_namespaceObject.join(refDir, filename);
     const raw = external_node_fs_namespaceObject.readFileSync(filePath, 'utf-8');
 
@@ -92085,7 +92625,7 @@ async function oas_schema_validateAll(files, gitRoot) {
       if (!result.valid) {
         for (const err of result.errors) {
           results.push({
-            file: `reference/${filename}`,
+            file: `${section}/${filename}`,
             rule: oas_schema_name,
             message: err.message,
           });
@@ -92094,7 +92634,7 @@ async function oas_schema_validateAll(files, gitRoot) {
 
       for (const warn of result.warnings) {
         results.push({
-          file: `reference/${filename}`,
+          file: `${section}/${filename}`,
           rule: oas_schema_name,
           severity: 'warning',
           message: warn.message,
@@ -92102,7 +92642,7 @@ async function oas_schema_validateAll(files, gitRoot) {
       }
     } catch (err) {
       results.push({
-        file: `reference/${filename}`,
+        file: `${section}/${filename}`,
         rule: oas_schema_name,
         message: err.message || String(err),
       });
@@ -92111,7 +92651,7 @@ async function oas_schema_validateAll(files, gitRoot) {
     // Check for malformed $ref pointers (oas-normalize doesn't catch these).
     for (const { path: refPath, ref } of findBadRefs(spec)) {
       results.push({
-        file: `reference/${filename}`,
+        file: `${section}/${filename}`,
         rule: oas_schema_name,
         message: `Malformed $ref: "${ref}" at ${refPath} (should start with "#/")`,
       });
@@ -92127,15 +92667,13 @@ async function oas_schema_validateAll(files, gitRoot) {
 
 
 
+
 const ordering_name = 'ordering';
 
-// Top-level content directories that use _order.yaml.
-const ordering_CONTENT_DIRS = ['docs', 'reference', 'recipes', 'custom_pages'];
-
-// Of those, the dirs that must list every page/folder. reference ordering is
-// OAS-managed, so we never flag pages "missing from" a reference _order.yaml —
-// but stale entries are flagged everywhere.
-const REQUIRE_ORDER = new Set(['docs', 'recipes', 'custom_pages']);
+// Every section uses _order.yaml, but not every kind has to list each
+// page/folder: reference ordering is OAS-managed, so we never flag pages
+// "missing from" a reference _order.yaml — stale entries are flagged everywhere.
+const REQUIRE_ORDER = new Set(['guide', 'recipes', 'custom_pages']);
 
 // Values that YAML interprets as non-strings and need quoting in _order.yaml.
 const ordering_YAML_UNSAFE = /^(?:\d+\.?\d*|true|false|yes|no|on|off|null|~)$/i;
@@ -92224,12 +92762,12 @@ function collectDirs(gitRoot, topDir, assertContained) {
  *   - in _order.yaml but missing on disk     → "Stale entry"
  *   - an index entry that shouldn't be listed → "Invalid entry"
  */
-function ordering_validateAll(files, gitRoot, { fix } = {}) {
+function ordering_validateAll(files, gitRoot, { fix, sections = loadSections(gitRoot) } = {}) {
   const assertContained = makeContainment(gitRoot, { label: 'repository' });
   const results = [];
 
-  for (const topDir of ordering_CONTENT_DIRS) {
-    const requireOrder = REQUIRE_ORDER.has(topDir);
+  for (const topDir of sections.directories()) {
+    const requireOrder = REQUIRE_ORDER.has(sections.kindOf(topDir));
 
     for (const { dir, onDisk, orderEntries, refused } of collectDirs(gitRoot, topDir, assertContained)) {
       const orderPath = external_node_path_namespaceObject.join(dir, '_order.yaml');
@@ -92518,21 +93056,23 @@ function recipes_validate({ content, relativePath }) {
 
 
 
-const TARGET_PATTERNS = [
-  { dir: 'custom_blocks', ext: ['.mdx', '.md'] },
-  { dir: 'docs', ext: '.md' },
-  { dir: 'reference', ext: '.md' },
-  { dir: 'custom_pages', ext: '.md' },
-  { dir: 'recipes', ext: '.md' },
-];
+
+
+/**
+ * The directories lint reads: custom blocks, the built-in sections, and any
+ * section the repo declares in `_readme.yaml`.
+ */
+function targetPatterns(sections) {
+  return [{ dir: 'custom_blocks', ext: ['.mdx', '.md'] }, ...sections.directories().map(dir => ({ dir, ext: '.md' }))];
+}
 
 /**
  * Collect all target files from the repo root.
  */
-function collectFiles(gitRoot) {
+function collectFiles(gitRoot, sections = loadSections(gitRoot)) {
   const files = [];
 
-  for (const { dir, ext } of TARGET_PATTERNS) {
+  for (const { dir, ext } of targetPatterns(sections)) {
     const dirPath = external_node_path_namespaceObject.join(gitRoot, dir);
     // `readdir` follows a symlink at `dirPath`. A linked content root is not a
     // directory this walk lists; `lstat` is what sees the link. ordering
@@ -92565,6 +93105,7 @@ function collectFiles(gitRoot) {
 // import above and its module here.
 const ALL_VALIDATORS = [
   components_namespaceObject,
+  config_namespaceObject,
   content_namespaceObject,
   duplicates_namespaceObject,
   frontmatter_namespaceObject,
@@ -92591,13 +93132,14 @@ function loadValidators() {
  */
 async function runValidators(files, gitRoot, { onFile, onBeforeCrossFile, fix, nonInteractive } = {}) {
   const validators = await loadValidators();
+  const sections = loadSections(gitRoot);
   const results = [];
   const assertContained = makeContainment(gitRoot, { label: 'repository' });
-  // ordering refuses a linked docs/reference/recipes/custom_pages root.
-  // collectFiles skips every linked root, so a root ordering does not walk
-  // (custom_blocks) would otherwise lint as a clean repository.
-  const orderedRoots = new Set(ordering_CONTENT_DIRS);
-  for (const { dir } of TARGET_PATTERNS) {
+  // ordering refuses a linked section root (docs, reference, a declared
+  // section, ...). collectFiles skips every linked root, so a root ordering
+  // does not walk (custom_blocks) would otherwise lint as a clean repository.
+  const orderedRoots = new Set(sections.directories());
+  for (const { dir } of targetPatterns(sections)) {
     if (orderedRoots.has(dir)) continue;
     try {
       assertContained(external_node_path_namespaceObject.join(gitRoot, dir));
@@ -92645,7 +93187,7 @@ async function runValidators(files, gitRoot, { onFile, onBeforeCrossFile, fix, n
 
     for (const validator of validators) {
       if (!validator.validate) continue;
-      const result = validator.validate({ filePath, content, relativePath, fix });
+      const result = validator.validate({ filePath, content, relativePath, fix, sections });
       if (result) {
         if (Array.isArray(result)) {
           results.push(...result);
@@ -92660,7 +93202,7 @@ async function runValidators(files, gitRoot, { onFile, onBeforeCrossFile, fix, n
   if (onBeforeCrossFile) onBeforeCrossFile();
   for (const validator of validators) {
     if (!validator.validateAll) continue;
-    const result = await validator.validateAll(admitted, gitRoot, { fix, nonInteractive });
+    const result = await validator.validateAll(admitted, gitRoot, { fix, nonInteractive, sections });
     if (result) {
       if (Array.isArray(result)) {
         results.push(...result);
@@ -96006,6 +96548,7 @@ function getRandomTip(context) {
 
 
 
+
 const isRunningInClaude = !!process.env.CLAUDECODE;
 
 const CATEGORY_LABELS = {
@@ -96245,10 +96788,19 @@ function createGithubReporter() {
       const baseSha = process.env.GITHUB_BASE_SHA;
       if (baseSha && gitRoot) {
         try {
-          const changed = (0,external_node_child_process_namespaceObject.execSync)(
-            `git diff --name-only ${baseSha}..HEAD -- 'reference/*.json' 'reference/*.yaml' 'reference/*.yml'`,
-            { cwd: gitRoot, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
-          ).trim();
+          // Section directories are limited to [a-z0-9_-], so they're safe to
+          // interpolate into the command.
+          const pathspecs = findReferenceDirs(gitRoot)
+            .flatMap(dir => ['json', 'yaml', 'yml'].map(ext => `'${dir}/*.${ext}'`))
+            .join(' ');
+          // With no pathspec git would list every changed file, so skip the diff.
+          const changed = pathspecs
+            ? (0,external_node_child_process_namespaceObject.execSync)(`git diff --name-only ${baseSha}..HEAD -- ${pathspecs}`, {
+                cwd: gitRoot,
+                encoding: 'utf-8',
+                stdio: ['pipe', 'pipe', 'pipe'],
+              }).trim()
+            : '';
 
           if (changed) {
             const files = changed.split('\n');
@@ -96385,6 +96937,7 @@ async function lint_run(options, _cmd, ctx) {
 
 
 
+
 const oas_validate_command = 'oas:validate';
 const oas_validate_order = 3;
 const oas_validate_category = 'OAS Tooling';
@@ -96437,8 +96990,9 @@ const RULES = {
 };
 
 /**
- * Validate all OAS files under `<gitRoot>/reference/`. Pure programmatic API:
- * returns per-file results without printing or exiting.
+ * Validate all OAS files under `<gitRoot>/reference/`, and under any other
+ * reference section the repo declares in `_readme.yaml`. Pure programmatic
+ * API: returns per-file results without printing or exiting.
  *
  * @param {object}  [opts]
  * @param {string}  [opts.cwd]          Repo root (defaults to process.cwd()).
@@ -96449,6 +97003,7 @@ const RULES = {
  *   totalWarnings: number,
  *   totalValid: number,
  *   results: Array<{
+ *     section: string,
  *     filename: string,
  *     title: string,
  *     version: string,
@@ -96458,14 +97013,12 @@ const RULES = {
  *     valid: boolean,
  *   }>,
  * }>}
- *   Returns null if there's no reference/ dir or no spec files.
+ *   `section` is the directory the spec lives in. Returns null if there's no
+ *   reference dir or no spec files.
  */
 async function validateOas({ cwd, dereference = false } = {}) {
   const gitRoot = cwd || process.cwd();
-  const refDir = external_node_path_namespaceObject.join(gitRoot, 'reference');
-  if (!external_node_fs_namespaceObject.existsSync(refDir)) return null;
-
-  const oasFiles = findOasFiles(refDir);
+  const oasFiles = findAllOasFiles(gitRoot);
   if (oasFiles.length === 0) return null;
 
   const results = [];
@@ -96473,7 +97026,7 @@ async function validateOas({ cwd, dereference = false } = {}) {
   let totalWarnings = 0;
   let totalValid = 0;
 
-  for (const { filename, spec } of oasFiles) {
+  for (const { section, refDir, filename, spec } of oasFiles) {
     const filePath = external_node_path_namespaceObject.join(refDir, filename);
     const raw = external_node_fs_namespaceObject.readFileSync(filePath, 'utf-8');
     const title = spec.info?.title || filename;
@@ -96489,7 +97042,7 @@ async function validateOas({ cwd, dereference = false } = {}) {
       });
     } catch (err) {
       const errors = [{ message: err.message || String(err) }];
-      results.push({ filename, title, version, opCount, errors, warnings: [], valid: false });
+      results.push({ section, filename, title, version, opCount, errors, warnings: [], valid: false });
       totalErrors += 1;
       continue;
     }
@@ -96519,7 +97072,7 @@ async function validateOas({ cwd, dereference = false } = {}) {
     const valid = errors.length === 0;
     if (valid) totalValid += 1;
 
-    results.push({ filename, title, version, opCount, errors, warnings, valid });
+    results.push({ section, filename, title, version, opCount, errors, warnings, valid });
   }
 
   return { fileCount: oasFiles.length, totalErrors, totalWarnings, totalValid, results };
@@ -96537,7 +97090,9 @@ async function validateOasFiles(gitRoot, { dereference = false } = {}) {
   if (!summary) return null;
 
   for (const r of summary.results) {
-    const meta = `${r.filename} · ${r.version} · ${r.opCount} ${r.opCount === 1 ? 'endpoint' : 'endpoints'}`;
+    // Only name the directory when it isn't the one everybody has.
+    const specPath = r.section === 'reference' ? r.filename : `${r.section}/${r.filename}`;
+    const meta = `${specPath} · ${r.version} · ${r.opCount} ${r.opCount === 1 ? 'endpoint' : 'endpoints'}`;
     const dot = r.errors.length > 0 ? err('●') : r.warnings.length > 0 ? warn('●') : success('●');
 
     console.log();
@@ -96557,9 +97112,9 @@ async function validateOasFiles(gitRoot, { dereference = false } = {}) {
 
 async function oas_validate_run(options, _cmd, ctx) {
   const { gitRoot } = ctx;
-  const refDir = external_node_path_namespaceObject.join(gitRoot, 'reference');
+  const refDirs = findReferenceDirs(gitRoot);
 
-  if (!external_node_fs_namespaceObject.existsSync(refDir)) {
+  if (refDirs.length === 0) {
     error('No reference/ directory found.');
     writeGithubActionsOutputs({
       'has-errors': 'true',
@@ -96574,7 +97129,7 @@ async function oas_validate_run(options, _cmd, ctx) {
   const result = await validateOasFiles(gitRoot, { dereference: options.dereference });
 
   if (!result) {
-    info('No OpenAPI spec files found in reference/.');
+    info(`No OpenAPI spec files found in ${refDirs.map(dir => `${dir}/`).join(', ')}.`);
     writeGithubActionsOutputs({
       'has-errors': 'false',
       'total-errors': '0',
